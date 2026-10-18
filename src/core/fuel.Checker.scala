@@ -1,0 +1,124 @@
+                                                                                                  /*
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃                                                                                                  ┃
+┃                                                                                                  ┃
+┃                                 ╭─────────╮╭───╮   ╭───╮╭─────────╮╭───╮                         ┃
+┃                                 │   ╭─────╯│   │   │   ││   ╭─────╯│   │                         ┃
+┃                                 │   ╰───╮  │   │   │   ││   ╰───╮  │   │                         ┃
+┃                                 │   ╭───╯  │   │   │   ││   ╭───╯  │   │                         ┃
+┃                                 │   │      │   ╰───╯   ││   ╰─────╮│   ╰─────╮                   ┃
+┃                                 ╰───╯      ╰───────────╯╰─────────╯╰─────────╯                   ┃
+┃                                                                                                  ┃
+┃                                                                                                  ┃
+┃                                                                                                  ┃
+┃    FUEL, version 0.1.0.                                                                          ┃
+┃    © Copyright 2026 Jon Pretty, Propensive OÜ.                                                   ┃
+┃                                                                                                  ┃
+┃    The primary distribution site is:                                                             ┃
+┃                                                                                                  ┃
+┃        https://propensive.dev/fuel/                                                              ┃
+┃                                                                                                  ┃
+┃    Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file     ┃
+┃    except in compliance with the License. You may obtain a copy of the License at                ┃
+┃                                                                                                  ┃
+┃        https://www.apache.org/licenses/LICENSE-2.0                                               ┃
+┃                                                                                                  ┃
+┃    Unless required by applicable law or agreed to in writing,  software distributed under the    ┃
+┃    License is distributed on an "AS IS" BASIS,  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,    ┃
+┃    either express or implied. See the License for the specific language governing permissions    ┃
+┃    and limitations under the License.                                                            ┃
+┃                                                                                                  ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+                                                                                                  */
+package fuel
+
+import java.util.concurrent as juc
+
+import soundness.*
+
+import ambience.systems.javaBaseSystem
+import logging.silentLogging
+import strategies.throwUnsafely
+
+object Checker:
+  object tokenized extends Checker:
+    def check(code: Text, context: Optional[harlequin.Scala.Context]): SourceCode =
+      harlequin.Scala.highlight(code, context)
+
+    def compiles: Boolean = false
+
+// How a Scala fragment is highlighted: at tokenized depth, which needs nothing, or typechecked
+// in a warm compiler session on a project's classpath, which is what makes a fragment's
+// validity part of its rendering (its diagnostics are in the `SourceCode`).
+trait Checker:
+  def check(code: Text, context: Optional[harlequin.Scala.Context]): SourceCode
+  def compiles: Boolean
+
+// One warm session per compile, opened on the configured classpath with the configured
+// options; every fragment of every document is typechecked in it.
+object Checking:
+  // Every use of the compiler — tokenizing, which uses its scanner, as much as a session —
+  // runs on this one thread: dotc pins a context base to the thread of its first run, and a
+  // run from another thread overflows (`RecursionOverflow`, with no frames to say so). The
+  // daemon serves each invocation on a connection thread of its own, so without this the
+  // first compile after a highlight would fail. The thread's stack is generous, since the
+  // compiler recurses deeply.
+  private val executor: juc.ExecutorService =
+    juc.Executors.newSingleThreadExecutor: (runnable: Runnable | Null) =>
+      val thread = Thread(null, runnable, "fuel-compiler", 0L)
+      thread.setDaemon(true)
+      thread
+
+    . nn
+
+  @scala.caps.unsafe.untrackedCaptures
+  @volatile
+  private var compilerThread: Optional[Thread] = Unset
+
+  // Runs `body` on the compiler thread and waits for it, or directly when already there.
+  def exclusive[result](body: => result): result =
+    if compilerThread == Thread.currentThread then body else
+      val callable: juc.Callable[result] = scala.caps.unsafe.unsafeAssumePure: () =>
+        compilerThread = Thread.currentThread.nn
+        body
+
+      try executor.submit(callable).nn.get.nn
+      catch case error: juc.ExecutionException => throw error.getCause.nn
+
+  def session[result](classpath: List[Text], options: List[Text])(body: Checker => result)
+  :   result =
+
+    val entries: List[Classpath.Entry.Directory | Classpath.Entry.Jar] =
+      classpath.map: (entry: Text) =>
+        if entry.ends(t".jar") then Classpath.Entry.Jar(entry) else Classpath.Entry.Directory(entry)
+
+    session(LocalClasspath(entries*), options)(body)
+
+  // A session on a classpath already resolved — a classloader's, say, as the tests use.
+  def session[result](classpath: LocalClasspath, options: List[Text])(body: Checker => result)
+  :   result =
+
+    exclusive(open(classpath, options)(body))
+
+  private def open[result](classpath: LocalClasspath, options: List[Text])(body: Checker => result)
+  :   result =
+
+    given (CompileEvent is Loggable) = Loggable.silent[CompileEvent]
+
+    val scalac: Scalac[3.9, Universe.Classfile] =
+      Scalac[3.9](options.map { (option: Text) => Scalac.Option[3.9](option) })
+
+    scalac.on(classpath).session:
+      given Scalac.Session.Frontend = compilation.frontend
+      import highlighting.sessionScala
+
+      // The checker captures the session, which `body` never outlives: it is vouched pure so
+      // that `body` may take a plain `Checker`.
+      val checker: Checker = scala.caps.unsafe.unsafeAssumePure:
+        new Checker:
+          def check(code: Text, context: Optional[harlequin.Scala.Context]): SourceCode =
+            harlequin.Scala.highlight(code, context)
+
+          def compiles: Boolean = true
+
+      body(checker)

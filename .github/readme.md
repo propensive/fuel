@@ -28,6 +28,25 @@ shown plain under its own language name. The result is kept in the daemon, and `
 a bare `serve` in the configuration) shows it: every section's documents, by title, beside the
 chosen document. A document's title is its first level-one heading, else its filename.
 
+When a `classpath` is configured, every Scala fence is also *compiled*, in one warm compiler
+session on that classpath with the configured `scalac-option`s, so a fragment that does not
+typecheck fails the compile (exit status 4) and its error is shown in place. A fence marked
+` ```scala fuel ` begins with a [TEL](https://soundness.dev/tel/) preamble, ended by a line
+holding `##`:
+
+```
+context term            # top (the default), term or type: how the fragment is wrapped
+id setup                # a name another fragment may follow
+follows setup           # the fragments whose text precedes this one when it compiles
+errors show             # fail (the default), show (errors are expected and shown), ignore
+highlight Mi..es  why   # a range, by its first and last characters or literally, and a caption
+error  oops
+  caption  or beneath it
+```
+
+`caution` and `param` mark ranges as `highlight` and `error` do. [`doc/markdown.md`](../doc/markdown.md)
+shows each.
+
 ## Configuration files
 
 A project configures fuel with a [TEL](https://soundness.dev/tel/) document at
@@ -42,8 +61,9 @@ paths resolve against the project root.
 ```
 tel 1.0
 
-# The classpath embedded code is compiled against (read now; used from the next milestone).
+# The classpath embedded code is compiled against, and the compiler options it needs.
 classpath out/core/assembly.dest/out.jar
+scalac-option -deprecation
 
 # The directories of Markdown documents, each a section named by its last segment.
 document doc

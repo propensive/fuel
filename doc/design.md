@@ -161,8 +161,8 @@ variables reach it too.
   - `fuel show` (the terminal rendering) slipped to M4, as the plan allowed.
   - Nothing is written to `$XDG_STATE_HOME`: a `fuel quit` forgets the corpus, and the next
     `fuel compile` rebuilds it in well under a second for this repository.
-- **M2 The code-block preamble, and compile-checking.** A fenced block whose info string is
-  `fuel` (or `scala fuel`?) has a TEL preamble, a `##` line, and code. `Preamble(syntax,
+- **M2 The code-block preamble, and compile-checking** (done, first cut). A fenced block whose
+  info string is `scala fuel` has a TEL preamble, a `##` line, and code. `Preamble(syntax,
   context, highlight, error, caution, param, errors, follows)` decoded by stratiform in a new
   non-capture-checked `fuel-records` module; notes located by `Selection.findIn` and attached
   as `Block.Note`s. Every Scala fragment in a document — plain fences included — is compiled
@@ -170,6 +170,36 @@ variables reach it too.
   `errors fail|ignore|highlight|show` deciding what a diagnostic means; a diagnostic becomes an
   `Erroneous` note, and `fuel compile` exits non-zero when a fragment that should compile does
   not. `fuel watch` recompiles on change (surveillance) and the dashboard follows.
+  Found while building it:
+  - The preamble is walked by hand from `Tel` (`fields`, `primaryAtom`, `atomTexts`), as flair
+    reads its configuration, so no unchecked `records` module was needed after all.
+  - Fragments are typechecked through harlequin's `highlighting.sessionScala` in one
+    `Scalac[3.9].on(classpath).session`: a highlight at typechecked depth is a compile, and
+    yields typed tokens and offset-span diagnostics together. `follows` prefixes the followed
+    fragments' text and shifts the spans back, by harlequin's term/type wrapper too.
+  - `errors` has three values, not Amok's four: `fail`, `show` (errors expected: their absence
+    is the problem) and `ignore`.
+  - Without a `classpath` nothing is compiled, since not even the standard library would be on
+    it; fuel's own fixture compiles against its launcher assembly with the fork's flags as
+    `scalac-option`s. A `soundness` shorthand for those flags is worth adding.
+  - Not yet: `fuel watch`; a warning as a `Caution` note is shown but never a problem.
+  - All compiler use (tokenizing included) runs on one dedicated thread with a large stack, in
+    `Checking.exclusive`: dotc pins a context base to the thread of its first run, so a later
+    run from another thread fails with `RecursionOverflow` and no frames. The daemon serves each
+    invocation on its own connection thread, so without this the first compile after a highlight
+    would fail.
+  - **Upstream bug found** (harlequin, with the fork): highlighting
+    `val sum: Int = 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10 + 11 + 12` at *tokenized* depth
+    throws `dotty.tools.dotc.core.RecursionOverflow`, in-process or in the daemon. The fork's
+    `TreeAccumulator.foldOver` throws it when `ContextBase.recursiveDepth` reaches
+    `recursiveOperations.length`, an array `ContextBase.initialize` sizes from `-Xmax-fuel`
+    (default 550) — but harlequin tokenizes on `Contexts.ContextBase().initialCtx.fresh`
+    (`harlequin.SourceCode.scala:44`), never initialised, whose array keeps its 10-slot field
+    default, so any expression nested ten deep overflows its parse-tree fold. It is not a stack
+    overflow (the JVM's exception log shows none) and not the daemon (every probe — classloaders,
+    settings state, thread stacks — came back ordinary). Until harlequin initialises that base,
+    the fixture keeps its expressions shallow, and `fuel compile` reports a session or
+    highlighting failure in a line and shows what it can.
 - **M3 Animation.** Repeated `frame`s in the preamble. Port Amok's algorithm: highlight each
   frame, `evolve` lines by similarity then tokens within aligned lines, yielding tokens with
   presence sets. The model needs a shape for this — proposed: `Block.Code` gains

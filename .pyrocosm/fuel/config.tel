@@ -1,5 +1,36 @@
 tel 1.0
 
 # Fuel's own documentation, as the fixture: `fuel compile` here compiles doc/, and `fuel serve`
-# shows it.
+# shows it. The fragments are compiled against fuel's own launcher assembly (`make assembly`),
+# which carries the fork's standard library and Soundness, with the options Soundness code
+# needs: the fork's repairs, and the proscenium predef with Soundness imported.
 document doc
+
+classpath out/fuel/launcher/assembly.dest/out.jar
+
+scalac-option -Zalias-captures
+scalac-option -Zdiagnostic-givens
+scalac-option -Zgiven-prefixes
+scalac-option -Zopaque-mutability
+scalac-option -Zpure-iarrays
+scalac-option -Zfrozen-pure
+scalac-option -Zretains-bounds
+scalac-option -Zretains-skolems
+scalac-option -Zspreadable-varargs
+scalac-option -Zunboxed-pure-types
+scalac-option -Zunion-captures
+scalac-option -experimental
+scalac-option -new-syntax
+scalac-option -preview
+scalac-option -Yno-flexible-types
+scalac-option -Yexplicit-nulls
+scalac-option -language:experimental.modularity
+scalac-option -language:experimental.dependent
+scalac-option -language:experimental.genericNumberLiterals
+scalac-option -language:experimental.erasedDefinitions
+scalac-option -language:implicitConversions
+scalac-option -language:experimental.saferExceptions
+scalac-option -language:experimental.subCases
+scalac-option -language:experimental.multiSpreads
+scalac-option -Yno-predef
+scalac-option -Yimports:java.lang,proscenium,soundness

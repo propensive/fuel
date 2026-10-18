@@ -41,7 +41,7 @@ import pyrocosm.{Block, Inline, Language, Token}
 // scope. Inline HTML is dropped, as the parser already comments it out; an inline image becomes
 // a link to it. To be offered upstream once it has settled here.
 object Blocks:
-  def of(markdown: Markdown of Layout, embeddings: List[Embedding] = Embedding.standard)
+  def of(markdown: Markdown of Layout, embeddings: List[Embedding])
   :   List[Block] =
 
     all(markdown.children, embeddings)

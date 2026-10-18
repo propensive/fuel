@@ -39,7 +39,7 @@ object Compilation:
   // A section's name is its directory's last segment.
   def name(root: Text): Text = root.cut(t"/").filter(_ != t"").reverse.prim.or(root)
 
-  def section(root: Text, embeddings: List[Embedding] = Embedding.standard): Corpus.Section =
+  def section(root: Text, checker: Checker = Checker.tokenized): Corpus.Section =
     import filesystemBackends.javaBaseFilesystem
     import filesystemOptions.dereferenceSymlinks
     import sortingAlgorithms.timsort
@@ -63,7 +63,7 @@ object Compilation:
 
         text match
           case text: Text =>
-            recur(tail, docs + List(Doc.parse(relative(path), text, embeddings)), skipped)
+            recur(tail, docs + List(Doc.parse(relative(path), text, checker)), skipped)
 
           case _ =>
             recur(tail, docs, skipped + List(path))
@@ -73,5 +73,5 @@ object Compilation:
 
     recur(files, Nil, Nil)
 
-  def corpus(roots: List[Text], embeddings: List[Embedding] = Embedding.standard): Corpus =
-    Corpus(roots.map(section(_, embeddings)))
+  def corpus(roots: List[Text], checker: Checker = Checker.tokenized): Corpus =
+    Corpus(roots.map(section(_, checker)))

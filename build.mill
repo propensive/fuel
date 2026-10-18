@@ -167,6 +167,12 @@ object settings:
   def coreDeps(soundness: String) = Seq(
     "punctuation-core",          // the Markdown parser
     "harlequin-core",            // syntax highlighting of fenced code (needs the compiler at runtime)
+    "harlequin-typed",           // typechecked highlighting, in a compiler session
+    "anthology-core",            // the compiler: Scalac, Universe
+    "anthology-scala",           // and its session
+    "hellenism-jvm",             // LocalClasspath
+    "stratiform-core",           // TEL: a fence's preamble
+    "ambience-core",             // systems.javaBaseSystem
     "galilei-jvm",               // the filesystem: the document directories
     "kaleidoscope-core",         // Glob
     "serpentine-core",           // paths

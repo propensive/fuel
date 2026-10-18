@@ -32,10 +32,12 @@
                                                                                                   */
 package fuel
 
-import soundness.{Language as _, Token as _, *}
+// Excluded from the umbrella: `Compilation`, anthology's, which would outrank fuel's own.
+import soundness.{Compilation as _, Language as _, Token as _, *}
 
 import dysasymptotics.linearSize
 import pyrocosm.{Block, Inline, Language, Token}
+import systems.javaBaseSystem
 
 object Tests extends Suite(m"Fuel tests"):
   val intro: Text = t"""# Getting started
@@ -81,6 +83,97 @@ make run
           case _                                                  => (t"", 0)
 
       . assert(_ == (t"sh", 1))
+
+    suite(m"Preambles"):
+      val preamble: Text = t"""context term
+id setup
+follows intro
+errors show
+highlight Hel..rld  the greeting
+error oops
+  caption  a caption beneath
+"""
+
+      test(m"a preamble's fields decode"):
+        Preamble.parse(preamble).let: (p: Preamble) => (p.context, p.id, p.follows, p.errors)
+
+      . assert(_ == (t"term", t"setup", List(t"intro"), Preamble.Errors.Show))
+
+      test(m"a mark's caption may follow the selection or sit beneath it"):
+        Preamble.parse(preamble).lay(Nil: List[Optional[Text]])(_.marks.map(_.caption))
+
+      . assert(_ == List(t"the greeting", t"a caption beneath"))
+
+      test(m"a fence splits at the `##` line"):
+        Preamble.split(t"context term\n##\nval x = 1\nval y = 2\n")
+
+      . assert(_ == (t"context term", t"val x = 1\nval y = 2\n"))
+
+      test(m"a fence without a `##` line is all code"):
+        Preamble.split(t"val x = 1\n")
+
+      . assert(_ == (Unset, t"val x = 1\n"))
+
+      test(m"a selection finds its range by its ends"):
+        Selection.parse(t"Hel..rld").findIn(t"say Hello, world now")
+
+      . assert(_ == (4, 16))
+
+      test(m"a literal selection finds itself"):
+        Selection.parse(t"world").findIn(t"say Hello, world now")
+
+      . assert(_ == (11, 16))
+
+      test(m"a range over two lines becomes a note per line"):
+        val notes: List[Block.Note] =
+          Notes.of(t"abc\ndef\nghi", 2, 5, Block.Note.Style.Highlight, Unset)
+
+        notes.map: (note: Block.Note) => (note.line, note.start, note.end)
+
+      . assert(_ == List((0, 2, 3), (1, 0, 1)))
+
+    suite(m"Compile checking"):
+      // The suite's own classpath, from its classloader (so it is the same under fume, which
+      // runs the suite in-process, as under plain java), carrying the Scala library the
+      // fragments need.
+      val classpath: LocalClasspath = LocalClasspath.of(Classloader[Tests.type])
+
+      def problems(markdown: Text): List[Text] =
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          Doc.parse(t"doc/check.md", markdown, checker).problems
+
+      test(m"a well-typed fragment has no problems"):
+        problems(t"```scala\nval n: Int = 1\n```\n")
+
+      . assert(_ == Nil)
+
+      test(m"an ill-typed fragment is a problem, naming the fragment"):
+        problems(t"```scala\nval n: Int = \"oops\"\n```\n").map(_.cut(t": ").prim.or(t""))
+
+      . assert(_ == List(t"doc/check.md"))
+
+      test(m"an ill-typed fragment expected to fail is not a problem"):
+        problems(t"```scala fuel\nerrors show\n##\nval n: Int = \"oops\"\n```\n")
+
+      . assert(_ == Nil)
+
+      test(m"a fragment may follow another"):
+        val first: Text = t"```scala fuel\nid setup\n##\nval base: Int = 1\n```\n"
+        val second: Text = t"```scala fuel\nfollows setup\n##\nval n: Int = base + 1\n```\n"
+        problems(first + second)
+
+      . assert(_ == Nil)
+
+      test(m"an error becomes an erroneous note on its line"):
+        val fence: Text =
+          t"```scala fuel\nerrors show\n##\nval a: Int = 1\nval n: Int = \"oops\"\n```\n"
+
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          Doc.parse(t"doc/check.md", fence, checker).blocks match
+            case Block.Code(_, _, note :: _) :: _ => (note.line, note.style)
+            case _                                => (-1, Block.Note.Style.Param)
+
+      . assert(_ == (1, Block.Note.Style.Erroneous))
 
     suite(m"Sections"):
       test(m"a section is named by its directory's last segment"):

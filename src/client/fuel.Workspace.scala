@@ -39,7 +39,7 @@ import soundness.*
 // embedded code will be compiled against (read now, used from M2), and the directories of
 // documents. Relative entries resolve against the root, as flame's do.
 object Workspace:
-  case class Config(root: Text, classpath: List[Text], documents: List[Text])
+  case class Config(root: Text, classpath: List[Text], documents: List[Text], options: List[Text])
 
   def load(directory: Text)(using Cli, Interpreter, Configurator): Config =
     // The file's directory is `.pyrocosm/fuel`, so the root is three levels up.
@@ -53,4 +53,7 @@ object Workspace:
       val split: List[Text] = setting.lay(Nil: List[Text]) { (text: Text) => text.cut(t":").filter(_ != t"") }
       split.map { (entry: Text) => if entry.starts(t"/") then entry else t"$root/$entry" }
 
-    Config(root, entries(ui.Classpath()), entries(ui.Document()))
+    val options: List[Text] =
+      ui.ScalacOption().lay(Nil: List[Text]) { (text: Text) => text.cut(t":").filter(_ != t"") }
+
+    Config(root, entries(ui.Classpath()), entries(ui.Document()), options)

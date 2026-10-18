@@ -37,9 +37,12 @@ import soundness.{Language as _, Token as _, *}
 import pyrocosm.Block
 
 object Doc:
-  def parse(path: Text, text: Text, embeddings: List[Embedding] = Embedding.standard): Doc =
-    val blocks: List[Block] = Blocks.of(Parser.parse(text), embeddings)
-    Doc(path, Blocks.title(blocks).or(filename(path)), blocks)
+  // Parses and converts one document, its Scala fragments checked by `checker`; `problems`
+  // are the fragments which did not do as their preambles said.
+  def parse(path: Text, text: Text, checker: Checker = Checker.tokenized): Doc =
+    val scala: Embedding.ScalaCode = Embedding.ScalaCode(checker, path)
+    val blocks: List[Block] = Blocks.of(Parser.parse(text), List(scala, Embedding.JavaCode))
+    Doc(path, Blocks.title(blocks).or(filename(path)), blocks, scala.problems)
 
   // The last segment of a path, without a `.md` extension.
   def filename(path: Text): Text =
@@ -47,5 +50,6 @@ object Doc:
     if name.ends(t".md") then Text(name.s.substring(0, name.s.length - 3).nn) else name
 
 // One Markdown document, compiled: its path relative to the directory it was found under, its
-// title (the first level-one heading, else its filename), and its blocks.
-case class Doc(path: Text, title: Text, blocks: List[Block])
+// title (the first level-one heading, else its filename), its blocks, and the problems its
+// fragments had.
+case class Doc(path: Text, title: Text, blocks: List[Block], problems: List[Text] = Nil)

@@ -36,7 +36,8 @@ import java.util.concurrent as juc
 
 import scala.caps
 
-import soundness.*
+// Excluded from the umbrella: `Compilation`, anthology's, which would outrank fuel's own.
+import soundness.{Compilation as _, *}
 
 import backstops.silentBackstop
 import dysasymptotics.linearSize
@@ -49,6 +50,7 @@ import threads.platformThreads
 // an `execute` block's result type documents them in the manpage's EXIT STATUS section.
 object UsageError extends Status(2, t"the command line was not understood")
 object NoDocuments extends Status(3, t"no document directory is configured")
+object CompileFailed extends Status(4, t"a code fragment did not do as its preamble said")
 
 // Fuel's user interface, in one namespace: its subcommands, flags and settings.
 object ui:
@@ -65,6 +67,9 @@ object ui:
     Setting[Text](t"document", t"a directory of Markdown documents, relative to the project root")
 
   val Port = Setting[Text](t"port", t"the port on which `fuel serve` serves the documents")
+
+  val ScalacOption =
+    Setting[Text](t"scalacOption", t"a compiler option for the fragments, as `-deprecation`")
 
 // Fuel as a Pyrocosm tool: `about`, `install`, `quit` and `--version` come from `Tool`, as does
 // the search for `.pyrocosm/fuel/config.tel`, and the dashboard a config's `serve` launches.
@@ -173,17 +178,44 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
 
 // Compiles every configured directory into the daemon's corpus, which the dashboard shows, and
 // reports a line per section and a line per file that could not be read.
-private def compile(config: Workspace.Config)(using Stdio): Exit | NoDocuments.type =
+private def compile(config: Workspace.Config)(using Stdio)
+:   Exit | NoDocuments.type | CompileFailed.type =
+
   if config.documents.nil then
     Out.println(t"fuel: no document directory is configured")
     Out.println(t"fuel: add `document <dir>` to .pyrocosm/fuel/config.tel")
     NoDocuments
   else
-    val corpus: Corpus = Compilation.corpus(config.documents)
+    // Fragments are compiled only against a configured classpath: without one there is
+    // nothing to compile them against, and they are highlighted alone.
+    // A session that fails to open or to compile is reported in a line, and the documents are
+    // then compiled without it (tokenized, unchecked): the documents are still produced.
+    val checked: Boolean = !config.classpath.nil
+
+    val outcome: Optional[Corpus] =
+      if !checked then Unset else
+        try Checking.session(config.classpath, config.options): (checker: Checker) =>
+          Compilation.corpus(config.documents, checker)
+        catch case error: Throwable =>
+          Out.println(t"fuel: the fragments could not be compiled: ${error.toString.tt}")
+          Out.println(t"fuel: showing them unchecked")
+          Unset
+
+    val corpus: Corpus =
+      outcome.or:
+        try Compilation.corpus(config.documents) catch case error: Throwable =>
+          Out.println(t"fuel: highlighting failed too: ${error.toString.tt}")
+          Corpus(Nil)
+
     Server.publish(corpus)
 
     corpus.sections.each: (section: Corpus.Section) =>
       Out.println(t"${section.name}: ${section.docs.size.show} documents from ${section.root}")
       section.skipped.each: (path: Text) => Out.println(t"  skipped $path")
 
-    Exit.Ok
+    val problems: List[Text] = corpus.problems
+    problems.each: (problem: Text) => Out.println(t"  $problem")
+
+    if !checked then Out.println(t"fuel: no classpath is configured, so no fragment was compiled")
+
+    if problems.nil then Exit.Ok else CompileFailed
