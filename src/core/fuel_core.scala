@@ -37,32 +37,47 @@ package fuel
 import soundness.{Language as _, Token as _, *}
 
 import dysasymptotics.linearSize
-import pyrocosm.{Block, Inline, Language, Token}
+import pyrocosm.{Block, Inline, Language, Token, Tone}
 
 object Embedding:
   // A Scala fence, highlighted by the checker — typechecked, in a compile with a classpath —
   // with the preamble a ` ```scala fuel ` fence carries honoured: its context, its marks, the
   // fragments it follows (whose text precedes it in the compile), and what its errors mean.
   // One instance per document: the fragments seen so far are what `follows` names, and
-  // `problems` is what the compile reports.
+  // `problems` is what the compile reports — a diagnostic each, at its place in the file.
   final class ScalaCode(checker: Checker, path: Text) extends Embedding:
     private var fragments: List[(Text, Text)] = Nil
     private var count: Int = 0
-    private var problems0: List[Text] = Nil
+    private var problems0: List[Block] = Nil
 
-    def problems: List[Text] = problems0.reverse
+    def problems: List[Block] = problems0.reverse
 
     private def fragment(name: Text): Text =
       fragments.seek(_(0) == name).lay(t""): (entry: (Text, Text)) => entry(1)
 
-    def embed(info: List[Text], content: Text): Optional[List[Block]] =
+    def embed(info: List[Text], content: Text, fence: Int): Optional[List[Block]] =
       if info.prim != t"scala" then Unset else
         val (header, code0) =
           if info.has(t"fuel") then Preamble.split(content) else (Unset, content)
 
         val code: Text = trimmed(code0)
-        val preamble: Preamble = header.let(Preamble.parse(_)).or(Preamble.empty)
         count += 1
+
+        // The file's line, counted from one, on which the code begins: after the fence and
+        // the preamble with its `##`.
+        val preambleLines: Int = header.lay(0) { (text: Text) => text.cut(t"\n").size + 1 }
+        val start: Int = fence + 2 + preambleLines
+
+        // A preamble that is not TEL is reported at its place, and the fence read as if it
+        // had none.
+        val preamble: Preamble = header.lay(Preamble.empty): (text: Text) =>
+          Preamble.parse(text) match
+            case preamble: Preamble => preamble
+
+            case error: Tel.Error =>
+              problems0 = Preamble.diagnostic(error, path, text, fence + 1) :: problems0
+              Preamble.empty
+
         val id: Text = preamble.id.or(t"fragment-${count.show}")
         val context: Optional[harlequin.Scala.Context] = preamble.scalaContext
 
@@ -90,32 +105,45 @@ object Embedding:
         val allLines: List[Block.Line] = modelLines(source)
         val lines: List[Block.Line] = allLines.skip(allLines.size - own)
 
-        val diagnostics: List[Block.Note] =
+        // Each diagnostic as a note on the fragment, and as a diagnostic of its own after it,
+        // located in the file, with the lines around it.
+        val reported: List[(Block.Note, Block, Boolean)] =
           if !checked then Nil else
-            source.diagnostics.bind[List[Block.Note], Block.Note, List[Block.Note]]:
+            source.diagnostics.bind[List[(Block.Note, Block, Boolean)], (Block.Note, Block, Boolean), List[(Block.Note, Block, Boolean)]]:
               (diagnostic: harlequin.Diagnostic) =>
-                val style: Block.Note.Style = diagnostic.importance match
-                  case harlequin.Diagnostic.Importance.Error => Block.Note.Style.Erroneous
-                  case _                                     => Block.Note.Style.Caution
+                val from: Int = diagnostic.span.offset.let(_.n0).or(0) - wrapper - prefix.length
+                val length: Int = diagnostic.span.length.or(0)
 
-                val start: Int = diagnostic.span.offset.let(_.n0).or(0) - wrapper - prefix.length
-                val length: Int = diagnostic.span.length.or(1)
+                if from < 0 then Nil else
+                  val style: Block.Note.Style = diagnostic.importance match
+                    case harlequin.Diagnostic.Importance.Error => Block.Note.Style.Erroneous
+                    case _                                     => Block.Note.Style.Caution
 
-                if start < 0 then Nil
-                else Notes.of(code, start, start + length, style, diagnostic.message)
+                  val tone: Tone = diagnostic.importance match
+                    case harlequin.Diagnostic.Importance.Error   => Tone.Failure
+                    case harlequin.Diagnostic.Importance.Warning => Tone.Warning
+                    case _                                       => Tone.Info
 
-        val errors: List[harlequin.Diagnostic] =
-          if !checked then Nil
-          else source.diagnostics.filter(_.importance == harlequin.Diagnostic.Importance.Error)
+                  val note: Block.Note = Notes.of(code, from, from + length, style)
+                  val location = Block.Location(path, start + note.line, note.start + 1)
+                  val excerpt: Block.Code = Block.Code.excerpt(Language.Scala, lines, List(note))
+                  val message: List[Block] = List(Block.paragraph(diagnostic.message))
+                  val numbered: Block.Code = excerpt.copy(start = excerpt.start.let(_ + start - 1))
+                  val shown: Block.Note = note.copy(caption = Inline.text(diagnostic.message))
+                  val report: Block = Block.Diagnostic(tone, location, message, List(numbered))
+                  List((shown, report, tone == Tone.Failure))
+
+        val errors: List[Block] = reported.filter(_(2)).map(_(1))
 
         preamble.errors match
           case Preamble.Errors.Fail =>
-            errors.each: (error: harlequin.Diagnostic) =>
-              problems0 = t"$path: $id: ${error.message}" :: problems0
+            errors.each { (error: Block) => problems0 = error :: problems0 }
 
           case Preamble.Errors.Show =>
-            if checked && errors.nil
-            then problems0 = t"$path: $id: expected an error, but it compiled" :: problems0
+            if checked && errors.nil then
+              val location = Block.Location(path, start)
+              val message = List(Block.paragraph(t"This fragment is marked `errors show`, but it compiled."))
+              problems0 = Block.Diagnostic(Tone.Failure, location, message) :: problems0
 
           case _ =>
             ()
@@ -124,22 +152,24 @@ object Embedding:
           preamble.marks.bind[List[Block.Note], Block.Note, List[Block.Note]]:
             (mark: Preamble.Mark) =>
               mark.selection.findIn(code).lay(Nil: List[Block.Note]): (range: (Int, Int)) =>
-                Notes.of(code, range(0), range(1), mark.style, mark.caption)
+                val caption: List[Inline] = mark.caption.lay(Nil: List[Inline])(Inline.text(_))
+                List(Notes.of(code, range(0), range(1), mark.style, caption))
 
-        List(Block.Code(Language.Scala, lines, diagnostics + marks))
+        val block: Block = Block.Code(Language.Scala, lines, reported.map(_(0)) + marks, start)
+        block :: reported.map(_(1))
 
   object JavaCode extends Embedding:
-    def embed(info: List[Text], content: Text): Optional[List[Block]] =
+    def embed(info: List[Text], content: Text, fence: Int): Optional[List[Block]] =
       if info.prim == t"java"
-      then List(Block.Code(Language.Java, modelLines(harlequin.Java.highlight(trimmed(content)))))
+      then List(Block.Code(Language.Java, modelLines(harlequin.Java.highlight(trimmed(content))), Nil, fence + 2))
       else Unset
 
   def standard(checker: Checker, path: Text): List[Embedding] =
     List(ScalaCode(checker, path), JavaCode)
 
-  // The fallback: the content line by line, as unparsed tokens.
-  def plain(info: List[Text], content: Text): Block =
-    Block.Code(info.prim.lay(Language.Plain) { (name: Text) => Language(name) }, lines(content))
+  // The fallback: the content line by line, as unparsed tokens, numbered from the file.
+  def plain(info: List[Text], content: Text, fence: Int): Block =
+    Block.Code(info.prim.lay(Language.Plain) { (name: Text) => Language(name) }, lines(content), Nil, fence + 2)
 
   def lines(content: Text): List[Block.Line] =
     trimmed(content).cut(t"\n").map: (line: Text) => Block.Line(List(Token.plain(line)))
@@ -155,33 +185,33 @@ object Embedding:
 // A fenced code block's rendering, chosen by the fence's info string: the first embedding in
 // scope that answers wins, and a fence nobody answers is shown plain under its own language
 // name. Amok's `Formattable` (punctuation's, yielding HTML) with blocks as the result, so that
-// the same embedding serves the web, the terminal and a fragment.
+// the same embedding serves the web, the terminal and a fragment. `fence` is the line of the
+// file, counted from zero, on which the fence opens, so a block can number its lines.
 trait Embedding:
-  def embed(info: List[Text], content: Text): Optional[List[Block]]
+  def embed(info: List[Text], content: Text, fence: Int): Optional[List[Block]]
 
-// Notes are per line, so a range of a fragment's text becomes one note per line it touches.
+// A range of a fragment's text, by character offsets, as one note: on one line, across lines,
+// or a caret where it has no width.
 object Notes:
-  def of(code: Text, from: Int, to: Int, style: Block.Note.Style, caption: Optional[Text])
-  :   List[Block.Note] =
+  def of(code: Text, from: Int, to: Int, style: Block.Note.Style, caption: List[Inline] = Nil)
+  :   Block.Note =
 
     val lines: List[Text] = code.cut(t"\n")
 
-    def recur(rest: List[Text], index: Int, offset: Int, acc: List[Block.Note]): List[Block.Note] =
-      rest match
+    // The line and column of an offset, clamped to the text.
+    def place(offset: Int): (Int, Int) =
+      def recur(rest: List[Text], index: Int, consumed: Int): (Int, Int) = rest match
         case line :: tail =>
-          val end: Int = offset + line.length
-          val start: Int = from.max(offset)
-          val stop: Int = to.min(end)
-
-          val acc2: List[Block.Note] =
-            if start < stop || (from == to && from >= offset && from <= end) then
-              Block.Note(index, start - offset, stop.max(start + 1) - offset, style, caption) :: acc
-            else
-              acc
-
-          recur(tail, index + 1, end + 1, acc2)
+          val end: Int = consumed + line.length
+          if offset <= end || tail.nil then (index, (offset - consumed).max(0).min(line.length))
+          else recur(tail, index + 1, end + 1)
 
         case _ =>
-          acc.reverse
+          (0, 0)
 
-    recur(lines, 0, 0, Nil)
+      recur(lines, 0, 0)
+
+    val (line, start) = place(from)
+    val (endLine, end) = place(to.max(from))
+    val last: Optional[Int] = if endLine > line then endLine else Unset
+    Block.Note(line, start, end, style, caption, last)

@@ -87,10 +87,12 @@ object Blocks:
       Inline.Link(Inline.Destination.External(destination), phrasing(List.from(content)))
 
   // The first embedding to answer a fence, else the plain rendering.
-  private def fence(info: List[Text], content: Text, embeddings: List[Embedding]): List[Block] =
+  private def fence(info: List[Text], content: Text, line: Int, embeddings: List[Embedding])
+  :   List[Block] =
+
     embeddings match
-      case head :: tail => head.embed(info, content).or(fence(info, content, tail))
-      case _            => List(Embedding.plain(info, content))
+      case head :: tail => head.embed(info, content, line).or(fence(info, content, line, tail))
+      case _            => List(Embedding.plain(info, content, line))
 
   private def layout(node: Layout, embeddings: List[Embedding]): List[Block] = node match
     case Layout.Paragraph(_, prose*) =>
@@ -108,8 +110,8 @@ object Blocks:
     case Layout.HtmlBlock(_, html) =>
       List(Block.Code(Language(t"html"), Embedding.lines(html)))
 
-    case Layout.CodeBlock(_, info, content) =>
-      fence(info, content, embeddings)
+    case Layout.CodeBlock(line, info, content) =>
+      fence(info, content, line.n0, embeddings)
 
     case Layout.BulletList(_, _, items*) =>
       val listed: List[Block.Item] =

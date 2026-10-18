@@ -42,8 +42,11 @@ import soundness.{Compilation as _, *}
 import backstops.silentBackstop
 import dysasymptotics.linearSize
 import interpreters.posixInterpreter
+import palettes.solarizedDarkGaugePalette
 import probates.cancelProbate
-import pyrocosm.Tool
+import pyrocosm.{Block, Inline, TerminalRenderer, Tone, Tool}
+import tableStyles.thickTableStyle
+import textMetrics.uniformMetric
 import threads.platformThreads
 
 // The exit statuses fuel can terminate with, as objects (soundness#1811), so that the union of
@@ -178,7 +181,11 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
 
 // Compiles every configured directory into the daemon's corpus, which the dashboard shows, and
 // reports a line per section and a line per file that could not be read.
-private def compile(config: Workspace.Config)(using Stdio)
+// The terminal's width, for the report; 120 where nothing says.
+private def width(using Environment): Int =
+  safely(Environment.columns[Text].s.toInt).lay(120)(_.min(160))
+
+private def compile(config: Workspace.Config)(using Stdio, Environment)
 :   Exit | NoDocuments.type | CompileFailed.type =
 
   if config.documents.nil then
@@ -188,34 +195,42 @@ private def compile(config: Workspace.Config)(using Stdio)
   else
     // Fragments are compiled only against a configured classpath: without one there is
     // nothing to compile them against, and they are highlighted alone.
-    // A session that fails to open or to compile is reported in a line, and the documents are
-    // then compiled without it (tokenized, unchecked): the documents are still produced.
+    // A session that fails to open or to compile is a diagnostic of its own, and the documents
+    // are then compiled without it (tokenized, unchecked): the documents are still produced.
     val checked: Boolean = !config.classpath.nil
+
+    @scala.caps.unsafe.untrackedCaptures
+    var failures: List[Block] = Nil
 
     val outcome: Optional[Corpus] =
       if !checked then Unset else
         try Checking.session(config.classpath, config.options): (checker: Checker) =>
           Compilation.corpus(config.documents, checker)
         catch case error: Throwable =>
-          Out.println(t"fuel: the fragments could not be compiled: ${error.toString.tt}")
-          Out.println(t"fuel: showing them unchecked")
+          failures = failed(t"The fragments could not be compiled", error) :: failures
           Unset
 
     val corpus: Corpus =
       outcome.or:
         try Compilation.corpus(config.documents) catch case error: Throwable =>
-          Out.println(t"fuel: highlighting failed too: ${error.toString.tt}")
+          failures = failed(t"The documents could not be highlighted", error) :: failures
           Corpus(Nil)
 
     Server.publish(corpus)
 
     corpus.sections.each: (section: Corpus.Section) =>
       Out.println(t"${section.name}: ${section.docs.size.show} documents from ${section.root}")
-      section.skipped.each: (path: Text) => Out.println(t"  skipped $path")
 
-    val problems: List[Text] = corpus.problems
-    problems.each: (problem: Text) => Out.println(t"  $problem")
+    // Every diagnostic, rendered as the terminal renders them: at its place, with its excerpt.
+    val problems: List[Block] = failures.reverse + corpus.problems
+    val renderer = TerminalRenderer()
+    renderer.blocks(problems, width).each: (line: Teletype) => Out.println(line)
 
     if !checked then Out.println(t"fuel: no classpath is configured, so no fragment was compiled")
 
     if problems.nil then Exit.Ok else CompileFailed
+
+// A failure of the compiler itself, which has no place in a document, as a diagnostic.
+private def failed(what: Text, error: Throwable): Block =
+  val detail: List[Block] = List(Block.paragraph(error.toString.tt))
+  Block.Diagnostic(Tone.Failure, Unset, List(Block.paragraph(what)), Nil, detail)

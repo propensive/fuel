@@ -67,12 +67,36 @@ object Preamble:
     index.lay((Unset, content)): (index: Ordinal) =>
       (lines.keep(index.n0).join(t"\n"), lines.skip(index.n0 + 1).join(t"\n"))
 
-  // A preamble parsed from its text, or `Unset` if it is not TEL. The `tel 1.0` line is
-  // supplied if absent, so a fence need not repeat it.
-  def parse(text: Text): Optional[Preamble] =
-    val headed: Text = if text.trim.starts(t"tel ") then text else t"tel 1.0\n\n$text"
+  // The `tel 1.0` line a preamble need not repeat, supplied when absent.
+  private def headed(text: Text): Text =
+    if text.trim.starts(t"tel ") then text else t"tel 1.0\n\n$text"
 
-    safely(headed.read[Tel]).let: (tel: Tel) =>
+  // The lines `headed` adds before the preamble's own.
+  private def added(text: Text): Int = if text.trim.starts(t"tel ") then 0 else 2
+
+  // A preamble parsed from its text, or the TEL error if it is not TEL.
+  def parse(text: Text): Preamble | Tel.Error =
+    import strategies.throwUnsafely
+    try read(text) catch case error: Tel.Error => error
+
+  // A preamble's TEL error as a diagnostic at its place in the file: the preamble's text is
+  // the excerpt, and its line is counted from `line`, where it begins in the file (from zero).
+  def diagnostic(error: Tel.Error, path: Text, text: Text, line: Int): Block.Diagnostic =
+    val shift: Int = line - added(text)
+    val raw: Block.Diagnostic = Block.Diagnostic.of(error, path, headed(text))
+
+    val location: Optional[Block.Location] =
+      raw.location.let { (location: Block.Location) => location.copy(line = location.line.let(_ + shift)) }
+
+    val excerpt: List[Block] = raw.excerpt.map:
+      case code: Block.Code => code.copy(start = code.start.let(_ + shift))
+      case other            => other
+
+    raw.copy(location = location, excerpt = excerpt)
+
+  private def read(text: Text): Preamble raises Tel.Error =
+    val tel: Tel = headed(text).read[Tel]
+    locally:
       def atoms(keyword: Text): List[Text] =
         tel.fields(keyword).to[List].map(_.primaryAtom).filter(_ != t"")
 

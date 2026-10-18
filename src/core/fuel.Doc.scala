@@ -51,5 +51,5 @@ object Doc:
 
 // One Markdown document, compiled: its path relative to the directory it was found under, its
 // title (the first level-one heading, else its filename), its blocks, and the problems its
-// fragments had.
-case class Doc(path: Text, title: Text, blocks: List[Block], problems: List[Text] = Nil)
+// fragments had, each a diagnostic at its place.
+case class Doc(path: Text, title: Text, blocks: List[Block], problems: List[Block] = Nil)

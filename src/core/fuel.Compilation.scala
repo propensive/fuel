@@ -34,6 +34,8 @@ package fuel
 
 import soundness.*
 
+import pyrocosm.{Block, Inline, Tone}
+
 // The compile step: every `*.md` beneath a document directory, read, parsed and converted.
 object Compilation:
   // A section's name is its directory's last segment.
@@ -72,6 +74,10 @@ object Compilation:
         Corpus.Section(name(root), root, docs, skipped)
 
     recur(files, Nil, Nil)
+
+  // A file that could not be read or parsed, as a diagnostic.
+  def unreadable(path: Text): Block =
+    Block.Diagnostic(Tone.Failure, Block.Location(path), List(Block.paragraph(t"The file could not be read.")))
 
   def corpus(roots: List[Text], checker: Checker = Checker.tokenized): Corpus =
     Corpus(roots.map(section(_, checker)))

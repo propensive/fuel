@@ -32,7 +32,10 @@
                                                                                                   */
 package fuel
 
-import soundness.*
+// Excluded from the umbrella: `Compilation`, anthology's, which would outrank fuel's own.
+import soundness.{Compilation as _, *}
+
+import pyrocosm.Block
 
 import dysasymptotics.linearSize
 
@@ -51,8 +54,8 @@ case class Corpus(sections: List[Corpus.Section]):
 
   def size: Int = sections.map(_.docs.size).fold(0)(_ + _)
 
-  // Every fragment problem of every document, each prefixed by its section.
-  def problems: List[Text] =
-    sections.bind[List[Text], Text, List[Text]]: (section: Corpus.Section) =>
-      section.docs.bind[List[Text], Text, List[Text]]: (doc: Doc) =>
-        doc.problems.map: (problem: Text) => t"${section.name}/$problem"
+  // Every problem of every document, and every file that could not be read: diagnostics.
+  def problems: List[Block] =
+    sections.bind[List[Block], Block, List[Block]]: (section: Corpus.Section) =>
+      section.skipped.map(Compilation.unreadable) +
+        section.docs.bind[List[Block], Block, List[Block]] { (doc: Doc) => doc.problems }

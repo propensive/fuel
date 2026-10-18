@@ -30,7 +30,11 @@ chosen document. A document's title is its first level-one heading, else its fil
 
 When a `classpath` is configured, every Scala fence is also *compiled*, in one warm compiler
 session on that classpath with the configured `scalac-option`s, so a fragment that does not
-typecheck fails the compile (exit status 4) and its error is shown in place. A fence marked
+typecheck fails the compile (exit status 4). Every problem — a fragment that does not typecheck,
+a preamble that is not TEL, a file that cannot be read — is a Pyrocosm diagnostic: `fuel
+compile` prints it as the terminal renders one (`path:line:col: error`, the message, and the
+lines concerned numbered from the file, with the place underlined), and in the served document
+it follows the fragment, whose lines are numbered from the file too. A fence marked
 ` ```scala fuel ` begins with a [TEL](https://soundness.dev/tel/) preamble, ended by a line
 holding `##`:
 

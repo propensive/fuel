@@ -36,7 +36,7 @@ package fuel
 import soundness.{Compilation as _, Language as _, Token as _, *}
 
 import dysasymptotics.linearSize
-import pyrocosm.{Block, Inline, Language, Token}
+import pyrocosm.{Block, Inline, Language, Token, Tone}
 import systems.javaBaseSystem
 
 object Tests extends Suite(m"Fuel tests"):
@@ -72,15 +72,15 @@ make run
 
       test(m"a scala fence is highlighted into several tokens"):
         Doc.parse(t"doc/intro.md", intro).blocks match
-          case _ :: _ :: Block.Code(Language.Scala, line :: _, _) :: _ => line.tokens.size > 1
-          case _                                                       => false
+          case _ :: _ :: Block.Code(Language.Scala, line :: _, _, _) :: _ => line.tokens.size > 1
+          case _                                                          => false
 
       . assert(_ == true)
 
       test(m"a fence in an unknown language is plain, under that language"):
         Doc.parse(t"doc/intro.md", intro).blocks match
-          case _ :: _ :: _ :: Block.Code(language, lines, _) :: _ => (language.name, lines.size)
-          case _                                                  => (t"", 0)
+          case _ :: _ :: _ :: Block.Code(language, lines, _, _) :: _ => (language.name, lines.size)
+          case _                                                     => (t"", 0)
 
       . assert(_ == (t"sh", 1))
 
@@ -95,14 +95,38 @@ error oops
 """
 
       test(m"a preamble's fields decode"):
-        Preamble.parse(preamble).let: (p: Preamble) => (p.context, p.id, p.follows, p.errors)
+        Preamble.parse(preamble) match
+          case p: Preamble => (p.context, p.id, p.follows, p.errors)
+          case _           => Unset
 
       . assert(_ == (t"term", t"setup", List(t"intro"), Preamble.Errors.Show))
 
       test(m"a mark's caption may follow the selection or sit beneath it"):
-        Preamble.parse(preamble).lay(Nil: List[Optional[Text]])(_.marks.map(_.caption))
+        Preamble.parse(preamble) match
+          case p: Preamble => p.marks.map(_.caption)
+          case _           => Nil
 
       . assert(_ == List(t"the greeting", t"a caption beneath"))
+
+      test(m"a preamble that is not TEL is its error"):
+        Preamble.parse(t"context term\n   three spaces\n") match
+          case error: Tel.Error => true
+          case _                => false
+
+      . assert(_ == true)
+
+      test(m"a preamble that is not TEL is reported as a diagnostic at its line in the file"):
+        val text: Text =
+          t"# Title\n\n```scala fuel\ncontext term\n   three spaces\n##\nval x = 1\n```\n"
+
+        Doc.parse(t"doc/bad.md", text).problems match
+          case Block.Diagnostic(Tone.Failure, location, _, _, _) :: _ =>
+            (location.let(_.path), location.let(_.line))
+
+          case _ =>
+            (Unset, Unset)
+
+      . assert(_ == (t"doc/bad.md", 5))
 
       test(m"a fence splits at the `##` line"):
         Preamble.split(t"context term\n##\nval x = 1\nval y = 2\n")
@@ -124,13 +148,25 @@ error oops
 
       . assert(_ == (11, 16))
 
-      test(m"a range over two lines becomes a note per line"):
-        val notes: List[Block.Note] =
-          Notes.of(t"abc\ndef\nghi", 2, 5, Block.Note.Style.Highlight, Unset)
+      test(m"a range over two lines becomes one note spanning them"):
+        val note: Block.Note = Notes.of(t"abc\ndef\nghi", 2, 5, Block.Note.Style.Highlight)
+        (note.line, note.start, note.end, note.last)
 
-        notes.map: (note: Block.Note) => (note.line, note.start, note.end)
+      . assert(_ == (0, 2, 1, 1))
 
-      . assert(_ == List((0, 2, 3), (1, 0, 1)))
+      test(m"a range of no width is a caret"):
+        Notes.of(t"abc\ndef", 5, 5, Block.Note.Style.Erroneous).caret
+
+      . assert(_ == true)
+
+      test(m"a fragment's code is numbered from its line in the file"):
+        val text: Text = t"# Title\n\n```scala fuel\nid one\n##\nval x = 1\n```\n"
+
+        Doc.parse(t"doc/n.md", text).blocks match
+          case _ :: Block.Code(_, _, _, start) :: _ => start
+          case _                                    => Unset
+
+      . assert(_ == 6)
 
     suite(m"Compile checking"):
       // The suite's own classpath, from its classloader (so it is the same under fume, which
@@ -138,7 +174,7 @@ error oops
       // fragments need.
       val classpath: LocalClasspath = LocalClasspath.of(Classloader[Tests.type])
 
-      def problems(markdown: Text): List[Text] =
+      def problems(markdown: Text): List[Block] =
         Checking.session(classpath, Nil): (checker: Checker) =>
           Doc.parse(t"doc/check.md", markdown, checker).problems
 
@@ -147,10 +183,15 @@ error oops
 
       . assert(_ == Nil)
 
-      test(m"an ill-typed fragment is a problem, naming the fragment"):
-        problems(t"```scala\nval n: Int = \"oops\"\n```\n").map(_.cut(t": ").prim.or(t""))
+      test(m"an ill-typed fragment is a problem: a diagnostic at its line"):
+        problems(t"```scala\nval n: Int = \"oops\"\n```\n") match
+          case Block.Diagnostic(Tone.Failure, location, _, excerpt, _) :: Nil =>
+            (location.let(_.path), location.let(_.line), excerpt.size)
 
-      . assert(_ == List(t"doc/check.md"))
+          case _ =>
+            (Unset, Unset, 0)
+
+      . assert(_ == (t"doc/check.md", 2, 1))
 
       test(m"an ill-typed fragment expected to fail is not a problem"):
         problems(t"```scala fuel\nerrors show\n##\nval n: Int = \"oops\"\n```\n")
@@ -170,8 +211,11 @@ error oops
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           Doc.parse(t"doc/check.md", fence, checker).blocks match
-            case Block.Code(_, _, note :: _) :: _ => (note.line, note.style)
-            case _                                => (-1, Block.Note.Style.Param)
+            case Block.Code(_, _, note :: _, _) :: Block.Diagnostic(_, _, _, _, _) :: _ =>
+              (note.line, note.style)
+
+            case _ =>
+              (-1, Block.Note.Style.Param)
 
       . assert(_ == (1, Block.Note.Style.Erroneous))
 

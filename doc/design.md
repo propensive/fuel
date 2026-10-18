@@ -183,6 +183,16 @@ variables reach it too.
     it; fuel's own fixture compiles against its launcher assembly with the fork's flags as
     `scalac-option`s. A `soundness` shorthand for those flags is worth adding.
   - Not yet: `fuel watch`; a warning as a `Caution` note is shown but never a problem.
+  - **Diagnostics** (Pyrocosm M6d, pinned as a snapshot of `cf9a815` until released): every
+    problem is a `Block.Diagnostic` at its place in the Markdown file — a fragment's compiler
+    error (location from the fence's line, which punctuation's `Layout.CodeBlock` carries, so
+    the note the design doc thought Fuel would need upstream was not needed), a preamble that
+    is not TEL (`Block.Diagnostic.of(telError)` shifted to the file), an unreadable file, a
+    failed session. `fuel compile` prints them through `TerminalRenderer.blocks`; in a document
+    a diagnostic follows its fragment, and every fence's `Block.Code` is numbered from the
+    file (`start`). A note is one `Block.Note`, across lines or a caret, with its caption as
+    phrasing; harlequin's offset-mode spans are placed by Fuel's own `Notes.of`, since
+    `Block.Note.of` declines them.
   - All compiler use (tokenizing included) runs on one dedicated thread with a large stack, in
     `Checking.exclusive`: dotc pins a context base to the thread of its first run, so a later
     run from another thread fails with `RecursionOverflow` and no frames. The daemon serves each
