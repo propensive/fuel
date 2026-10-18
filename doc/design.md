@@ -211,14 +211,51 @@ variables reach it too.
     settings state, thread stacks — came back ordinary). Until harlequin initialises that base,
     the fixture keeps its expressions shallow, and `fuel compile` reports a session or
     highlighting failure in a line and shows what it can.
-- **M3 Animation.** Repeated `frame`s in the preamble. Port Amok's algorithm: highlight each
-  frame, `evolve` lines by similarity then tokens within aligned lines, yielding tokens with
-  presence sets. The model needs a shape for this — proposed: `Block.Code` gains
-  `frames: List[Block.Frame]`, a frame being the set of (line, token) indices present, so a
-  renderer with no notion of animation shows the last frame — added to Pyrocosm by PR, pinned
-  as a snapshot until released. The web renderer plays frames (a control per block, arrow keys
-  when focused); the terminal shows one frame with a key to step. Each frame compiles (M2)
-  independently. Fixtures: `scalaio.tel`'s sixteen blocks.
+- **M3 Animation.** Repeated `frame`s in the preamble, and Amok's alignment — highlight each
+  frame, `dissonance.evolve` lines by similarity, then tokens within aligned lines — kept as
+  it is; its *output* and its *rendering* change, so that the front end does the animating
+  with a little JavaScript, which is simpler than Amok's CSS and leaves room to change the
+  behaviour and to schedule it later.
+
+  Amok's rendering laid out the union of every frame's tokens in every line, gave each an
+  inline `width: Nch`, and used a ladder of `.sN:checked ~ … :not(.vN)` selectors (capped at
+  fifty-one frames, driven by radio inputs) to collapse what the chosen frame lacked. So a
+  token could never move between lines, a line could not be inserted smoothly, and there was
+  no notion of time.
+
+  **Model (Pyrocosm).** Animation is data about identity and placement, never geometry:
+  `Block.Code` gains `animation: Optional[Animation]`, where `Animation(atoms, frames,
+  placements, autoplay, loop)`; an `Atom(id, text, accent, role)` is a token with a stable
+  identity across frames; a `Frame(index, label, hold)`; a `Placement(frame, line, atom)`, flat
+  because a repeated TEL field cannot nest. `lines` remains the first frame, so a renderer
+  that knows nothing of animation (the terminal, a static page, a fragment shown in Flame)
+  shows a correct block.
+
+  **Server (Fuel).** Alignment yields atoms with ids and a placement per frame instead of
+  presence classes. A token `evolve` sees as the same atom on another line in the next frame
+  is placed on that line, which is the cross-line move for free. Each frame compiles on its
+  own under M2.
+
+  **Browser (`pyrocosm.js`, generic).** `HtmlRenderer` emits frame 0 as ordinary `pyro-line`
+  and `pyro-token` spans carrying `data-atom`, the animation as JSON in a `<script
+  type="application/json">` within the block, and controls (`pyro-frames`: previous, next, a
+  counter, play). A step is FLIP: record each atom's rect, rebuild the lines of the target
+  frame reusing the same nodes keyed by atom id, record the new rects, apply the inverted
+  transform, transition to identity; entering atoms fade in, leaving ones fade and collapse
+  their width. Geometry is measured, not predicted, so an inserted line, a reflowed line and a
+  move across lines all just work, and the behaviour lives in one function. Arrow keys when
+  focused, space to play, `prefers-reduced-motion` jumps. No inline `style`, no selector
+  ladder, no frame cap; without the script a page shows frame 0, which Pyrocosm's pages
+  already assume. `Frame.hold` and `autoplay` time one block; a document-level timeline (one
+  clock driving several blocks by `block#frame`, which a presentation needs) is a later
+  `Interface`-level addition nothing here precludes.
+
+  **Plan.** (1) A Pyrocosm PR: the model and its TEL codecs, the renderer's output, the FLIP
+  behaviour in `pyrocosm.js`, one animated block in the gallery, the terminal showing frame 0
+  (stepping is M4's); pinned here as a snapshot. (2) Fuel: `frame` in the preamble,
+  `Alignment` (evolve to atoms and placements) with tests for an inserted line, a token moved
+  across lines and a rename, each frame compiled. (3) Fixtures from `scalaio.tel`'s sixteen
+  blocks (`presentation.tel` uses the older `version` keyword).
 - **M4 Terminal and fragments.** `fuel show <file>` renders a document in the terminal through
   `TerminalFrontend` (navigation of headings, the document as the primary panel); `fuel
   blocks <file>` writes the document's blocks as TEL, which is the fragment form other tools
