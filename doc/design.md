@@ -188,7 +188,8 @@ variables reach it too.
     run from another thread fails with `RecursionOverflow` and no frames. The daemon serves each
     invocation on its own connection thread, so without this the first compile after a highlight
     would fail.
-  - **Upstream bug found** (harlequin, with the fork): highlighting
+  - **Upstream bug found** (harlequin, with the fork; reported as propensive/soundness#2284
+    and propensive/proscala#19): highlighting
     `val sum: Int = 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10 + 11 + 12` at *tokenized* depth
     throws `dotty.tools.dotc.core.RecursionOverflow`, in-process or in the daemon. The fork's
     `TreeAccumulator.foldOver` throws it when `ContextBase.recursiveDepth` reaches
