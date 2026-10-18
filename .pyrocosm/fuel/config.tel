@@ -1,0 +1,5 @@
+tel 1.0
+
+# Fuel's own documentation, as the fixture: `fuel compile` here compiles doc/, and `fuel serve`
+# shows it.
+document doc
