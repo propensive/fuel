@@ -106,4 +106,4 @@ Dependencies are pinned in `etc/refs` and installed by `make sync-deps`; see `AG
 ## License
 
 Fuel is copyright &copy; 2026 Jon Pretty &amp; Propensive O&Uuml;, and is made available under
-the [Apache 2.0 License](/.github/license.md).
+the [Apache 2.0 License](/LICENSE).
