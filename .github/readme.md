@@ -48,8 +48,12 @@ error  oops
   caption  or beneath it
 ```
 
-`caution` and `param` mark ranges as `highlight` and `error` do. [`doc/markdown.md`](../doc/markdown.md)
-shows each.
+`caution` and `param` mark ranges as `highlight` and `error` do. Repeated `frame`s (each one's
+code indented beneath it, or on the line for a one-liner) make the fence an *animation*: one
+block that steps through the frames, each token keeping its identity across them so that a
+step moves what stays and fades what arrives and departs; `autoplay` plays it when shown, and
+`loop` starts it again at the end. Each frame is compiled on its own.
+[`doc/markdown.md`](../doc/markdown.md) shows each.
 
 ## Configuration files
 

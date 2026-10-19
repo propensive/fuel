@@ -53,6 +53,10 @@ make run
 ```
 """
 
+  // The suite's own classpath, from its classloader (so it is the same under fume, which runs
+  // the suite in-process, as under plain java), carrying the Scala library the fragments need.
+  val classpath: LocalClasspath = LocalClasspath.of(Classloader[Tests.type])
+
   def run(): Unit =
     suite(m"Markdown to blocks"):
       test(m"a heading, a paragraph and two fences become four blocks"):
@@ -72,15 +76,18 @@ make run
 
       test(m"a scala fence is highlighted into several tokens"):
         Doc.parse(t"doc/intro.md", intro).blocks match
-          case _ :: _ :: Block.Code(Language.Scala, line :: _, _, _) :: _ => line.tokens.size > 1
-          case _                                                          => false
+          case _ :: _ :: Block.Code(Language.Scala, line :: _, _, _, _) :: _ => line.tokens.size > 1
+          case _                                                             => false
 
       . assert(_ == true)
 
       test(m"a fence in an unknown language is plain, under that language"):
         Doc.parse(t"doc/intro.md", intro).blocks match
-          case _ :: _ :: _ :: Block.Code(language, lines, _, _) :: _ => (language.name, lines.size)
-          case _                                                     => (t"", 0)
+          case _ :: _ :: _ :: Block.Code(language, lines, _, _, _) :: _ =>
+            (language.name, lines.size)
+
+          case _ =>
+            (t"", 0)
 
       . assert(_ == (t"sh", 1))
 
@@ -163,16 +170,12 @@ error oops
         val text: Text = t"# Title\n\n```scala fuel\nid one\n##\nval x = 1\n```\n"
 
         Doc.parse(t"doc/n.md", text).blocks match
-          case _ :: Block.Code(_, _, _, start) :: _ => start
-          case _                                    => Unset
+          case _ :: Block.Code(_, _, _, start, _) :: _ => start
+          case _                                       => Unset
 
       . assert(_ == 6)
 
     suite(m"Compile checking"):
-      // The suite's own classpath, from its classloader (so it is the same under fume, which
-      // runs the suite in-process, as under plain java), carrying the Scala library the
-      // fragments need.
-      val classpath: LocalClasspath = LocalClasspath.of(Classloader[Tests.type])
 
       def problems(markdown: Text): List[Block] =
         Checking.session(classpath, Nil): (checker: Checker) =>
@@ -211,13 +214,64 @@ error oops
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           Doc.parse(t"doc/check.md", fence, checker).blocks match
-            case Block.Code(_, _, note :: _, _) :: Block.Diagnostic(_, _, _, _, _) :: _ =>
+            case Block.Code(_, _, note :: _, _, _) :: Block.Diagnostic(_, _, _, _, _) :: _ =>
               (note.line, note.style)
 
             case _ =>
               (-1, Block.Note.Style.Param)
 
       . assert(_ == (1, Block.Note.Style.Erroneous))
+
+    suite(m"Animation"):
+      val animatedFence: Text =
+        t"```scala fuel\nid steps\nframe\n    val x: Int = 1\nframe\n    val x: Int = 1\n" +
+          t"    val y: Int = x + 1\nframe  val z: Int = 2\n##\n```\n"
+
+      test(m"a preamble's frames are read, indented or on the line"):
+        Preamble.parse(t"frame\n    val x = 1\n    val y = 2\nframe  val z = 3\nloop\n") match
+          case p: Preamble => (p.frames, p.autoplay, p.loop)
+          case _           => (Nil: List[Text], true, true)
+
+      . assert(_ == (List(t"val x = 1\nval y = 2", t"val z = 3"), false, true))
+
+      test(m"an animated fence becomes one block whose lines are the first frame"):
+        Doc.parse(t"doc/anim.md", animatedFence).blocks match
+          case Block.Code(_, lines, _, _, animation) :: Nil =>
+            (lines.size, animation.let(_.frames.size), animation.let(_.lines(1).size))
+
+          case _ =>
+            (0, Unset, Unset)
+
+      . assert(_ == (1, 3, 2))
+
+      test(m"a surviving token keeps its atom across frames"):
+        Doc.parse(t"doc/anim.md", animatedFence).blocks match
+          case Block.Code(_, _, _, _, animation) :: Nil =>
+            animation.let: (animation: Block.Animation) =>
+              val first: List[Text] = animation.placements.filter(_.frame == 0).map(_.atom)
+              val second: List[Text] = animation.placements.filter(_.frame == 1).map(_.atom)
+              first.all(second.has(_))
+
+          case _ =>
+            Unset
+
+      . assert(_ == true)
+
+      test(m"a frame that does not compile is a problem naming the frame"):
+        val fence: Text =
+          t"```scala fuel\nframe\n    val x: Int = 1\nframe\n    val x: Int = \"oops\"\n##\n```\n"
+
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          Doc.parse(t"doc/anim.md", fence, checker).problems match
+            case Block.Diagnostic(Tone.Failure, _, message, _, _) :: Nil =>
+              message match
+                case Block.Paragraph(Inline.Textual(text) :: _) :: _ => text.starts(t"Frame 2:")
+                case _                                               => false
+
+            case _ =>
+              false
+
+      . assert(_ == true)
 
     suite(m"Sections"):
       test(m"a section is named by its directory's last segment"):

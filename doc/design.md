@@ -211,7 +211,7 @@ variables reach it too.
     settings state, thread stacks — came back ordinary). Until harlequin initialises that base,
     the fixture keeps its expressions shallow, and `fuel compile` reports a session or
     highlighting failure in a line and shows what it can.
-- **M3 Animation.** Repeated `frame`s in the preamble, and Amok's alignment — highlight each
+- **M3 Animation** (done, first cut). Repeated `frame`s in the preamble, and Amok's alignment — highlight each
   frame, `dissonance.evolve` lines by similarity, then tokens within aligned lines — kept as
   it is; its *output* and its *rendering* change, so that the front end does the animating
   with a little JavaScript, which is simpler than Amok's CSS and leaves room to change the
@@ -256,6 +256,14 @@ variables reach it too.
   `Alignment` (evolve to atoms and placements) with tests for an inserted line, a token moved
   across lines and a rename, each frame compiled. (3) Fixtures from `scalaio.tel`'s sixteen
   blocks (`presentation.tel` uses the older `version` keyword).
+
+  Done as planned, with the alignment in Pyrocosm (`Block.Animation.of`) rather than here, so
+  the gallery animates too and any tool can; pinned as a snapshot of Pyrocosm's `animation`
+  branch. Fuel reads `frame`s (an indented literal atom, or the line's atoms for a one-liner),
+  `autoplay` and `loop`, compiles each frame on its own (a failing frame is a problem naming
+  it), and emits one `Block.Code` whose lines are the first frame. Not yet: `scalaio.tel` as
+  fixtures (its decks need the presentation layer, M7), marks on an animated block, and
+  `Frame.label`/`hold` from the preamble.
 - **M4 Terminal and fragments.** `fuel show <file>` renders a document in the terminal through
   `TerminalFrontend` (navigation of headings, the document as the primary panel); `fuel
   blocks <file>` writes the document's blocks as TEL, which is the fragment form other tools
