@@ -94,69 +94,96 @@ object Embedding:
 
         val checked: Boolean = checker.compiles && preamble.errors != Preamble.Errors.Ignore
 
-        val source: SourceCode =
-          if checked then checker.check(prefix + code, context)
-          else Checker.tokenized.check(code, context)
+        // A fragment the highlighter cannot handle (harlequin overflows on an expression
+        // nested ten deep, propensive/soundness#2284) is shown plain, with a diagnostic, and
+        // the rest of the document goes on.
+        val attempt: SourceCode | Throwable =
+          try
+            if checked then checker.check(prefix + code, context)
+            else Checker.tokenized.check(code, context)
+          catch case error: Throwable => error
 
         fragments = (id, code) :: fragments
 
-        // The lines of this fragment alone: the prefix's lines are dropped from the front.
-        val own: Int = code.cut(t"\n").size
-        val allLines: List[Block.Line] = modelLines(source)
-        val lines: List[Block.Line] = allLines.skip(allLines.size - own)
+        attempt match
+          case error: Throwable =>
+            val location = Block.Location(path, start)
+            val message = List(Block.paragraph(t"The fragment could not be highlighted: ${error.toString.tt}"))
+            problems0 = Block.Diagnostic(Tone.Failure, location, message) :: problems0
+            List(Block.Code(Language.Scala, lines(code), Nil, start))
 
-        // Each diagnostic as a note on the fragment, and as a diagnostic of its own after it,
-        // located in the file, with the lines around it.
-        val reported: List[(Block.Note, Block, Boolean)] =
-          if !checked then Nil else
-            source.diagnostics.bind[List[(Block.Note, Block, Boolean)], (Block.Note, Block, Boolean), List[(Block.Note, Block, Boolean)]]:
-              (diagnostic: harlequin.Diagnostic) =>
-                val from: Int = diagnostic.span.offset.let(_.n0).or(0) - wrapper - prefix.length
-                val length: Int = diagnostic.span.length.or(0)
+          case source: SourceCode =>
+            embedSource(source, code, prefix, wrapper, checked, preamble, id, start)
 
-                if from < 0 then Nil else
-                  val style: Block.Note.Style = diagnostic.importance match
-                    case harlequin.Diagnostic.Importance.Error => Block.Note.Style.Erroneous
-                    case _                                     => Block.Note.Style.Caution
+    private def embedSource
+      ( source:   SourceCode,
+        code:     Text,
+        prefix:   Text,
+        wrapper:  Int,
+        checked:  Boolean,
+        preamble: Preamble,
+        id:       Text,
+        start:    Int )
+    :   List[Block] =
 
-                  val tone: Tone = diagnostic.importance match
-                    case harlequin.Diagnostic.Importance.Error   => Tone.Failure
-                    case harlequin.Diagnostic.Importance.Warning => Tone.Warning
-                    case _                                       => Tone.Info
 
-                  val note: Block.Note = Notes.of(code, from, from + length, style)
-                  val location = Block.Location(path, start + note.line, note.start + 1)
-                  val excerpt: Block.Code = Block.Code.excerpt(Language.Scala, lines, List(note))
-                  val message: List[Block] = List(Block.paragraph(diagnostic.message))
-                  val numbered: Block.Code = excerpt.copy(start = excerpt.start.let(_ + start - 1))
-                  val shown: Block.Note = note.copy(caption = Inline.text(diagnostic.message))
-                  val report: Block = Block.Diagnostic(tone, location, message, List(numbered))
-                  List((shown, report, tone == Tone.Failure))
+      // The lines of this fragment alone: the prefix's lines are dropped from the front.
+      val own: Int = code.cut(t"\n").size
+      val allLines: List[Block.Line] = modelLines(source)
+      val lines: List[Block.Line] = allLines.skip(allLines.size - own)
 
-        val errors: List[Block] = reported.filter(_(2)).map(_(1))
+      // Each diagnostic as a note on the fragment, and as a diagnostic of its own after it,
+      // located in the file, with the lines around it.
+      val reported: List[(Block.Note, Block, Boolean)] =
+        if !checked then Nil else
+          source.diagnostics.bind[List[(Block.Note, Block, Boolean)], (Block.Note, Block, Boolean), List[(Block.Note, Block, Boolean)]]:
+            (diagnostic: harlequin.Diagnostic) =>
+              val from: Int = diagnostic.span.offset.let(_.n0).or(0) - wrapper - prefix.length
+              val length: Int = diagnostic.span.length.or(0)
 
-        preamble.errors match
-          case Preamble.Errors.Fail =>
-            errors.each { (error: Block) => problems0 = error :: problems0 }
+              if from < 0 then Nil else
+                val style: Block.Note.Style = diagnostic.importance match
+                  case harlequin.Diagnostic.Importance.Error => Block.Note.Style.Erroneous
+                  case _                                     => Block.Note.Style.Caution
 
-          case Preamble.Errors.Show =>
-            if checked && errors.nil then
-              val location = Block.Location(path, start)
-              val message = List(Block.paragraph(t"This fragment is marked `errors show`, but it compiled."))
-              problems0 = Block.Diagnostic(Tone.Failure, location, message) :: problems0
+                val tone: Tone = diagnostic.importance match
+                  case harlequin.Diagnostic.Importance.Error   => Tone.Failure
+                  case harlequin.Diagnostic.Importance.Warning => Tone.Warning
+                  case _                                       => Tone.Info
 
-          case _ =>
-            ()
+                val note: Block.Note = Notes.of(code, from, from + length, style)
+                val location = Block.Location(path, start + note.line, note.start + 1)
+                val excerpt: Block.Code = Block.Code.excerpt(Language.Scala, lines, List(note))
+                val message: List[Block] = List(Block.paragraph(diagnostic.message))
+                val numbered: Block.Code = excerpt.copy(start = excerpt.start.let(_ + start - 1))
+                val shown: Block.Note = note.copy(caption = Inline.text(diagnostic.message))
+                val report: Block = Block.Diagnostic(tone, location, message, List(numbered))
+                List((shown, report, tone == Tone.Failure))
 
-        val marks: List[Block.Note] =
-          preamble.marks.bind[List[Block.Note], Block.Note, List[Block.Note]]:
-            (mark: Preamble.Mark) =>
-              mark.selection.findIn(code).lay(Nil: List[Block.Note]): (range: (Int, Int)) =>
-                val caption: List[Inline] = mark.caption.lay(Nil: List[Inline])(Inline.text(_))
-                List(Notes.of(code, range(0), range(1), mark.style, caption))
+      val errors: List[Block] = reported.filter(_(2)).map(_(1))
 
-        val block: Block = Block.Code(Language.Scala, lines, reported.map(_(0)) + marks, start)
-        block :: reported.map(_(1))
+      preamble.errors match
+        case Preamble.Errors.Fail =>
+          errors.each { (error: Block) => problems0 = error :: problems0 }
+
+        case Preamble.Errors.Show =>
+          if checked && errors.nil then
+            val location = Block.Location(path, start)
+            val message = List(Block.paragraph(t"This fragment is marked `errors show`, but it compiled."))
+            problems0 = Block.Diagnostic(Tone.Failure, location, message) :: problems0
+
+        case _ =>
+          ()
+
+      val marks: List[Block.Note] =
+        preamble.marks.bind[List[Block.Note], Block.Note, List[Block.Note]]:
+          (mark: Preamble.Mark) =>
+            mark.selection.findIn(code).lay(Nil: List[Block.Note]): (range: (Int, Int)) =>
+              val caption: List[Inline] = mark.caption.lay(Nil: List[Inline])(Inline.text(_))
+              List(Notes.of(code, range(0), range(1), mark.style, caption))
+
+      val block: Block = Block.Code(Language.Scala, lines, reported.map(_(0)) + marks, start)
+      block :: reported.map(_(1))
 
   object JavaCode extends Embedding:
     def embed(info: List[Text], content: Text, fence: Int): Optional[List[Block]] =

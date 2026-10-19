@@ -195,12 +195,20 @@ private def compile(config: Workspace.Config)(using Stdio, Environment)
   else
     // Fragments are compiled only against a configured classpath: without one there is
     // nothing to compile them against, and they are highlighted alone.
-    // A session that fails to open or to compile is a diagnostic of its own, and the documents
-    // are then compiled without it (tokenized, unchecked): the documents are still produced.
-    val checked: Boolean = !config.classpath.nil
+    // A classpath entry that does not exist is reported once, and nothing is compiled against
+    // the rest: the compiler would fail on every fragment for want of the standard library.
+    def exists(entry: Text): Boolean = java.nio.file.Files.exists(java.nio.file.Path.of(entry.s))
+    val missing: List[Text] = config.classpath.filter(!exists(_))
 
     @scala.caps.unsafe.untrackedCaptures
-    var failures: List[Block] = Nil
+    var failures: List[Block] =
+      missing.map: (entry: Text) =>
+        val text: Text = t"This classpath entry does not exist, so no fragment was compiled."
+        Block.Diagnostic(Tone.Failure, Block.Location(entry), List(Block.paragraph(text)))
+
+    // A session that fails to open or to compile is a diagnostic of its own, and the documents
+    // are then compiled without it (tokenized, unchecked): the documents are still produced.
+    val checked: Boolean = !config.classpath.nil && missing.nil
 
     val outcome: Optional[Corpus] =
       if !checked then Unset else
@@ -226,7 +234,8 @@ private def compile(config: Workspace.Config)(using Stdio, Environment)
     val renderer = TerminalRenderer()
     renderer.blocks(problems, width).each: (line: Teletype) => Out.println(line)
 
-    if !checked then Out.println(t"fuel: no classpath is configured, so no fragment was compiled")
+    if config.classpath.nil
+    then Out.println(t"fuel: no classpath is configured, so no fragment was compiled")
 
     if problems.nil then Exit.Ok else CompileFailed
 
