@@ -271,7 +271,7 @@ variables reach it too.
   preamble's marks apply in every frame they match, and every mark's selection may be refined
   by `line` and `occurrence` children. `Selection` is the one object that reads and finds a
   range, so that other ways of naming one can be tried there alone. Each frame goes to
-  `Animation.of` as a `Frame.Detail`. Not yet: `scalaio.tel` as fixtures (its decks need the
+  `Animation.of` as a `Slide.Detail`, and Pyrocosm derives the transition into each slide. Not yet: `scalaio.tel` as fixtures (its decks need the
   presentation layer, M7).
 - **M4 Terminal and fragments.** `fuel show <file>` renders a document in the terminal through
   `TerminalFrontend` (navigation of headings, the document as the primary panel); `fuel

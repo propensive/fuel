@@ -286,7 +286,7 @@ error oops
             (Unset, false)
 
         val frames = doc.blocks match
-          case _ :: Block.Code(_, _, _, _, animation) :: _ => animation.let(_.frames.size)
+          case _ :: Block.Code(_, _, _, _, animation) :: _ => animation.let(_.slides.size)
           case _                                           => Unset
 
         (problem, frames)
@@ -301,8 +301,8 @@ error oops
         Doc.parse(t"doc/anim.md", text).blocks match
           case Block.Code(_, _, notes, _, animation) :: Nil =>
             animation.let: (animation: Block.Animation) =>
-              val second: Block.Frame = animation.frames.skip(1).prim.or(Block.Frame(-1))
-              (notes.size, animation.frames.map(_.notes.size), Blocks.plain(second.label), second.hold, second.at)
+              val second: Block.Slide = animation.slides.skip(1).prim.or(Block.Slide(-1))
+              (notes.size, animation.slides.map(_.notes.size), Blocks.plain(second.label), second.hold, second.at)
 
           case _ =>
             Unset
@@ -319,7 +319,7 @@ error oops
           doc.blocks match
             case Block.Code(_, _, _, _, animation) :: Nil =>
               animation.let: (animation: Block.Animation) =>
-                (doc.problems.size, animation.frames.skip(1).prim.let(_.language), animation.lines(1).prim.let(_.size > 1))
+                (doc.problems.size, animation.slides.skip(1).prim.let(_.language), animation.lines(1).prim.let(_.size > 1))
 
             case _ =>
               Unset
@@ -347,7 +347,7 @@ error oops
       test(m"an animated fence becomes one block whose lines are the first frame"):
         Doc.parse(t"doc/anim.md", animatedFence).blocks match
           case Block.Code(_, lines, _, _, animation) :: Nil =>
-            (lines.size, animation.let(_.frames.size), animation.let(_.lines(1).size))
+            (lines.size, animation.let(_.slides.size), animation.let(_.lines(1).size))
 
           case _ =>
             (0, Unset, Unset)
@@ -358,8 +358,8 @@ error oops
         Doc.parse(t"doc/anim.md", animatedFence).blocks match
           case Block.Code(_, _, _, _, animation) :: Nil =>
             animation.let: (animation: Block.Animation) =>
-              val first: List[Text] = animation.placements.filter(_.frame == 0).map(_.atom)
-              val second: List[Text] = animation.placements.filter(_.frame == 1).map(_.atom)
+              val first: List[Text] = animation.placements.filter(_.slide == 0).map(_.atom)
+              val second: List[Text] = animation.placements.filter(_.slide == 1).map(_.atom)
               first.all(second.has(_))
 
           case _ =>

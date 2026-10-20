@@ -5,4 +5,4 @@
 # build reads this file (`deps` in build.mill); `make sync-deps` and CI install what it names.
 # See propensive/.github for the whole flow.
 propensive/soundness	0.72.0
-propensive/pyrocosm	0.7.3-84d96cf532c5	56191e68a65f502369c4c6696760614c780cb8b0
+propensive/pyrocosm	0.7.3-03bbf6e37fa9	bdc61b17272c79bfc062c39fa1f316aebe8f9d14

@@ -158,7 +158,7 @@ object Embedding:
 
     // Each frame highlighted (and compiled, when checking and Scala) on its own, in its own
     // language or the block's, then aligned into one animation with what the preamble says
-    // of each: its label, hold, time, language when it differs from the block's, and notes —
+    // of each slide: its label, hold, time, language when it differs from the block's, and notes —
     // the preamble's marks, which apply in every frame they match, and the frame's own. The
     // block's lines and notes are the first frame's. A frame that does not compile is a
     // problem naming it, at the fragment's place; the fragment a later one may follow is the
@@ -175,7 +175,7 @@ object Embedding:
         start:    Int )
     :   List[Block] =
 
-      val built: List[(List[Block.Line], Block.Frame.Detail)] =
+      val built: List[(List[Block.Line], Block.Slide.Detail)] =
         frames.indexed.map: (frame: Preamble.Frame, index: Ordinal) =>
           val code: Text = frame.code.or(t"")
           val own: Text = frame.language.or(language)
@@ -204,8 +204,8 @@ object Embedding:
             case _ =>
               lines(code)
 
-          val detail: Block.Frame.Detail =
-            Block.Frame.Detail
+          val detail: Block.Slide.Detail =
+            Block.Slide.Detail
               ( frame.label,
                 frame.hold,
                 frame.at,
@@ -220,7 +220,7 @@ object Embedding:
       fragments = (id, followed) :: fragments
 
       val frameLines: List[List[Block.Line]] = built.map(_(0))
-      val details: List[Block.Frame.Detail] = built.map(_(1))
+      val details: List[Block.Slide.Detail] = built.map(_(1))
 
       val animation: Block.Animation =
         Block.Animation.of(frameLines, details).copy(autoplay = preamble.autoplay, loop = preamble.loop)
