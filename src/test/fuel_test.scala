@@ -224,15 +224,125 @@ error oops
 
     suite(m"Animation"):
       val animatedFence: Text =
-        t"```scala fuel\nid steps\nframe\n    val x: Int = 1\nframe\n    val x: Int = 1\n" +
-          t"    val y: Int = x + 1\nframe  val z: Int = 2\n##\n```\n"
+        t"```scala fuel\nid steps\nframe\n  code\n      val x: Int = 1\nframe\n  code\n      val x: Int = 1\n" +
+          t"      val y: Int = x + 1\nframe\n  code val z: Int = 2\n##\n```\n"
 
-      test(m"a preamble's frames are read, indented or on the line"):
-        Preamble.parse(t"frame\n    val x = 1\n    val y = 2\nframe  val z = 3\nloop\n") match
-          case p: Preamble => (p.frames, p.autoplay, p.loop)
-          case _           => (Nil: List[Text], true, true)
+      test(m"a frame's code is its `code` child, indented beneath it or on the line"):
+        Preamble.parse(t"frame\n  code\n      val x = 1\n      val y = 2\nframe\n  code val z = 3\nloop\n") match
+          case p: Preamble => (p.frames.map(_.code), p.autoplay, p.loop)
+          case _           => (Nil: List[Optional[Text]], true, true)
 
       . assert(_ == (List(t"val x = 1\nval y = 2", t"val z = 3"), false, true))
+
+      test(m"a frame's label, hold, at and language are read"):
+        Preamble.parse(t"frame\n  code\n      val x = 1\n  label the *first* step\n  hold 2\n  at 12.5\n  language java\n") match
+          case p: Preamble =>
+            p.frames.prim.let: (frame: Preamble.Frame) =>
+              val emphasised: Boolean = frame.label.exists { case Inline.Emphasis(_) => true; case _ => false }
+              (Blocks.plain(frame.label), emphasised, frame.hold, frame.at, frame.language)
+
+          case _ =>
+            Unset
+
+      . assert(_ == (t"the first step", true, 2.0, 12.5, t"java"))
+
+      test(m"a frame's marks are its own, refined beneath them by line and occurrence"):
+        Preamble.parse(t"frame\n  code\n      val x = x\n  highlight x  the variable\n    line 1\n    occurrence 2\n") match
+          case p: Preamble =>
+            val own: Optional[List[(Block.Note.Style, Optional[Text], Optional[Int], Int)]] =
+              p.frames.prim.let(_.marks.map { (mark: Preamble.Mark) => (mark.style, mark.caption, mark.selection.line, mark.selection.occurrence) })
+
+            (p.marks.size, own)
+
+          case _ =>
+            Unset
+
+      . assert(_ == (0, List((Block.Note.Style.Highlight, t"the variable", 1, 2))))
+
+      test(m"a block-level language is read"):
+        Preamble.parse(t"language java\n") match
+          case p: Preamble => p.language
+          case _           => Unset
+
+      . assert(_ == t"java")
+
+      test(m"a selection may name a line and an occurrence, and finds nothing beyond them"):
+        ( Selection(t"x", Unset, line = 2).findIn(t"x = 1\ny = x"),
+          Selection(t"x", Unset, occurrence = 2).findIn(t"x + x + x"),
+          Selection(t"x", Unset, line = 3).findIn(t"x\ny"),
+          Selection(t"x", Unset, occurrence = 4).findIn(t"x + x + x") )
+
+      . assert(_ == ((10, 11), (4, 5), Unset, Unset))
+
+      test(m"a frame without code is a problem at its line, and is dropped"):
+        val text: Text = t"# T\n\n```scala fuel\nframe\n  code\n      val x = 1\nframe\n    val y = 2\n##\n```\n"
+        val doc = Doc.parse(t"doc/anim.md", text)
+
+        val problem = doc.problems match
+          case Block.Diagnostic(Tone.Failure, location, Block.Paragraph(Inline.Textual(message) :: _) :: _, _, _) :: Nil =>
+            (location.let(_.line), message.starts(t"Frame 2"))
+
+          case _ =>
+            (Unset, false)
+
+        val frames = doc.blocks match
+          case _ :: Block.Code(_, _, _, _, animation) :: _ => animation.let(_.frames.size)
+          case _                                           => Unset
+
+        (problem, frames)
+
+      . assert(_ == ((7, true), 1))
+
+      test(m"a frame's details reach the animation, and a block-level mark every frame it matches"):
+        val text: Text =
+          t"```scala fuel\nhighlight x\nframe\n  code\n      val x: Int = 1\nframe\n  label a *second* value\n  hold 2\n  at 12.5\n" +
+            t"  highlight y  the new one\n  code\n      val y: Int = 2\n##\n```\n"
+
+        Doc.parse(t"doc/anim.md", text).blocks match
+          case Block.Code(_, _, notes, _, animation) :: Nil =>
+            animation.let: (animation: Block.Animation) =>
+              val second: Block.Frame = animation.frames.skip(1).prim.or(Block.Frame(-1))
+              (notes.size, animation.frames.map(_.notes.size), Blocks.plain(second.label), second.hold, second.at)
+
+          case _ =>
+            Unset
+
+      . assert(_ == (1, List(1, 1), t"a second value", 2.0, 12.5))
+
+      test(m"a java frame is highlighted without the checker, in its own language"):
+        val text: Text =
+          t"```scala fuel\nframe\n  code\n      val x: Int = 1\nframe\n  language java\n  code\n      int x = 1;\n##\n```\n"
+
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          val doc = Doc.parse(t"doc/anim.md", text, checker)
+
+          doc.blocks match
+            case Block.Code(_, _, _, _, animation) :: Nil =>
+              animation.let: (animation: Block.Animation) =>
+                (doc.problems.size, animation.frames.skip(1).prim.let(_.language), animation.lines(1).prim.let(_.size > 1))
+
+            case _ =>
+              Unset
+
+      . assert(_ == (0, Language.Java, true))
+
+      test(m"a java fence with a preamble is read by the preamble embedding"):
+        Doc.parse(t"doc/j.md", t"```java fuel\nid j\n##\nint x = 1;\n```\n").blocks match
+          case Block.Code(language, line :: _, _, _, _) :: Nil => (language, line.tokens.size > 1)
+          case _                                               => Unset
+
+      . assert(_ == (Language.Java, true))
+
+      test(m"a fragment follows the last scala frame of an animation"):
+        val first: Text =
+          t"```scala fuel\nid setup\nframe\n  code\n      val base: Int = 1\nframe\n  language java\n  code\n      int base = 1;\n##\n```\n"
+
+        val second: Text = t"```scala fuel\nfollows setup\n##\nval n: Int = base + 1\n```\n"
+
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          Doc.parse(t"doc/check.md", first + second, checker).problems
+
+      . assert(_ == Nil)
 
       test(m"an animated fence becomes one block whose lines are the first frame"):
         Doc.parse(t"doc/anim.md", animatedFence).blocks match
@@ -259,7 +369,7 @@ error oops
 
       test(m"a frame that does not compile is a problem naming the frame"):
         val fence: Text =
-          t"```scala fuel\nframe\n    val x: Int = 1\nframe\n    val x: Int = \"oops\"\n##\n```\n"
+          t"```scala fuel\nframe\n  code\n      val x: Int = 1\nframe\n  code\n      val x: Int = \"oops\"\n##\n```\n"
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           Doc.parse(t"doc/anim.md", fence, checker).problems match

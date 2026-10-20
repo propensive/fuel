@@ -259,11 +259,20 @@ variables reach it too.
 
   Done as planned, with the alignment in Pyrocosm (`Block.Animation.of`) rather than here, so
   the gallery animates too and any tool can; pinned as a snapshot of Pyrocosm's `animation`
-  branch. Fuel reads `frame`s (an indented literal atom, or the line's atoms for a one-liner),
-  `autoplay` and `loop`, compiles each frame on its own (a failing frame is a problem naming
-  it), and emits one `Block.Code` whose lines are the first frame. Not yet: `scalaio.tel` as
-  fixtures (its decks need the presentation layer, M7), marks on an animated block, and
-  `Frame.label`/`hold` from the preamble.
+  branch. Fuel reads `frame`s, `autoplay` and `loop`, compiles each frame on its own (a failing
+  frame is a problem naming it), and emits one `Block.Code` whose lines are the first frame.
+
+  Then the `frame` became a compound with children, since a TEL compound with a source atom
+  can have none: `code` (required; a frame without it is a problem at its line, found by
+  counting the preamble's `frame` lines, as a TEL node does not know its own, and dropped),
+  `label` (Markdown phrasing, through `Blocks.inline`), `hold`, `at` (a time on the page's one
+  clock, which Pyrocosm's script drives), `language` (a Java frame is highlighted by harlequin
+  alone; a later `follows` gets the last Scala frame's code), and marks of its own; the
+  preamble's marks apply in every frame they match, and every mark's selection may be refined
+  by `line` and `occurrence` children. `Selection` is the one object that reads and finds a
+  range, so that other ways of naming one can be tried there alone. Each frame goes to
+  `Animation.of` as a `Frame.Detail`. Not yet: `scalaio.tel` as fixtures (its decks need the
+  presentation layer, M7).
 - **M4 Terminal and fragments.** `fuel show <file>` renders a document in the terminal through
   `TerminalFrontend` (navigation of headings, the document as the primary panel); `fuel
   blocks <file>` writes the document's blocks as TEL, which is the fragment form other tools

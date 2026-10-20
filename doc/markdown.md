@@ -31,8 +31,10 @@ val sum: Int = 1 + 2 + 3
 `context term` or `context type` says the fragment is an expression or a type rather than
 top-level definitions; `highlight`, `error`, `caution` and `param` mark a range, named by its
 first and last characters (`1..3`) or literally, with a caption after it or beneath it as
-`caption`; and `errors show` says the fragment is meant not to compile, so its errors are shown
-rather than failing the compile:
+`caption` — and, when the range occurs more than once, `line 3` beneath it names the line of
+the fragment to look on and `occurrence 2` which of its occurrences is meant; `language java`
+says what the fragment is highlighted as; and `errors show` says the fragment is meant not to
+compile, so its errors are shown rather than failing the compile:
 
 ```scala fuel
 follows numbers
@@ -59,20 +61,35 @@ fuel compile && fuel serve
 
 A fence with `frame`s is one block that steps through them: each token keeps its identity
 across the frames, so a step moves what stays, fades in what arrives and fades out what
-departs — wherever the lines put them. Step with the buttons, or the arrow keys when the block
-is focused; space plays. Each frame is compiled on its own.
+departs — wherever the lines put them. A `frame`'s `code` holds its text, and beneath it may
+be a `label` (Markdown phrasing, shown beside the step counter), a `hold` (the seconds the
+frame rests when the animation plays), an `at` (its time on the page's one clock: a bar at the
+foot of the page plays every timed block together, and a frame without a time follows the one
+before it by that frame's hold), a `language` of its own, and marks of its own — `highlight`,
+`error`, `caution` and `param`, as above, which fade out before a step and in after it; a mark
+on the fence itself applies in every frame it matches. Step with the buttons, or the arrow
+keys when the block is focused; space plays. The code after `##`, if any, is the last frame.
+Each Scala frame is compiled on its own; a Java frame is highlighted.
 
 ```scala fuel
 id greet
 frame
-    def greet(name: Text): Text = ???
+  label A stub
+  code
+      def greet(name: Text): Text = ???
 frame
-    def greet(name: Text): Text =
-      t"Hello, $name"
+  label A body
+  hold 3
+  highlight t"H..me"  the greeting
+  code
+      def greet(name: Text): Text =
+        t"Hello, $name"
 frame
-    def greet(name: Text, times: Int): Text =
-      val greeting: Text = t"Hello, $name"
-      greeting * times
+  label A parameter, and a line before the body
+  code
+      def greet(name: Text, times: Int): Text =
+        val greeting: Text = t"Hello, $name"
+        greeting * times
 ##
 ```
 
