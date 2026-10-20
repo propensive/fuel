@@ -94,6 +94,81 @@ object Embedding:
 
         val checked: Boolean = checker.compiles && preamble.errors != Preamble.Errors.Ignore
 
+        // An animated fence: its frames, then the code after `##` as the last if there is any.
+        val frames: List[Text] =
+          if preamble.frames.nil then Nil
+          else if code.trim == t"" then preamble.frames
+          else preamble.frames + List(code)
+
+        if !frames.nil then animated(frames, preamble, prefix, wrapper, context, checked, id, start)
+        else embedPlain(code, preamble, prefix, wrapper, context, checked, id, start)
+
+    // Each frame highlighted (and compiled, when checking) on its own, then aligned into one
+    // animation; the block's lines are the first frame's. A frame that does not compile is a
+    // problem naming it, at the fragment's place.
+    private def animated
+      ( frames:   List[Text],
+        preamble: Preamble,
+        prefix:   Text,
+        wrapper:  Int,
+        context:  Optional[harlequin.Scala.Context],
+        checked:  Boolean,
+        id:       Text,
+        start:    Int )
+    :   List[Block] =
+
+      val sources: List[Optional[SourceCode]] =
+        frames.indexed.map: (frame: Text, index: Ordinal) =>
+          val attempt: SourceCode | Throwable =
+            try
+              if checked then checker.check(prefix + frame, context)
+              else Checker.tokenized.check(frame, context)
+            catch case error: Throwable => error
+
+          attempt match
+            case error: Throwable =>
+              val location = Block.Location(path, start)
+              val text = t"Frame ${(index.n0 + 1).toString.tt} could not be highlighted: ${error.toString.tt}"
+              problems0 = Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(text))) :: problems0
+              Unset
+
+            case source: SourceCode =>
+              if checked then
+                source.diagnostics.each: (diagnostic: harlequin.Diagnostic) =>
+                  if diagnostic.importance == harlequin.Diagnostic.Importance.Error then
+                    val location = Block.Location(path, start)
+                    val text = t"Frame ${(index.n0 + 1).toString.tt}: ${diagnostic.message}"
+                    val report: Block = Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(text)))
+                    if preamble.errors == Preamble.Errors.Fail then problems0 = report :: problems0
+
+              source
+
+      fragments = (id, frames.reverse.prim.or(t"")) :: fragments
+
+      // The lines of each frame alone: the prefix's lines dropped from the front.
+      val frameLines: List[List[Block.Line]] =
+        sources.zip(frames).map: (source: Optional[SourceCode], frame: Text) =>
+          source.lay(lines(frame)): (source: SourceCode) =>
+            val own: Int = frame.cut(t"\n").size
+            val all: List[Block.Line] = modelLines(source)
+            all.skip(all.size - own)
+
+      val animation: Block.Animation =
+        Block.Animation.of(frameLines).copy(autoplay = preamble.autoplay, loop = preamble.loop)
+
+      List(Block.Code(Language.Scala, frameLines.prim.or(Nil), Nil, start, animation))
+
+    private def embedPlain
+      ( code:     Text,
+        preamble: Preamble,
+        prefix:   Text,
+        wrapper:  Int,
+        context:  Optional[harlequin.Scala.Context],
+        checked:  Boolean,
+        id:       Text,
+        start:    Int )
+    :   List[Block] =
+
         // A fragment the highlighter cannot handle (harlequin overflows on an expression
         // nested ten deep, propensive/soundness#2284) is shown plain, with a diagnostic, and
         // the rest of the document goes on.

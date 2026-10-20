@@ -55,8 +55,28 @@ Any other fence is shown plain, under the language it names:
 fuel compile && fuel serve
 ```
 
+## Animation
+
+A fence with `frame`s is one block that steps through them: each token keeps its identity
+across the frames, so a step moves what stays, fades in what arrives and fades out what
+departs — wherever the lines put them. Step with the buttons, or the arrow keys when the block
+is focused; space plays. Each frame is compiled on its own.
+
+```scala fuel
+id greet
+frame
+    def greet(name: Text): Text = ???
+frame
+    def greet(name: Text): Text =
+      t"Hello, $name"
+frame
+    def greet(name: Text, times: Int): Text =
+      val greeting: Text = t"Hello, $name"
+      greeting * times
+##
+```
+
 ## What comes next
 
-- a sequence of frames, animated step by step;
 - the documents in the terminal, and as fragments for other tools;
 - the project's API, from its TASTy, with these pages in its tree.

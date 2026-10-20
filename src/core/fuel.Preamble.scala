@@ -50,13 +50,18 @@ import pyrocosm.Block
 //   highlight Mi..es  the caption # a range to mark, with its caption in the remaining atoms,
 //   error     Lit..ond            # as `highlight`, `error`, `caution` or `param`
 //     caption  or beneath it
+//   frame                         # a frame of an animation, its code indented beneath (or
+//       val x = 1                 # on the line, for a one-liner); several in order, each
+//   frame                         # compiled on its own, with the code after `##` the last
+//       val x = 2                 # frame if there is any
+//   autoplay                      # play when shown; `loop` to start again at the end
 object Preamble:
   case class Mark(style: Block.Note.Style, selection: Selection, caption: Optional[Text])
 
   enum Errors:
     case Fail, Show, Ignore
 
-  val empty: Preamble = Preamble(Unset, Unset, Nil, Errors.Fail, Nil)
+  val empty: Preamble = Preamble(Unset, Unset, Nil, Errors.Fail, Nil, Nil, false, false)
 
   // The fence's content as its preamble and its code: the preamble is everything before the
   // first line holding `##` alone, and `Unset` when there is no such line.
@@ -116,6 +121,13 @@ object Preamble:
             case _ =>
               Nil
 
+      // A frame's code: its indented literal, which follows any inline atoms in the atom
+      // sequence, so joining all of them serves a one-line frame too.
+      val frames: List[Text] =
+        tel.fields(t"frame").to[List].map { (node: Tel) => node.atomTexts.to[List].join(t" ") }
+
+      def flag(keyword: Text): Boolean = !tel.fields(keyword).to[List].nil
+
       val errors: Errors = atoms(t"errors").prim match
         case t"show"   => Errors.Show
         case t"ignore" => Errors.Ignore
@@ -129,14 +141,20 @@ object Preamble:
           marks(t"highlight", Block.Note.Style.Highlight) +
             marks(t"error", Block.Note.Style.Erroneous) +
             marks(t"caution", Block.Note.Style.Caution) +
-            marks(t"param", Block.Note.Style.Param) )
+            marks(t"param", Block.Note.Style.Param),
+          frames,
+          flag(t"autoplay"),
+          flag(t"loop") )
 
 case class Preamble
-  ( context: Optional[Text],
-    id:      Optional[Text],
-    follows: List[Text],
-    errors:  Preamble.Errors,
-    marks:   List[Preamble.Mark] ):
+  ( context:  Optional[Text],
+    id:       Optional[Text],
+    follows:  List[Text],
+    errors:   Preamble.Errors,
+    marks:    List[Preamble.Mark],
+    frames:   List[Text]    = Nil,
+    autoplay: Boolean       = false,
+    loop:     Boolean       = false ):
 
   def scalaContext: Optional[harlequin.Scala.Context] = context match
     case t"term" => harlequin.Scala.Context.Term
