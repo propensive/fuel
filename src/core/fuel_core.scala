@@ -36,15 +36,17 @@ package fuel
 // which `Block.Code` carries), not cosmopolite's and harlequin's.
 import soundness.{Language as _, Token as _, *}
 
-import dysasymptotics.linearSize
+import dysasymptotics.{linearAccess, linearSize}
 import pyrocosm.{Block, Inline, Language, Token, Tone}
 
 object Embedding:
   // A Scala fence, highlighted by the checker — typechecked, in a compile with a classpath —
   // with the preamble a ` ```scala fuel ` fence carries honoured: its context, its marks, the
-  // fragments it follows (whose text precedes it in the compile), and what its errors mean.
-  // One instance per document: the fragments seen so far are what `follows` names, and
-  // `problems` is what the compile reports — a diagnostic each, at its place in the file.
+  // fragments it follows (whose text precedes it in the compile), what its errors mean, and
+  // its language when it is not Scala's (a ` ```java fuel ` fence comes here for its preamble,
+  // and is highlighted, not compiled). One instance per document: the fragments seen so far
+  // are what `follows` names, and `problems` is what the compile reports — a diagnostic each,
+  // at its place in the file.
   final class ScalaCode(checker: Checker, path: Text) extends Embedding:
     private var fragments: List[(Text, Text)] = Nil
     private var count: Int = 0
@@ -56,7 +58,7 @@ object Embedding:
       fragments.seek(_(0) == name).lay(t""): (entry: (Text, Text)) => entry(1)
 
     def embed(info: List[Text], content: Text, fence: Int): Optional[List[Block]] =
-      if info.prim != t"scala" then Unset else
+      if info.prim != t"scala" && !info.has(t"fuel") then Unset else
         val (header, code0) =
           if info.has(t"fuel") then Preamble.split(content) else (Unset, content)
 
@@ -80,6 +82,7 @@ object Embedding:
 
         val id: Text = preamble.id.or(t"fragment-${count.show}")
         val context: Optional[harlequin.Scala.Context] = preamble.scalaContext
+        val language: Text = preamble.language.or(info.prim.or(t"scala"))
 
         // The compile unit: the followed fragments, then this one. Diagnostics are reported
         // against the whole unit (and harlequin's wrapper for a term or type context), so they
@@ -94,21 +97,76 @@ object Embedding:
 
         val checked: Boolean = checker.compiles && preamble.errors != Preamble.Errors.Ignore
 
+        // The preamble's frames which have code: one without its `code` child is a problem
+        // at its line in the file — the nth `frame` line of the preamble, since a TEL node
+        // does not know its line — and is dropped.
+        val frameLines: List[Int] =
+          header.lay(Nil) { (text: Text) => text.cut(t"\n").indexed.filter(_(0).starts(t"frame")).map(_(1).n0) }
+
+        val described: List[Preamble.Frame] =
+          preamble.frames.indexed.bind: (frame: Preamble.Frame, index: Ordinal) =>
+            if frame.code.present then List(frame) else
+              val location = Block.Location(path, fence + 2 + frameLines.at(index).or(0))
+              val text = t"Frame ${(index.n0 + 1).toString.tt} has no `code`."
+              problems0 = Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(text))) :: problems0
+              Nil
+
         // An animated fence: its frames, then the code after `##` as the last if there is any.
-        val frames: List[Text] =
+        val frames: List[Preamble.Frame] =
           if preamble.frames.nil then Nil
-          else if code.trim == t"" then preamble.frames
-          else preamble.frames + List(code)
+          else if code.trim == t"" then described
+          else described + List(Preamble.Frame(code))
 
-        if !frames.nil then animated(frames, preamble, prefix, wrapper, context, checked, id, start)
-        else embedPlain(code, preamble, prefix, wrapper, context, checked, id, start)
+        if !frames.nil then animated(frames, preamble, language, prefix, wrapper, context, checked, id, start)
+        else if language == t"scala" then embedPlain(code, preamble, prefix, wrapper, context, checked, id, start)
+        else List(Block.Code(Language(language), highlight(language, code, t"", Unset, false) match
+          case source: SourceCode => modelLines(source)
+          case _                  => lines(code), notes(code, preamble.marks), start))
 
-    // Each frame highlighted (and compiled, when checking) on its own, then aligned into one
-    // animation; the block's lines are the first frame's. A frame that does not compile is a
-    // problem naming it, at the fragment's place.
+    // One fragment highlighted in a language: Scala through the checker (compiled, after the
+    // prefix, when checking), Java through harlequin alone, another language not at all; or
+    // the failure, which is shown plain with a diagnostic.
+    private def highlight
+      ( language: Text,
+        code:     Text,
+        prefix:   Text,
+        context:  Optional[harlequin.Scala.Context],
+        checked:  Boolean )
+    :   Optional[SourceCode | Throwable] =
+
+      language match
+        case t"scala" =>
+          try
+            if checked then checker.check(prefix + code, context)
+            else Checker.tokenized.check(code, context)
+          catch case error: Throwable => error
+
+        case t"java" =>
+          try harlequin.Java.highlight(code) catch case error: Throwable => error
+
+        case _ =>
+          Unset
+
+    // The notes for the marks which find their range in a fragment's text; a mark which does
+    // not is nothing.
+    private def notes(code: Text, marks: List[Preamble.Mark]): List[Block.Note] =
+      marks.bind[List[Block.Note], Block.Note, List[Block.Note]]:
+        (mark: Preamble.Mark) =>
+          mark.selection.findIn(code).lay(Nil: List[Block.Note]): (range: (Int, Int)) =>
+            val caption: List[Inline] = mark.caption.lay(Nil: List[Inline])(Inline.text(_))
+            List(Notes.of(code, range(0), range(1), mark.style, caption))
+
+    // Each frame highlighted (and compiled, when checking and Scala) on its own, in its own
+    // language or the block's, then aligned into one animation with what the preamble says
+    // of each slide: its label, hold, time, language when it differs from the block's, and notes —
+    // the preamble's marks, which apply in every frame they match, and the frame's own. The
+    // block's lines and notes are the first frame's. A frame that does not compile is a
+    // problem naming it, at the fragment's place; the fragment a later one may follow is the
+    // last Scala frame's code.
     private def animated
-      ( frames:   List[Text],
+      ( frames:   List[Preamble.Frame],
         preamble: Preamble,
+        language: Text,
         prefix:   Text,
         wrapper:  Int,
         context:  Optional[harlequin.Scala.Context],
@@ -117,46 +175,57 @@ object Embedding:
         start:    Int )
     :   List[Block] =
 
-      val sources: List[Optional[SourceCode]] =
-        frames.indexed.map: (frame: Text, index: Ordinal) =>
-          val attempt: SourceCode | Throwable =
-            try
-              if checked then checker.check(prefix + frame, context)
-              else Checker.tokenized.check(frame, context)
-            catch case error: Throwable => error
+      val built: List[(List[Block.Line], Block.Slide.Detail)] =
+        frames.indexed.map: (frame: Preamble.Frame, index: Ordinal) =>
+          val code: Text = frame.code.or(t"")
+          val own: Text = frame.language.or(language)
+          val scala: Boolean = own == t"scala"
+          val number: Text = (index.n0 + 1).toString.tt
 
-          attempt match
+          val frameLines: List[Block.Line] = highlight(own, code, prefix, context, checked && scala) match
             case error: Throwable =>
               val location = Block.Location(path, start)
-              val text = t"Frame ${(index.n0 + 1).toString.tt} could not be highlighted: ${error.toString.tt}"
+              val text = t"Frame $number could not be highlighted: ${error.toString.tt}"
               problems0 = Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(text))) :: problems0
-              Unset
+              lines(code)
 
             case source: SourceCode =>
-              if checked then
+              if checked && scala && preamble.errors == Preamble.Errors.Fail then
                 source.diagnostics.each: (diagnostic: harlequin.Diagnostic) =>
                   if diagnostic.importance == harlequin.Diagnostic.Importance.Error then
                     val location = Block.Location(path, start)
-                    val text = t"Frame ${(index.n0 + 1).toString.tt}: ${diagnostic.message}"
-                    val report: Block = Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(text)))
-                    if preamble.errors == Preamble.Errors.Fail then problems0 = report :: problems0
+                    val text = t"Frame $number: ${diagnostic.message}"
+                    problems0 = Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(text))) :: problems0
 
-              source
+              // The lines of the frame alone: the prefix's lines dropped from the front.
+              val all: List[Block.Line] = modelLines(source)
+              all.skip(all.size - code.cut(t"\n").size)
 
-      fragments = (id, frames.reverse.prim.or(t"")) :: fragments
+            case _ =>
+              lines(code)
 
-      // The lines of each frame alone: the prefix's lines dropped from the front.
-      val frameLines: List[List[Block.Line]] =
-        sources.zip(frames).map: (source: Optional[SourceCode], frame: Text) =>
-          source.lay(lines(frame)): (source: SourceCode) =>
-            val own: Int = frame.cut(t"\n").size
-            val all: List[Block.Line] = modelLines(source)
-            all.skip(all.size - own)
+          val detail: Block.Slide.Detail =
+            Block.Slide.Detail
+              ( frame.label,
+                frame.hold,
+                frame.at,
+                if own == language then Unset else Language(own),
+                notes(code, preamble.marks + frame.marks) )
+
+          (frameLines, detail)
+
+      val followed: Text =
+        frames.reverse.seek { (frame: Preamble.Frame) => frame.language.or(language) == t"scala" }.let(_.code).or(t"")
+
+      fragments = (id, followed) :: fragments
+
+      val frameLines: List[List[Block.Line]] = built.map(_(0))
+      val details: List[Block.Slide.Detail] = built.map(_(1))
 
       val animation: Block.Animation =
-        Block.Animation.of(frameLines).copy(autoplay = preamble.autoplay, loop = preamble.loop)
+        Block.Animation.of(frameLines, details).copy(autoplay = preamble.autoplay, loop = preamble.loop)
 
-      List(Block.Code(Language.Scala, frameLines.prim.or(Nil), Nil, start, animation))
+      List(Block.Code(Language(language), frameLines.prim.or(Nil), details.prim.lay(Nil)(_.notes), start, animation))
 
     private def embedPlain
       ( code:     Text,
@@ -250,14 +319,7 @@ object Embedding:
         case _ =>
           ()
 
-      val marks: List[Block.Note] =
-        preamble.marks.bind[List[Block.Note], Block.Note, List[Block.Note]]:
-          (mark: Preamble.Mark) =>
-            mark.selection.findIn(code).lay(Nil: List[Block.Note]): (range: (Int, Int)) =>
-              val caption: List[Inline] = mark.caption.lay(Nil: List[Inline])(Inline.text(_))
-              List(Notes.of(code, range(0), range(1), mark.style, caption))
-
-      val block: Block = Block.Code(Language.Scala, lines, reported.map(_(0)) + marks, start)
+      val block: Block = Block.Code(Language.Scala, lines, reported.map(_(0)) + notes(code, preamble.marks), start)
       block :: reported.map(_(1))
 
   object JavaCode extends Embedding:

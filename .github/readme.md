@@ -43,17 +43,29 @@ context term            # top (the default), term or type: how the fragment is w
 id setup                # a name another fragment may follow
 follows setup           # the fragments whose text precedes this one when it compiles
 errors show             # fail (the default), show (errors are expected and shown), ignore
+language java           # what the fragment is highlighted as: the fence's language unless said
 highlight Mi..es  why   # a range, by its first and last characters or literally, and a caption
 error  oops
   caption  or beneath it
+  line 3                # the line of the fragment to look on, and which occurrence, when the
+  occurrence 2          # range occurs more than once
+frame                   # a frame of an animation: its code, which must be there, and may be
+  code                  # on the line for a one-liner; a label (Markdown phrasing); the seconds
+      val x = 1         # it rests when played; its time on the page's clock; its own
+  label the *first*     # language; and marks of its own, as above
+  hold 2
+  at 12.5
+  language java
+  highlight x  why
 ```
 
-`caution` and `param` mark ranges as `highlight` and `error` do. Repeated `frame`s (each one's
-code indented beneath it, or on the line for a one-liner) make the fence an *animation*: one
-block that steps through the frames, each token keeping its identity across them so that a
-step moves what stays and fades what arrives and departs; `autoplay` plays it when shown, and
-`loop` starts it again at the end. Each frame is compiled on its own.
-[`doc/markdown.md`](../doc/markdown.md) shows each.
+`caution` and `param` mark ranges as `highlight` and `error` do. Repeated `frame`s make the
+fence an *animation*: one block that steps through the frames, each token keeping its identity
+across them so that a step moves what stays and fades what arrives and departs, with each
+frame's marks fading out before the step and in after it; `autoplay` plays it when shown, and
+`loop` starts it again at the end. A frame with an `at` puts the block on the page's one clock,
+which a bar at the foot of the page plays. Each Scala frame is compiled on its own; a Java frame
+is highlighted. [`doc/markdown.md`](../doc/markdown.md) shows each.
 
 ## Configuration files
 

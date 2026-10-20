@@ -36,7 +36,7 @@ import soundness.{Language as _, Token as _, *}
 
 import codepages.utf8Codepage
 import dysasymptotics.linearSize
-import pyrocosm.Block
+import pyrocosm.{Block, Inline}
 
 // The TEL preamble a fenced block may begin with, before a line holding `##` alone, when its
 // info string marks it (` ```scala fuel `). Amok's schema, walked by hand (as flair reads its
@@ -47,21 +47,38 @@ import pyrocosm.Block
 //   follows setup                 # the fragments whose text precedes this one when it compiles
 //   errors show                   # fail (the default): an error fails the compile;
 //                                 # show: errors are expected and shown; ignore: not compiled
+//   language java                 # how the fragment is highlighted: the fence's language unless said
 //   highlight Mi..es  the caption # a range to mark, with its caption in the remaining atoms,
 //   error     Lit..ond            # as `highlight`, `error`, `caution` or `param`
 //     caption  or beneath it
-//   frame                         # a frame of an animation, its code indented beneath (or
-//       val x = 1                 # on the line, for a one-liner); several in order, each
-//   frame                         # compiled on its own, with the code after `##` the last
-//       val x = 2                 # frame if there is any
+//     line 3                      # the range sought on one line of the fragment (from 1)
+//     occurrence 2                # and the nth time it occurs
+//   frame                         # a frame of an animation: several in order, each compiled
+//     code                        # on its own, with the code after `##` the last frame if
+//         val x = 1               # there is any; `code` holds the frame's text, indented
+//     label the *first* step      # beneath it (or on the line, for a one-liner), and must be
+//     hold 2                      # there; the rest may be: a label (Markdown phrasing), the
+//     at 12.5                     # seconds the frame holds when played, its time on the
+//     language java               # page's clock, its own language, and marks of its own
+//     highlight x  the variable
 //   autoplay                      # play when shown; `loop` to start again at the end
 object Preamble:
   case class Mark(style: Block.Note.Style, selection: Selection, caption: Optional[Text])
 
+  // A frame of an animation: its code, absent when the `code` child is missing (which is a
+  // problem, reported where the frame is), and what else is said of it.
+  case class Frame
+    ( code:     Optional[Text],
+      label:    List[Inline]     = Nil,
+      hold:     Optional[Double] = Unset,
+      at:       Optional[Double] = Unset,
+      language: Optional[Text]   = Unset,
+      marks:    List[Mark]       = Nil )
+
   enum Errors:
     case Fail, Show, Ignore
 
-  val empty: Preamble = Preamble(Unset, Unset, Nil, Errors.Fail, Nil, Nil, false, false)
+  val empty: Preamble = Preamble(Unset, Unset, Nil, Errors.Fail, Nil, Nil, false, false, Unset)
 
   // The fence's content as its preamble and its code: the preamble is everything before the
   // first line holding `##` alone, and `Unset` when there is no such line.
@@ -105,26 +122,48 @@ object Preamble:
       def atoms(keyword: Text): List[Text] =
         tel.fields(keyword).to[List].map(_.primaryAtom).filter(_ != t"")
 
-      def marks(keyword: Text, style: Block.Note.Style): List[Mark] =
-        tel.fields(keyword).to[List].bind[List[Mark], Mark, List[Mark]]: (node: Tel) =>
-          val texts: List[Text] = node.atomTexts.to[List].filter(_ != t"")
+      // The text of a node's first child by a keyword: its atoms, inline then the indented
+      // source, joined, so that a one-liner serves as well as an indented block.
+      def child(node: Tel, keyword: Text): Optional[Text] =
+        node.fields(keyword).to[List].prim.let(_.atomTexts.to[List].filter(_ != t"").join(t" "))
 
-          texts match
-            case selection :: rest =>
-              val inline: Optional[Text] = if rest.nil then Unset else rest.join(t" ")
+      def number(text: Optional[Text]): Optional[Double] =
+        text.let { (text: Text) => safely(text.as[Double]) }
 
-              val child: Optional[Text] =
-                node.fields(t"caption").to[List].prim.let(_.atomTexts.to[List].join(t" "))
+      // The marks beneath a node — the preamble's own, or a frame's — each with its caption
+      // in its remaining atoms or a `caption` beneath it, and its selection read whole.
+      def marks(node: Tel): List[Mark] =
+        def of(keyword: Text, style: Block.Note.Style): List[Mark] =
+          node.fields(keyword).to[List].bind[List[Mark], Mark, List[Mark]]: (mark: Tel) =>
+            val texts: List[Text] = mark.atomTexts.to[List].filter(_ != t"")
 
-              List(Mark(style, Selection.parse(selection), child.or(inline)))
+            texts match
+              case _ :: rest =>
+                val inline: Optional[Text] = if rest.nil then Unset else rest.join(t" ")
 
-            case _ =>
-              Nil
+                val beneath: Optional[Text] =
+                  mark.fields(t"caption").to[List].prim.let(_.atomTexts.to[List].join(t" "))
 
-      // A frame's code: its indented literal, which follows any inline atoms in the atom
-      // sequence, so joining all of them serves a one-line frame too.
-      val frames: List[Text] =
-        tel.fields(t"frame").to[List].map { (node: Tel) => node.atomTexts.to[List].join(t" ") }
+                List(Mark(style, Selection.read(mark), beneath.or(inline)))
+
+              case _ =>
+                Nil
+
+        of(t"highlight", Block.Note.Style.Highlight) +
+          of(t"error", Block.Note.Style.Erroneous) +
+          of(t"caution", Block.Note.Style.Caution) +
+          of(t"param", Block.Note.Style.Param)
+
+      // A frame's code is its `code` child's text; what else is said of it is beneath it.
+      val frames: List[Frame] =
+        tel.fields(t"frame").to[List].map: (node: Tel) =>
+          Frame
+            ( node.fields(t"code").to[List].prim.let(_.atomTexts.to[List].join(t" ")),
+              child(node, t"label").lay(Nil)(Blocks.inline(_)),
+              number(child(node, t"hold")),
+              number(child(node, t"at")),
+              child(node, t"language"),
+              marks(node) )
 
       def flag(keyword: Text): Boolean = !tel.fields(keyword).to[List].nil
 
@@ -138,13 +177,11 @@ object Preamble:
           atoms(t"id").prim,
           atoms(t"follows"),
           errors,
-          marks(t"highlight", Block.Note.Style.Highlight) +
-            marks(t"error", Block.Note.Style.Erroneous) +
-            marks(t"caution", Block.Note.Style.Caution) +
-            marks(t"param", Block.Note.Style.Param),
+          marks(tel),
           frames,
           flag(t"autoplay"),
-          flag(t"loop") )
+          flag(t"loop"),
+          atoms(t"language").prim )
 
 case class Preamble
   ( context:  Optional[Text],
@@ -152,9 +189,10 @@ case class Preamble
     follows:  List[Text],
     errors:   Preamble.Errors,
     marks:    List[Preamble.Mark],
-    frames:   List[Text]    = Nil,
-    autoplay: Boolean       = false,
-    loop:     Boolean       = false ):
+    frames:   List[Preamble.Frame] = Nil,
+    autoplay: Boolean              = false,
+    loop:     Boolean              = false,
+    language: Optional[Text]       = Unset ):
 
   def scalaContext: Optional[harlequin.Scala.Context] = context match
     case t"term" => harlequin.Scala.Context.Term

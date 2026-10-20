@@ -71,6 +71,16 @@ object Blocks:
 
   private def phrasing(nodes: List[Prose]): List[Inline] = nodes.map(prose)
 
+  // A run of Markdown phrasing — a frame's label, say — as inlines: the first paragraph the
+  // text parses to, or the text itself when it has none.
+  def inline(text: Text): List[Inline] =
+    def first(nodes: List[Layout]): List[Inline] = nodes match
+      case Layout.Paragraph(_, prose*) :: _ => phrasing(List.from(prose))
+      case _ :: tail                        => first(tail)
+      case _                                => Inline.text(text)
+
+    first(Parser.parse(text).children)
+
   private def prose(node: Prose): Inline = node match
     case Prose.Textual(text)       => Inline.Textual(text)
     case Prose.Emphasis(children*) => Inline.Emphasis(phrasing(List.from(children)))
