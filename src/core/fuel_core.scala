@@ -102,7 +102,14 @@ object Embedding:
         else if foot == t"" then all.skip(all.size - count)
         else all.skip(head.cut(t"\n").size - 1).keep(count)
 
-    private def objectName(index: Int): Text = t"fuel_fragment_${index.show}"
+    // A fragment's object name, unique across the whole corpus: one session is shared by every
+    // document, so a name that reset per document would redefine an earlier document's object
+    // and leave a stale symbol behind. The document's path, reduced to word characters,
+    // scopes it.
+    private val scope: Text =
+      Text(java.util.regex.Pattern.compile("[^A-Za-z0-9]").nn.matcher(path.s).nn.replaceAll("_").nn)
+
+    private def objectName(index: Int): Text = t"fuel_${scope}_${index.show}"
 
     // The names a fragment defines at its top level, by their declarations, so that a later
     // fragment defining one of them again hides the earlier from its import — as a REPL
