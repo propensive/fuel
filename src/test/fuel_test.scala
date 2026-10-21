@@ -408,6 +408,10 @@ error oops
         problems(t"```scala\nval a: Int = 1\n```\n```scala fuel\nrestart\n##\nval b: Int = a\n```\n").map(line(_))
       . assert(_ == List(7))
 
+      test(m"a name defined again hides the earlier definition"):
+        problems(t"```scala\nval a: Int = 1\n```\n```scala\nval a: Int = 2\n```\n```scala\nval b: Int = a + 1\n```\n")
+      . assert(_ == Nil)
+
       test(m"a fixture is compiled before the first fragment"):
         problems(t"```scala\nfixed + 1\n```\n", (t"doc/fixtures/check.scala", t"val fixed: Int = 1"))
       . assert(_ == Nil)

@@ -48,11 +48,13 @@ object Embedding:
   // document: the fragments seen so far are what `follows` names, and `problems` is what the
   // compile reports — a diagnostic each, at its place in the file.
   //
-  // In a *session*, every fragment follows the ones before it, as a REPL's do: the unit
-  // compiled is one object holding the document's fixture, the fragments which joined so far
-  // and this one, so a bare expression is a statement of it and a definition is in scope from
-  // then on; `restart` begins again. The object is reopened at column zero, so a diagnostic's
-  // column is the fragment's own and only its line shifts.
+  // In a *session*, every fragment follows the ones before it, as a REPL's do: each is
+  // compiled once, as an object of its own, and a later one's object imports the objects of
+  // those which joined before it (the document's fixture first), whose names the warm
+  // session's symbol table retains; so a bare expression is a statement, a definition is in
+  // scope from then on, and a fragment costs its own size rather than the whole document's.
+  // `restart` begins again. An object opens at column zero, so a diagnostic's column is the
+  // fragment's own and only its line shifts.
   final class ScalaCode
     ( checker: Checker,
       path:    Text,
@@ -60,8 +62,15 @@ object Embedding:
       fixture: Optional[(Text, Text)] = Unset )
   extends Embedding:
 
+    // What a fragment left to the session: its object, with the names it defines (so that a
+    // later definition of the same name excludes it from the import), or, when it failed,
+    // its imports alone, replayed in every later object.
+    private enum Joined:
+      case Object(name: Text, defined: List[Text])
+      case Imports(lines: List[Text])
+
     private var fragments: List[(Text, Text)] = Nil
-    private var history: List[Text] = Nil
+    private var history: List[Joined] = Nil
     private var features: List[Text] = Nil
     private var prepared: Boolean = false
     private var count: Int = 0
@@ -91,20 +100,51 @@ object Embedding:
         else if foot == t"" then all.skip(all.size - count)
         else all.skip(head.cut(t"\n").size - 1).keep(count)
 
-    private val opening: Text = "object fuel$session {\n".tt
+    private def objectName(index: Int): Text = t"fuel_fragment_${index.show}"
 
-    // A session's framing: the language imports, the object and what has joined it so far,
-    // then the fragment, wrapped as a term or a type when its context says, and the closing
-    // brace; outside a session, the fragments it follows, with harlequin's own wrapping.
+    // The names a fragment defines at its top level, by their declarations, so that a later
+    // fragment defining one of them again hides the earlier from its import — as a REPL
+    // lets a name be redefined — rather than leaving the two ambiguous.
+    private val declaration: java.util.regex.Pattern =
+      java.util.regex.Pattern.compile("""^(?:(?:final|lazy|private|protected|inline|transparent|opaque|infix|open|case|abstract|sealed|override|implicit)\s+)*(?:val|var|def|object|class|trait|type|enum|given)\s+(?:\[[^\]]*\]\s*)?([A-Za-z_][\w$]*|`[^`]+`)""").nn
+
+    private def defined(code: Text): List[Text] =
+      code.cut(t"\n").bind: (line: Text) =>
+        val matcher = declaration.matcher(line.s).nn
+        if matcher.find() then List(matcher.group(1).nn.tt) else Nil
+
+    // The imports of what has joined the session so far: each object's members, less any name
+    // a later object defines again, and its givens; and the imports a failed fragment left.
+    private def replayed: List[Text] =
+      // Walking newest first, a name defined by a newer object hides the older's.
+      def walk(rest: List[Joined], seen: List[Text]): List[Text] = rest match
+        case Joined.Object(name, defined) :: tail =>
+          val hidden: List[Text] = defined.filter(seen.has(_)).map { (name: Text) => t"$name as _" }
+          val selectors: Text = (hidden + List(t"*", t"given")).join(t", ")
+          List(t"import $name.{$selectors}") + walk(tail, seen + defined)
+
+        case Joined.Imports(lines) :: tail =>
+          lines + walk(tail, seen)
+
+        case _ =>
+          Nil
+
+      walk(history, Nil).reverse
+
+    // A session's framing: the language imports, this fragment's object with the session's
+    // imports inside it, then the fragment, wrapped as a term or a type when its context says,
+    // and the closing brace; outside a session, the fragments it follows, with harlequin's own
+    // wrapping.
     private def framing
       ( preamble: Preamble, context: Optional[harlequin.Scala.Context], wrapper: Int )
     :   Framing =
 
       if !session then Framing(preamble.follows.map(fragment(_)).join(t"", t"\n", t"\n"), t"", wrapper, context)
       else
-        val followed: List[Text] = preamble.follows.map(fragment(_)).filter { (text: Text) => !history.has(text) }
+        val followed: List[Text] = preamble.follows.map(fragment(_))
         val imports: Text = features.map { (feature: Text) => t"import scala.language.$feature\n" }.join(t"")
-        val body: Text = (history + followed).map { (text: Text) => t"$text\n" }.join(t"")
+        val opening: Text = t"object ${objectName(count)} {\n"
+        val body: Text = (replayed + followed).map { (text: Text) => t"$text\n" }.join(t"")
 
         val (open, close): (Text, Text) = context match
           case harlequin.Scala.Context.Term => (t"val x${count.show} = {\n", t"\n}")
@@ -121,14 +161,17 @@ object Embedding:
 
         fixture.let: (entry: (Text, Text)) =>
           val (fixturePath, text) = entry
-          val framed: Framing = Framing(opening, t"\n}", 0, Unset)
+          val framed: Framing = Framing(t"object ${objectName(0)} {\n", t"\n}", 0, Unset)
 
           highlight(t"scala", text, framed, Preamble.Mode.Typecheck, checker.compiles) match
             case source: SourceCode =>
               val errors: List[harlequin.Diagnostic] =
                 source.diagnostics.filter(_.importance == harlequin.Diagnostic.Importance.Error)
 
-              if errors.nil then history = List(text) else
+              if errors.nil && checker.enter(t"${objectName(0)}.scala", framed.unit(text))
+              then history = List(Joined.Object(objectName(0), defined(text)))
+              else if errors.nil then report(Block.Location(fixturePath), t"The fixture could not be entered into the session.")
+              else
                 errors.each: (diagnostic: harlequin.Diagnostic) =>
                   val from: Int = (diagnostic.span.offset.let(_.n0).or(0) - framed.shift).max(0)
                   val note: Block.Note = Notes.of(text, from, from, Block.Note.Style.Erroneous)
@@ -143,11 +186,13 @@ object Embedding:
     // A fragment joins the session when it compiled as its preamble asked, at full depth, and
     // stands alone; one which failed leaves only its imports, so the names they bring stay in
     // scope for what follows, as a checker which runs fragments does.
-    private def join(code: Text, failed: Boolean, preamble: Preamble, mode: Preamble.Mode): Unit =
+    private def join(code: Text, framing: Framing, failed: Boolean, preamble: Preamble, mode: Preamble.Mode): Unit =
       if session && mode != Preamble.Mode.Parse && preamble.errors == Preamble.Errors.Fail && preamble.scalaContext.absent then
-        if !failed then history = history + List(code) else
-          val imports: Text = code.cut(t"\n").filter(_.trim.starts(t"import ")).join(t"\n")
-          if imports != t"" then history = history + List(imports)
+        if !failed && (!checker.compiles || checker.enter(t"${objectName(count)}.scala", framing.unit(code)))
+        then history = Joined.Object(objectName(count), defined(code)) :: history
+        else
+          val imports: List[Text] = code.cut(t"\n").filter(_.trim.starts(t"import "))
+          if !imports.nil then history = Joined.Imports(imports) :: history
 
     // The lines of a fragment marked as not compiling, which are compiled alone, each in its
     // place, and must fail.
@@ -317,7 +362,7 @@ object Embedding:
         frames.reverse.seek { (frame: Preamble.Frame) => frame.language.or(language) == t"scala" }.let(_.code).or(t"")
 
       fragments = (id, followed) :: fragments
-      join(followed, false, preamble, mode)
+      join(followed, framing, false, preamble, mode)
 
       val frameLines: List[List[Block.Line]] = built.map(_(0))
       val details: List[Block.Slide.Detail] = built.map(_(1))
@@ -357,7 +402,7 @@ object Embedding:
 
           case source: SourceCode =>
             val (block, reports, failed) = embedSource(source, positive, framing, checked, preamble, start)
-            join(positive, failed, preamble, mode)
+            join(positive, framing, failed, preamble, mode)
 
             val restored: Block.Code = marked.fold(block): (block: Block.Code, index: Int) =>
               negativeLine(block, code, marked, index, framing, mode, start)

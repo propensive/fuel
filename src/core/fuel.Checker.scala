@@ -45,6 +45,7 @@ object Checker:
     def check(code: Text, mode: Preamble.Mode, context: Optional[harlequin.Scala.Context]): SourceCode =
       harlequin.Scala.highlight(code, context)
 
+    def enter(name: Text, unit: Text): Boolean = false
     def compiles: Boolean = false
 
 // How a Scala fragment is highlighted: at tokenized depth, which needs nothing, or in a warm
@@ -53,6 +54,11 @@ object Checker:
 // rendering (its diagnostics are in the `SourceCode`).
 trait Checker:
   def check(code: Text, mode: Preamble.Mode, context: Optional[harlequin.Scala.Context]): SourceCode
+
+  // Compiles a unit into the session under its own source name, so that what it defines stays
+  // in scope for every later check, as a REPL's lines do for one another; true if it compiled.
+  def enter(name: Text, unit: Text): Boolean
+
   def compiles: Boolean
 
 // One warm session per compile, opened on the configured classpath with the configured
@@ -136,6 +142,9 @@ object Checking:
               case Preamble.Mode.Typecheck => harlequin.Scala.highlight(code, context)
               case Preamble.Mode.Compile   => harlequin.Scala.highlight(code, context)(using compiled)
               case Preamble.Mode.Parse     => parsed(frontend, code, context)
+
+          def enter(name: Text, unit: Text): Boolean =
+            compilation.compile(Map(name -> unit)).errors == 0
 
           def compiles: Boolean = true
 
