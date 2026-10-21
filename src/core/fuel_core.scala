@@ -152,7 +152,11 @@ object Embedding:
       else
         val followed: List[Text] = preamble.follows.map(fragment(_))
         val (fileScope, inner) = replayed
-        val imports: Text = (features.map { (feature: Text) => t"import scala.language.$feature" } + fileScope).map { (line: Text) => t"$line\n" }.join(t"")
+        // A `feature` is recorded (a checker which runs fragments turns it on) but not turned
+        // on in fuel's own compile: a feature whose checking is a phase after typer, such as
+        // capture checking, would reject in the session's full compile a fragment typer
+        // accepted, and fuel checks only as far as typer.
+        val imports: Text = fileScope.map { (line: Text) => t"$line\n" }.join(t"")
         val opening: Text = t"object ${objectName(count)} {\n"
         val body: Text = (inner + followed).map { (text: Text) => t"$text\n" }.join(t"")
 
