@@ -38,10 +38,15 @@ import pyrocosm.{Block, Inline, Tone}
 
 // The compile step: every `*.md` beneath a document directory, read, parsed and converted.
 object Compilation:
+  // How a corpus's fragments are compiled: as one session per document, each fragment
+  // following the ones before it, and with the document's fixture (`<fixtures>/<name>.scala`)
+  // first.
+  case class Regime(session: Boolean = false, fixtures: Optional[Text] = Unset)
+
   // A section's name is its directory's last segment.
   def name(root: Text): Text = root.cut(t"/").filter(_ != t"").reverse.prim.or(root)
 
-  def section(root: Text, checker: Checker = Checker.tokenized): Corpus.Section =
+  def section(root: Text, checker: Checker = Checker.tokenized, regime: Regime = Regime()): Corpus.Section =
     import filesystemBackends.javaBaseFilesystem
     import filesystemOptions.dereferenceSymlinks
     import sortingAlgorithms.timsort
@@ -58,6 +63,14 @@ object Compilation:
 
     def relative(path: Text): Text = path.skip(root.length + 1)
 
+    // The document's fixture, when the regime names a directory and the file is there.
+    def fixture(path: Text): Optional[(Text, Text)] =
+      regime.fixtures.let: (directory: Text) =>
+        val file: Text = t"$directory/${Doc.filename(relative(path))}.scala"
+
+        safely(file.as[Path on Linux]).let { (file: Path on Linux) => safely(file.read[Text]) }.let:
+          (text: Text) => (file, text)
+
     def recur(rest: List[Text], docs: List[Doc], skipped: List[Text]): Corpus.Section = rest match
       case path :: tail =>
         val text: Optional[Text] =
@@ -65,7 +78,8 @@ object Compilation:
 
         text match
           case text: Text =>
-            recur(tail, docs + List(Doc.parse(relative(path), text, checker)), skipped)
+            val doc: Doc = Doc.parse(relative(path), text, checker, regime.session, fixture(path))
+            recur(tail, docs + List(doc), skipped)
 
           case _ =>
             recur(tail, docs, skipped + List(path))
@@ -79,5 +93,5 @@ object Compilation:
   def unreadable(path: Text): Block =
     Block.Diagnostic(Tone.Failure, Block.Location(path), List(Block.paragraph(t"The file could not be read.")))
 
-  def corpus(roots: List[Text], checker: Checker = Checker.tokenized): Corpus =
-    Corpus(roots.map(section(_, checker)))
+  def corpus(roots: List[Text], checker: Checker = Checker.tokenized, regime: Regime = Regime()): Corpus =
+    Corpus(roots.map(section(_, checker, regime)))

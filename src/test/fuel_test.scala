@@ -383,6 +383,86 @@ error oops
 
       . assert(_ == true)
 
+    suite(m"Sessions"):
+      def problems(markdown: Text, fixture: Optional[(Text, Text)] = Unset): List[Block] =
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          Doc.parse(t"doc/check.md", markdown, checker, true, fixture).problems
+
+      def blocks(markdown: Text): List[Block] =
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          Doc.parse(t"doc/check.md", markdown, checker, true).blocks
+
+      def line(problem: Block): Optional[Int] = problem match
+        case Block.Diagnostic(_, location, _, _, _) => location.let(_.line)
+        case _                                      => Unset
+
+      test(m"a fragment sees a value an earlier one defined"):
+        problems(t"```scala\nval a: Int = 1\n```\n\n```scala\nval b: Int = a + 1\n```\n")
+      . assert(_ == Nil)
+
+      test(m"a bare expression is a statement of the session"):
+        problems(t"```scala\nval a: Int = 1\n```\n\n```scala\na + 1\n```\n")
+      . assert(_ == Nil)
+
+      test(m"`restart` begins the session afresh"):
+        problems(t"```scala\nval a: Int = 1\n```\n```scala fuel\nrestart\n##\nval b: Int = a\n```\n").map(line(_))
+      . assert(_ == List(7))
+
+      test(m"a fixture is compiled before the first fragment"):
+        problems(t"```scala\nfixed + 1\n```\n", (t"doc/fixtures/check.scala", t"val fixed: Int = 1"))
+      . assert(_ == Nil)
+
+      test(m"a fixture which does not compile is a problem at its own path"):
+        problems(t"```scala\nval n: Int = 1\n```\n", (t"doc/fixtures/check.scala", t"val fixed: Int = \"x\"")) match
+          case Block.Diagnostic(_, location, _, _, _) :: Nil => (location.let(_.path), location.let(_.line))
+          case _                                             => Unset
+      . assert(_ == (t"doc/fixtures/check.scala", 1))
+
+      test(m"an `errors show` fragment does not join the session"):
+        val text: Text =
+          t"```scala\nval a: Int = 1\n```\n```scala fuel\nerrors show\n##\nval c: Int = \"x\"\n```\n```scala\nval d: Int = c\n```\n"
+
+        problems(text).map(line(_))
+      . assert(_ == List(10))
+
+      test(m"a parsed fragment passes a type error and fails a syntax error"):
+        ( problems(t"```scala fuel\nparse\n##\nval n: Int = \"x\"\n```\n").size,
+          problems(t"```scala fuel\nparse\n##\nval = 1\n```\n").size )
+      . assert(_ == (0, 1))
+
+      test(m"a compiled fragment reports a type error, and passes a feature flag"):
+        ( problems(t"```scala fuel\ncompile\n##\nval n: Int = \"x\"\n```\n").size,
+          problems(t"```scala fuel\ncompile\nfeature experimental.captureChecking\n##\nval n: Int = 1\n```\n").size )
+      . assert(_ == (1, 0))
+
+      test(m"a line marked as not compiling must not compile, and is noted"):
+        val text: Text = t"```scala\nval n: Int = 1\nval m: Int = \"x\" // does not compile\n```\n"
+
+        val note: Optional[(Int, Block.Note.Style)] = blocks(text) match
+          case Block.Code(_, _, note :: _, _, _) :: _ => (note.line, note.style)
+          case _                                      => Unset
+
+        (problems(text).size, note)
+      . assert(_ == (0, (1, Block.Note.Style.Erroneous)))
+
+      test(m"a line marked as not compiling which compiles is a problem at its line"):
+        problems(t"```scala\nval n: Int = 1\nval m: Int = 2 // does not compile\n```\n").map(line(_))
+      . assert(_ == List(3))
+
+      test(m"a diagnostic in a session is at its line and column in the file"):
+        problems(t"```scala\nval a: Int = 1\n```\n```scala\nval b: Int = \"oops\"\n```\n") match
+          case Block.Diagnostic(_, location, _, _, _) :: Nil => (location.let(_.line), location.let(_.column))
+          case _                                             => Unset
+      . assert(_ == (5, 14))
+
+      test(m"a document is titled by its first heading, of any level"):
+        Doc.parse(t"doc/x.md", t"## Hello\n\ntext\n").title
+      . assert(_ == t"Hello")
+
+      test(m"an HTML comment is no block"):
+        Doc.parse(t"doc/x.md", t"<!-- doccheck: skip -->\n\n```scala\nval x = 1\n```\n").blocks.size
+      . assert(_ == 1)
+
     suite(m"Sections"):
       test(m"a section is named by its directory's last segment"):
         Compilation.name(t"/home/me/project/doc/modules/")

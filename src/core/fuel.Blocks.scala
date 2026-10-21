@@ -46,9 +46,9 @@ object Blocks:
 
     all(markdown.children, embeddings)
 
-  // The first level-one heading's text, which is what a document is called.
+  // The first heading's text, of whatever level, which is what a document is called.
   def title(blocks: List[Block]): Optional[Text] = blocks match
-    case Block.Heading(1, content) :: _ => plain(content)
+    case Block.Heading(_, content) :: _ => plain(content)
     case _ :: tail                      => title(tail)
     case _                              => Unset
 
@@ -104,7 +104,17 @@ object Blocks:
       case head :: tail => head.embed(info, content, line).or(fence(info, content, line, tail))
       case _            => List(Embedding.plain(info, content, line))
 
+  // Inline HTML (an HTML comment the parser read inline, say) is for the author, not the
+  // reader: a paragraph of nothing else is no paragraph.
+  private def hidden(node: Prose): Boolean = node match
+    case Prose.HtmlInline(_) => true
+    case Prose.Softbreak     => true
+    case _                   => false
+
   private def layout(node: Layout, embeddings: List[Embedding]): List[Block] = node match
+    case Layout.Paragraph(_, prose*) if prose.nonEmpty && prose.forall(hidden) =>
+      Nil
+
     case Layout.Paragraph(_, prose*) =>
       List(Block.Paragraph(phrasing(List.from(prose))))
 
@@ -116,6 +126,10 @@ object Blocks:
 
     case Layout.ThematicBreak(_) =>
       List(Block.Rule())
+
+    // An HTML comment is for the author, not the reader; other HTML is shown as it is.
+    case Layout.HtmlBlock(_, html) if html.trim.starts(t"<!--") && html.trim.ends(t"-->") =>
+      Nil
 
     case Layout.HtmlBlock(_, html) =>
       List(Block.Code(Language(t"html"), Embedding.lines(html)))

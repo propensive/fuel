@@ -42,16 +42,17 @@ import strategies.throwUnsafely
 
 object Checker:
   object tokenized extends Checker:
-    def check(code: Text, context: Optional[harlequin.Scala.Context]): SourceCode =
+    def check(code: Text, mode: Preamble.Mode, context: Optional[harlequin.Scala.Context]): SourceCode =
       harlequin.Scala.highlight(code, context)
 
     def compiles: Boolean = false
 
-// How a Scala fragment is highlighted: at tokenized depth, which needs nothing, or typechecked
-// in a warm compiler session on a project's classpath, which is what makes a fragment's
-// validity part of its rendering (its diagnostics are in the `SourceCode`).
+// How a Scala fragment is highlighted: at tokenized depth, which needs nothing, or in a warm
+// compiler session on a project's classpath, as far as its `mode` asks — parsed, typechecked
+// or compiled through every phase — which is what makes a fragment's validity part of its
+// rendering (its diagnostics are in the `SourceCode`).
 trait Checker:
-  def check(code: Text, context: Optional[harlequin.Scala.Context]): SourceCode
+  def check(code: Text, mode: Preamble.Mode, context: Optional[harlequin.Scala.Context]): SourceCode
   def compiles: Boolean
 
 // One warm session per compile, opened on the configured classpath with the configured
@@ -109,16 +110,69 @@ object Checking:
       Scalac[3.9](options.map { (option: Text) => Scalac.Option[3.9](option) })
 
     scalac.on(classpath).session:
-      given Scalac.Session.Frontend = compilation.frontend
+      val frontend: Scalac.Session.Frontend = compilation.frontend
+      given Scalac.Session.Frontend = frontend
       import highlighting.sessionScala
+
+      // Compiled highlighting in the same session — every phase before bytecode generation,
+      // which is where capture checking reports — from the frontend the session gives of
+      // itself, as harlequin's own session highlighting is built.
+      val compiled: harlequin.Highlight = new harlequin.Highlight:
+        def depth: harlequin.Depth = harlequin.Depth.Compiled
+
+        val compilation: Optional[harlequin.Highlight.Compilation] =
+          new harlequin.Highlight.Compilation:
+            def arguments: List[Text] = frontend.options
+            def classpath: Text = frontend.classpath
+            def compiler(): dotty.tools.dotc.Compiler = frontend.compiler
+            override def context(): Optional[dotty.tools.dotc.core.Contexts.Context] = frontend.context
 
       // The checker captures the session, which `body` never outlives: it is vouched pure so
       // that `body` may take a plain `Checker`.
       val checker: Checker = scala.caps.unsafe.unsafeAssumePure:
         new Checker:
-          def check(code: Text, context: Optional[harlequin.Scala.Context]): SourceCode =
-            harlequin.Scala.highlight(code, context)
+          def check(code: Text, mode: Preamble.Mode, context: Optional[harlequin.Scala.Context]): SourceCode =
+            mode match
+              case Preamble.Mode.Typecheck => harlequin.Scala.highlight(code, context)
+              case Preamble.Mode.Compile   => harlequin.Scala.highlight(code, context)(using compiled)
+              case Preamble.Mode.Parse     => parsed(frontend, code, context)
 
           def compiles: Boolean = true
 
       body(checker)
+
+  // A fragment parsed and no more, in the session: its syntax errors, from a run stopped after
+  // the parser, on its tokens highlighted without types.
+  private def parsed
+    ( frontend: Scalac.Session.Frontend, code: Text, context: Optional[harlequin.Scala.Context] )
+  :   SourceCode =
+
+    import dotty.tools.dotc.core.Contexts
+    import dotty.tools.dotc.reporting.{Diagnostic as CompilerDiagnostic, HideNonSensicalMessages, Reporter, UniqueMessagePositions}
+    import dotty.tools.dotc.util.SourceFile
+
+    val text: Text = harlequin.Scala.preprocess(code, context)
+
+    @scala.caps.unsafe.untrackedCaptures
+    var collected: List[harlequin.Diagnostic] = Nil
+
+    object reporter extends Reporter, UniqueMessagePositions, HideNonSensicalMessages:
+      def doReport(diagnostic: CompilerDiagnostic)(using Contexts.Context): Unit =
+        val pos = diagnostic.pos.span
+
+        if pos.exists then
+          val importance = diagnostic.level match
+            case dotty.tools.dotc.interfaces.Diagnostic.ERROR   => harlequin.Diagnostic.Importance.Error
+            case dotty.tools.dotc.interfaces.Diagnostic.WARNING => harlequin.Diagnostic.Importance.Warning
+            case _                                              => harlequin.Diagnostic.Importance.Info
+
+          val span = Span.offset(pos.start.z, pos.end - pos.start)
+          collected = harlequin.Diagnostic(span, diagnostic.message.tt, importance) :: collected
+
+    val base: Contexts.FreshContext = frontend.context.fresh
+    base.setReporter(reporter)
+    base.setSetting(base.settings.YstopAfter, scala.collection.immutable.List("parser"))
+    given Contexts.Context = base
+    frontend.compiler.newRun.compileSources(scala.collection.immutable.List(SourceFile.virtual("<fuel>", text.s)))
+
+    harlequin.Scala.highlight(code, context).copy(diagnostics = collected.reverse)

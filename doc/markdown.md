@@ -93,6 +93,35 @@ frame
 ##
 ```
 
+## Sessions
+
+A tutorial's fences are usually written as one session, as a REPL's are: a fence uses what an
+earlier one defined, and a bare expression is a statement. With `session` in the
+configuration, Fuel compiles each document that way — every fence follows the ones before it,
+in one object, so a definition is in scope from then on — and compiles the document's fixture
+(`<fixtures>/<document>.scala`, when a `fixtures` directory is configured) first. A fence whose
+preamble says `restart` begins the session afresh.
+
+A fence may say how far the compiler takes it: `parse` (syntax alone), `typecheck` (the
+default when nothing is said) or `compile` (every phase, which is where capture checking
+reports); a fence which says a mode is checked by Fuel but never run by a checker which runs
+fences, so `typecheck` on its own marks one which opens a socket or a browser. `feature
+experimental.captureChecking` turns a language feature on from that fence onward. A fence
+joins the session when it compiled as its preamble asked; one marked `errors show` never does,
+and one which failed leaves only its imports.
+
+A line ending in `// does not compile` is left out of its fence and compiled alone, in its
+place: it must fail, and its error is shown as a note on it.
+
+```scala
+val greeting: Text = t"Hello"
+```
+
+```scala
+greeting.upper
+val shouted: Int = greeting // does not compile
+```
+
 ## What comes next
 
 - the documents in the terminal, and as fragments for other tools;

@@ -62,7 +62,19 @@ import pyrocosm.{Block, Inline}
 //     language java               # page's clock, its own language, and marks of its own
 //     highlight x  the variable
 //   autoplay                      # play when shown; `loop` to start again at the end
+//   restart                       # in a session, a fresh one begins at this fragment
+//   typecheck                     # how far the compiler goes: `parse` (syntax alone),
+//                                 # `typecheck` (the default when none is said) or `compile`
+//                                 # (every phase, which is where capture checking reports)
+//   feature experimental.captureChecking   # a language import, this fragment onward
+//
+// A fragment which says a mode is checked by fuel but never run by a checker which runs
+// fragments, so `typecheck` on its own marks one which opens a socket or a browser.
 object Preamble:
+  // How far the compiler takes a fragment.
+  enum Mode:
+    case Parse, Typecheck, Compile
+
   case class Mark(style: Block.Note.Style, selection: Selection, caption: Optional[Text])
 
   // A frame of an animation: its code, absent when the `code` child is missing (which is a
@@ -167,6 +179,12 @@ object Preamble:
 
       def flag(keyword: Text): Boolean = !tel.fields(keyword).to[List].nil
 
+      val mode: Optional[Mode] =
+        if flag(t"parse") then Mode.Parse
+        else if flag(t"compile") then Mode.Compile
+        else if flag(t"typecheck") then Mode.Typecheck
+        else Unset
+
       val errors: Errors = atoms(t"errors").prim match
         case t"show"   => Errors.Show
         case t"ignore" => Errors.Ignore
@@ -181,7 +199,10 @@ object Preamble:
           frames,
           flag(t"autoplay"),
           flag(t"loop"),
-          atoms(t"language").prim )
+          atoms(t"language").prim,
+          mode,
+          flag(t"restart"),
+          atoms(t"feature") )
 
 case class Preamble
   ( context:  Optional[Text],
@@ -192,7 +213,10 @@ case class Preamble
     frames:   List[Preamble.Frame] = Nil,
     autoplay: Boolean              = false,
     loop:     Boolean              = false,
-    language: Optional[Text]       = Unset ):
+    language: Optional[Text]       = Unset,
+    mode:     Optional[Preamble.Mode] = Unset,
+    restart:  Boolean              = false,
+    features: List[Text]           = Nil ):
 
   def scalaContext: Optional[harlequin.Scala.Context] = context match
     case t"term" => harlequin.Scala.Context.Term
