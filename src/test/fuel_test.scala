@@ -487,6 +487,15 @@ error oops
 
       . assert(_ == (1, true))
 
+    suite(m"Fragments"):
+      test(m"a document's blocks round-trip through their TEL wire form"):
+        val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
+
+        Compilation.document(t"$here/doc/markdown.md").lay(false): (doc: Doc) =>
+          Fragments.read(Fragments.tel(doc.blocks)) == doc.blocks
+
+      . assert(_ == true)
+
     suite(m"Sections"):
       test(m"a section is named by its directory's last segment"):
         Compilation.name(t"/home/me/project/doc/modules/")
