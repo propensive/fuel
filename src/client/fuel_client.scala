@@ -35,12 +35,14 @@ package fuel
 import java.util.concurrent as juc
 
 import scala.caps
+import scala.collection.immutable as sci
+import scala.jdk.CollectionConverters.*
 
 // Excluded from the umbrella: `Compilation`, anthology's, which would outrank fuel's own.
 import soundness.{Compilation as _, *}
 
 import backstops.silentBackstop
-import dysasymptotics.linearSize
+import dysasymptotics.{linearAccess, linearSize}
 import interpreters.posixInterpreter
 import palettes.solarizedDarkGaugePalette
 import probates.cancelProbate
@@ -247,32 +249,48 @@ private def compile(config: Workspace.Config)(using Stdio, Environment)
     // are then compiled without it (tokenized, unchecked): the documents are still produced.
     val checked: Boolean = !config.classpath.nil && missing.nil
 
-    val outcome: Optional[Corpus] =
+    // The API first, since the documents link to it: the sources compiled and saved, their
+    // output and the dependencies walked, the overlays merged, and the pages of the project's
+    // own documented entities rendered with their examples compiled.
+    @scala.caps.unsafe.untrackedCaptures
+    var apiProblems: List[Block] = Nil
+
+    val outcome: Optional[(Corpus, Api, sci.Map[Text, List[Block]])] =
       if !checked then Unset else
         try Checking.session(config.classpath, config.options): (checker: Checker) =>
+          val (api, pages, problems) = model(config, checker)
+          apiProblems = problems
+
           // Each document is reported as it is done, since a corpus can take a long while.
           val regime: Compilation.Regime =
             Compilation.Regime(config.session, config.fixtures, (path: Text, problems: Int) =>
-              Out.println(t"fuel: $path: ${problems.show} ${if problems == 1 then t"problem" else t"problems"}"))
+              Out.println(t"fuel: $path: ${problems.show} ${if problems == 1 then t"problem" else t"problems"}"),
+              (_: Text) => Resolver(api, Scope.document(config.imports)))
 
-          Compilation.corpus(config.documents, checker, regime)
+          (Compilation.corpus(config.documents, checker, regime), api, pages)
         catch case error: Throwable =>
           failures = failed(t"The fragments could not be compiled", error) :: failures
           Unset
 
     val corpus: Corpus =
-      outcome.or:
+      outcome.let(_(0)).or:
         try Compilation.corpus(config.documents, Checker.tokenized, Compilation.Regime(config.session, config.fixtures)) catch case error: Throwable =>
           failures = failed(t"The documents could not be highlighted", error) :: failures
           Corpus(Nil)
 
-    Server.publish(corpus)
+    val api: Api = outcome.let(_(1)).or(Api.empty)
+    Server.publish(corpus, api, outcome.let(_(2)).or(sci.Map()), config.imports)
 
     corpus.sections.each: (section: Corpus.Section) =>
       Out.println(t"${section.name}: ${section.docs.size.show} documents from ${section.root}")
 
+    if !api.entities.isEmpty then
+      val own: Int = api.entities.values.count(_.own)
+      val documented: Int = api.entities.values.count { e => e.own && e.doc.present }
+      Out.println(t"api: ${api.entities.size.show} entities, ${own.show} of the project's own, ${documented.show} documented")
+
     // Every diagnostic, rendered as the terminal renders them: at its place, with its excerpt.
-    val problems: List[Block] = failures.reverse + corpus.problems
+    val problems: List[Block] = failures.reverse + apiProblems + corpus.problems
     val renderer = TerminalRenderer()
     renderer.blocks(problems, width).each: (line: Teletype) => Out.println(line)
 
@@ -280,6 +298,149 @@ private def compile(config: Workspace.Config)(using Stdio, Environment)
     then Out.println(t"fuel: no classpath is configured, so no fragment was compiled")
 
     if problems.nil then Exit.Ok else CompileFailed
+
+// The API model of a project, in the session: its sources compiled and saved beneath the
+// cache (`$XDG_CACHE_HOME/fuel/<project>/classes`, or `~/.cache/fuel/…`), the output and each
+// dependency jar walked (a jar once per version, kept by the daemon), the overlays read and
+// merged, and the pages of the project's own documented entities rendered — their examples
+// compiled as a document's are — with every problem found on the way.
+private def model(config: Workspace.Config, checker: Checker)(using Stdio)
+:   (Api, sci.Map[Text, List[Block]], List[Block]) =
+
+  @scala.caps.unsafe.untrackedCaptures
+  var problems: List[Block] = Nil
+
+  def report(block: Block): Unit = problems = block :: problems
+
+  val cache: Text =
+    val xdg: String | Null = java.lang.System.getenv("XDG_CACHE_HOME")
+    val base: Text = if xdg == null || xdg.isEmpty then t"${java.lang.System.getProperty("user.home").nn}/.cache" else xdg.nn.tt
+    val project: Text = Text(java.lang.Integer.toHexString(config.root.s.hashCode).nn)
+    t"$base/fuel/$project/classes"
+
+  // The sources, read; one that cannot be read is a problem and left out.
+  val sources: List[(Text, Text)] = config.sources.bind: (directory: Text) =>
+    val root = java.nio.file.Path.of(directory.s).nn
+    if !java.nio.file.Files.isDirectory(root) then
+      report(Block.Diagnostic(Tone.Failure, Block.Location(directory), List(Block.paragraph(t"This source directory does not exist."))))
+      Nil
+    else
+      val stream = java.nio.file.Files.walk(root).nn
+      val files: List[Text] =
+        try List.from(stream.iterator.nn.asScala.map(_.toString.tt).filter(_.ends(t".scala")).toList.sortBy(_.s))
+        finally stream.close()
+
+      files.bind: (file: Text) =>
+        try List((file, Text(java.nio.file.Files.readString(java.nio.file.Path.of(file.s)).nn)))
+        catch case error: Throwable =>
+          report(Compilation.unreadable(file))
+          Nil
+
+  // The dependencies first, walked through the session before it compiles anything: a walk
+  // after a compile under the project's options reads next to nothing.
+  val dependencies: Api = config.classpath.filter(_.ends(t".jar")).stdlib.foldLeft(Api.empty): (acc, jar) =>
+    val walked: Api = Server.jar(jar):
+      checker.context.lay(Api.empty): (context: dotty.tools.dotc.core.Contexts.Context) =>
+        Inspection.classpath(List(jar), context) match
+          case api: Api => api
+          case error: Throwable =>
+            report(failed(t"The dependency $jar could not be inspected", error))
+            Api.empty
+
+    acc.merge(walked)
+
+
+  val built: Boolean =
+    if sources.nil then false else
+      // A fresh output: what the sources no longer declare must not linger.
+      val root = java.nio.file.Path.of(cache.s).nn
+      if java.nio.file.Files.exists(root) then
+        val stream = java.nio.file.Files.walk(root).nn
+        try stream.sorted(java.util.Comparator.reverseOrder()).nn.forEach { p => java.nio.file.Files.delete(p) }
+        finally stream.close()
+
+      val notices: List[Notice] = checker.build(Map.from(sources.stdlib), cache)
+      val texts: sci.Map[Text, Text] = sci.Map.from(sources.stdlib)
+
+      notices.each: (notice: Notice) =>
+        val tone: Tone = notice.importance match
+          case Importance.Error   => Tone.Failure
+          case Importance.Warning => Tone.Warning
+          case _                  => Tone.Info
+
+        // The notice names its file as the compiler does, by its name alone or its path; the
+        // line is counted from the offset in the file's text.
+        val source: Option[(Text, Text)] =
+          texts.find { (path, _) => path == notice.file || path.ends(t"/${notice.file}") }
+
+        val line: Optional[Int] = notice.span.let(_.offset).let: (offset: Ordinal) =>
+          source.map { (_, text) => text.s.substring(0, offset.n0.min(text.s.length)).nn.count(_ == '\n') + 1 }.getOrElse(Unset)
+
+        // The compiler's own summary ("3 warnings found") is no diagnostic.
+        val summary: Boolean = notice.message.s.matches("\\d+ (warnings?|errors?) found")
+
+        if tone != Tone.Info && !summary then
+          report(Block.Diagnostic(tone, Block.Location(source.map(_(0)).getOrElse(notice.file), line), List(Block.paragraph(notice.message))))
+
+      Out.println(t"fuel: compiled ${sources.size.show} sources (${notices.filter(_.importance == Importance.Error).size.show} errors)")
+      notices.filter(_.importance == Importance.Error).nil
+
+  // The project's own output, from the inspector over what the build saved.
+  val own: Api =
+    if !built then Api.empty else Inspection.walk(List(cache), Nil, config.classpath) match
+      case api: Api => api
+      case error: Throwable =>
+        report(failed(t"The project's own code could not be inspected", error))
+        Api.empty
+
+  val inspected: Api = dependencies.merge(own)
+
+  Inspection.failures() match
+    case (count, error: Throwable) if count > 0 =>
+      val trace: Text = Text(java.lang.String.join("; ", error.getStackTrace.nn.take(6).map(_.toString)*).nn)
+      report(Block.Diagnostic(Tone.Warning, Unset, List(Block.paragraph(t"${count.show} members could not be read into the API model; the first failed with: ${error.toString.tt} ($trace)"))))
+    case _ => ()
+
+  // The overlays, read and merged.
+  val overlays: List[Overlay] = config.overlays.bind: (directory: Text) =>
+    val root = java.nio.file.Path.of(directory.s).nn
+    if !java.nio.file.Files.isDirectory(root) then
+      report(Block.Diagnostic(Tone.Failure, Block.Location(directory), List(Block.paragraph(t"This overlay directory does not exist."))))
+      Nil
+    else
+      val stream = java.nio.file.Files.walk(root).nn
+      val files: List[Text] =
+        try List.from(stream.iterator.nn.asScala.map(_.toString.tt).filter(_.ends(t".tel")).toList.sortBy(_.s))
+        finally stream.close()
+
+      files.bind: (file: Text) =>
+        try Overlay.read(file, Text(java.nio.file.Files.readString(java.nio.file.Path.of(file.s)).nn)) match
+          case overlay: Overlay          => List(overlay)
+          case diagnostic: Block.Diagnostic =>
+            report(diagnostic)
+            Nil
+        catch case error: Throwable =>
+          report(Compilation.unreadable(file))
+          Nil
+
+  val (api, merging) = if overlays.nil then (inspected, Nil: List[Block]) else Overlay.merge(inspected, overlays)
+  merging.each(report)
+
+  // The pages of the project's own documented entities, their examples compiled.
+  val pages: sci.Map[Text, List[Block]] =
+    sci.Map.from:
+      api.entities.values.filter { e => e.own && e.doc.present }.map: entity =>
+        val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Nil))
+        val resolver: Resolver = Resolver(api, scope)
+        val scala: Embedding.ScalaCode = Embedding.ScalaCode(checker, entity.doc.let(_.file).or(entity.key), false, Unset, resolver)
+        val blocks: List[Block] = ApiPages.page(api, entity, resolver, scope, List(scala, Embedding.JavaCode))
+        scala.problems.each(report)
+        resolver.ambiguities.each { (reference: Text) => report(Block.Diagnostic(Tone.Warning, Block.Location(entity.doc.let(_.file).or(entity.key), entity.doc.let(_.line)), List(Block.paragraph(t"`$reference` names more than one entity, so it is not linked; qualify it.")))) }
+        (entity.key, blocks)
+
+  if !overlays.nil then Out.println(t"fuel: ${overlays.size.show} overlays, ${pages.size.show} pages")
+
+  (api, pages, problems.reverse)
 
 // One document set in the terminal: its blocks at the terminal's width, paragraphs justified
 // and hyphenated, code highlighted, an animated block as its steps in sequence; its problems

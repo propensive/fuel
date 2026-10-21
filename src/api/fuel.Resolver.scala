@@ -100,12 +100,17 @@ class Resolver(api: Api, scope0: Scope) extends Linker:
     case Designator.Term(parent, name) => Designator.Term(under(prefix, parent), name)
     case Designator.Type(parent, name) => Designator.Type(under(prefix, parent), name)
 
+  // As written first, then under the enclosing entities (innermost first), then under the
+  // imports, then the standard scope: the first tier which names anything decides, as a name
+  // in code resolves in its innermost scope, so an outer match is no ambiguity.
   private def candidates(designator: Designator): List[Api.Entity] =
-    val found: List[Api.Entity] =
-      entity(designator).let(List(_)).or(Nil)
-      + scope.all.bind { (prefix: Designator) => entity(under(prefix, designator)).let(List(_)).or(Nil) }
+    def tier(prefixes: List[Designator]): List[Api.Entity] =
+      prefixes.bind { (prefix: Designator) => entity(under(prefix, designator)).let(List(_)).or(Nil) }.distinct
 
-    found.distinct
+    val tiers: List[List[Api.Entity]] =
+      List(entity(designator).let(List(_)).or(Nil), tier(scope.enclosing), tier(scope.imports), tier(Scope.standard))
+
+    tiers.seek(!_.nil).or(Nil)
 
   // The page of an entity, by the name it is written with; a type member is a page of its own,
   // as a term member is.

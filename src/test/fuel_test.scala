@@ -600,6 +600,38 @@ object Util:
         (entity(t"sample.Util.given_Ordering_Doc").let(_.definition.let(_.kind)), entity(t"sample.Util.limit").let(_.definition.let(_.kind)))
       . assert(_ == (Api.Kind.Given, Api.Kind.Val))
 
+      test(m"a dependency jar is walked through the session's symbol table"):
+        val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
+        val jar: Text = t"$here/out/fuel/launcher/assembly.dest/out.jar"
+
+        val result: Api | Throwable =
+          Checking.session(classpath, Nil): (checker: Checker) =>
+            checker.context.lay[Api | Throwable](Api.empty) { (context: dotty.tools.dotc.core.Contexts.Context) => Inspection.classpath(List(jar), context) }
+
+        result match
+          case api: Api         => (api.entities.size > 1000, api(t"scala.Option").let(_.own), api(t"scala.Option").let(_.template.let(_.kind)), api(t"scala.Option#map").present, api(t"scala.Option#map").let(_.definition.let(_.result.let(_.qualified))))
+          case error: Throwable => error.toString
+      . assert(_ == (true, false, Api.Kind.Class, true, t"scala.Option[B]"))
+
+      test(m"a dependency jar is walked before a build, in a session on that jar under the project's options"):
+        val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
+        val jar: Text = t"$here/out/fuel/launcher/assembly.dest/out.jar"
+        val out: Text = Text(java.nio.file.Files.createTempDirectory("fuel-probe").nn.toString)
+
+        val config: Text = Text(java.nio.file.Files.readString(java.nio.file.Path.of(s"$here/.pyrocosm/fuel/config.tel")).nn)
+        val options: List[Text] = config.cut(t"\n").filter(_.starts(t"scalac-option ")).map(_.skip(14).trim)
+        val sizes: (Int, Int) =
+          Checking.session(List(jar), options): (checker: Checker) =>
+            val before: Int = checker.context.lay(0) { (c: dotty.tools.dotc.core.Contexts.Context) => Inspection.classpath(List(jar), c) match { case api: Api => api.entities.size; case _ => -1 } }
+            checker.build(Map(t"Probe.scala" -> sample), out)
+            val after: Int = checker.context.lay(0) { (c: dotty.tools.dotc.core.Contexts.Context) => Inspection.classpath(List(jar), c) match { case api: Api => api.entities.size; case _ => -1 } }
+            (before, after)
+
+        // After a compile under these options the walk reads next to nothing, which is why
+        // the compile step walks the dependencies first.
+        (sizes(0) > 10000, sizes(1) < sizes(0))
+      . assert(_ == (true, true))
+
       test(m"a symbolic name is encoded in its path, and decoded from it"):
         Api.unpath(Api.path(stenography.Designator(t"a.B"), t"+:")).name
       . assert(_ == t"+:")

@@ -52,6 +52,24 @@ import stenography.{Bindings, Designator, Syntax}
 // stenography syntax, as Amok's walker made them. Runs on the compiler's thread
 // (`Checking.exclusive`): dotc pins its context to the thread of first use.
 object Inspection:
+  // The members left out of the model because reading them failed, and the first failure:
+  // what a compile reports, so that a model with gaps says why.
+  private val skipped0: juc.atomic.AtomicInteger = juc.atomic.AtomicInteger(0)
+
+  @scala.caps.unsafe.untrackedCaptures
+  @volatile
+  private var firstFailure: Optional[Throwable] = Unset
+
+  private def skipped(error: Throwable): Unit =
+    skipped0.incrementAndGet()
+    if firstFailure.absent then firstFailure = error
+
+  // The count and the first failure since the last call, which resets them.
+  def failures(): (Int, Optional[Throwable]) =
+    val result = (skipped0.getAndSet(0), firstFailure)
+    firstFailure = Unset
+    result
+
   // The entities of every `.tasty` beneath the `directories` (the project's own, marked so)
   // and of every `jars` entry.
   def walk(directories: List[Text], jars: List[Text], classpath: List[Text]): Api | Throwable =
@@ -84,7 +102,43 @@ object Inspection:
           val entities: sci.Map[Text, Api.Entity] =
             sci.Map.from(collected.entrySet.nn.iterator.nn.asScala.map { entry => (entry.getKey.nn, entry.getValue.nn) })
 
-          linked(Api(entities))
+          Api(entities).relinked
+      catch case error: Throwable => error
+
+  // The entities of every `jars` entry, through a session's symbol table: each top-level
+  // class the jar's `.tasty` entries name is loaded as the compiler loads any classpath
+  // symbol — its signatures, never a body — which is what makes it robust where unpickling
+  // whole trees is not; a class which cannot be loaded is left out.
+  def classpath(jars: List[Text], context: dotty.tools.dotc.core.Contexts.Context): Api | Throwable =
+    Checking.exclusive:
+      try
+        // A context of the session's with a cache of quotes, which rendering a type through
+        // stenography's quoted patterns needs (a run of the compiler sets one up; a bare
+        // session context has none), initialised as every run initialises its own first.
+        given dotty.tools.dotc.core.Contexts.Context = dotty.tools.dotc.quoted.QuotesCache.init(context.fresh)
+        context.base.initialize()
+
+        val quotes: Quotes = scala.quoted.runtime.impl.QuotesImpl()
+        val collected: juc.ConcurrentHashMap[Text, Api.Entity] = juc.ConcurrentHashMap()
+        val walker = Walker(collected)(using quotes)
+
+        jars.each: (jar: Text) =>
+          val zip = java.util.zip.ZipFile(jar.s)
+          try
+            val names: scala.List[String] =
+              zip.entries.nn.asScala.map(_.getName.nn).filter(_.endsWith(".tasty")).toList
+
+            // `pkg/Name.tasty` is the class, `pkg/Name$.tasty` its module; a `$package`
+            // carrier holds a package's top-level members.
+            names.foreach: name =>
+              val full: String = name.substring(0, name.length - 6).nn.replace('/', '.').nn
+              walker.load(full.tt)
+          finally zip.close()
+
+        val entities: sci.Map[Text, Api.Entity] =
+          sci.Map.from(collected.entrySet.nn.iterator.nn.asScala.map { entry => (entry.getKey.nn, entry.getValue.nn) })
+
+        Api(entities).relinked
       catch case error: Throwable => error
 
   // Every `.tasty` beneath a directory, as the inspector takes them.
@@ -94,21 +148,6 @@ object Inspection:
       val stream = java.nio.file.Files.walk(root).nn
       try List.from(stream.iterator.nn.asScala.map(_.toString.tt).filter(_.ends(t".tasty")).toList)
       finally stream.close()
-
-  // Every entity's `members`, from the parents its children name, sorted type members before
-  // term members and by name within each.
-  private def linked(api: Api): Api =
-    val children: juc.ConcurrentHashMap[Text, scala.List[Api.Entity]] = juc.ConcurrentHashMap()
-
-    api.entities.values.foreach: entity =>
-      entity.parent.let: (parent: Designator) =>
-        children.merge(Api.key(parent), scala.List(entity), (a, b) => a.nn ++ b.nn)
-
-    Api(api.entities.map { (key, entity) =>
-      val known: scala.List[Api.Entity] = Optional(children.get(key)).or(scala.Nil)
-      val members: List[Text] = List.from(known.sortBy(_.name.s).map(_.key))
-      (key, entity.copy(members = members))
-    })
 
   private class Walker(collected: juc.ConcurrentHashMap[Text, Api.Entity])(using val quotes: Quotes):
     import quotes.reflect.*
@@ -221,13 +260,29 @@ object Inspection:
         case term: Term     => Some(term.tpe)
         case _              => None
 
-      try
-        symbol.tree match
-          case ClassDef(_, _, parentTrees, _, _) =>
-            List.from(parentTrees.flatMap(typeOf).filter { tpe => !ignored.contains(tpe.typeSymbol.name) }.map { tpe => syntax(tpe) })
+      def keep(types: scala.List[TypeRepr]): List[Syntax] =
+        List.from(types.filter { tpe => !ignored.contains(tpe.typeSymbol.name) }.map { tpe => syntax(tpe) })
 
-          case _ => Nil
-      catch case _: Throwable => Nil
+      // From the tree where there is one (the project's own code); else from the class's
+      // info, which a symbol loaded from the classpath has without a tree.
+      val fromTree: List[Syntax] =
+        try
+          symbol.tree match
+            case ClassDef(_, _, parentTrees, _, _) => keep(parentTrees.flatMap(typeOf))
+            case _                                 => Nil
+        catch case _: Throwable => Nil
+
+      if !fromTree.nil then fromTree else
+        try
+          import dotty.tools.dotc.core.Symbols.toDenot
+          given dotty.tools.dotc.core.Contexts.Context = quotes.asInstanceOf[scala.quoted.runtime.impl.QuotesImpl].ctx
+          val dsym = symbol.asInstanceOf[dotty.tools.dotc.core.Symbols.Symbol]
+
+          dsym.info match
+            case info: dotty.tools.dotc.core.Types.ClassInfo =>
+              keep(info.declaredParents.map(_.asInstanceOf[TypeRepr]))
+            case _ => Nil
+        catch case _: Throwable => Nil
 
     private def templateKind(symbol: Symbol): Api.Kind =
       val flags = symbol.flags
@@ -260,11 +315,15 @@ object Inspection:
             else if entity.definition.absent then entity.copy(own = entity.own || own, definition = declaration, location = entity.location.or(where))
             else entity.copy(own = entity.own || own, overloads = entity.overloads + List(declaration)))
 
+    private def overrides(symbol: Symbol): Boolean =
+      try symbol.allOverriddenSymbols.nonEmpty catch case _: Throwable => false
+
     private def member(parent: Optional[Designator], symbol: Symbol, own: Boolean): Unit =
       if !skipped(symbol) then
         val name: Text = plain(symbol).tt
         val where: Optional[Api.Location] = if own then location(symbol) else Unset
         val flags = symbol.flags
+        val inherited: Boolean = overrides(symbol)
 
         if symbol.isClassDef then template(symbol, own)
         else if symbol.isTypeDef then
@@ -305,7 +364,7 @@ object Inspection:
           val (group, own0): (List[Syntax], List[Syntax]) =
             if kind == Api.Kind.Extension then extension(symbol) else (none, clauses(symbol))
 
-          record(parent, name, own, Api.Declaration(kind, modifiers(symbol), own0, syntax(result(symbol.info)), Nil, group), false, where)
+          record(parent, name, own, Api.Declaration(kind, modifiers(symbol), own0, syntax(result(symbol.info)), Nil, group, inherited), false, where)
         else if symbol.isValDef then
           val kind: Api.Kind =
             if flags.is(Flags.Enum) && flags.is(Flags.Case) then Api.Kind.Case
@@ -315,7 +374,7 @@ object Inspection:
 
           // An enum's value case has the enum as its type, which its page already says.
           val tpe: Optional[Syntax] = if kind == Api.Kind.Case then Unset else syntax(result(symbol.info))
-          record(parent, name, own, Api.Declaration(kind, modifiers(symbol), Nil, tpe), false, where)
+          record(parent, name, own, Api.Declaration(kind, modifiers(symbol), Nil, tpe, Nil, Nil, inherited), false, where)
 
     // An alias's right-hand side, a bound type's bounds, or nothing for an opaque type's
     // underlying (which is not the API).
@@ -343,16 +402,38 @@ object Inspection:
           val constructor: List[Syntax] = if kind == Api.Kind.Trait && symbol.primaryConstructor.paramSymss.forall(_.isEmpty) then Nil else clauses(symbol.primaryConstructor)
           record(parent, name, own, Api.Declaration(kind, modifiers(symbol), constructor, Unset, parents(symbol)), true, where)
 
-      symbol.declarations.foreach { child => member(here, child, own) }
+      // A member which cannot be read is left out, and the rest are still walked.
+      symbol.declarations.foreach: child =>
+        try member(here, child, own)
+        catch case error: Throwable => Inspection.skipped(error)
 
     private def packageEntity(symbol: Symbol): Unit =
-      designator(symbol).let: (designator: Designator) =>
-        record(designator.parent, designator.name, false, Api.Declaration(Api.Kind.Package), false, Unset)
-        designator.parent.let { (parent: Designator) => packageOf(parent) }
+      if symbol.isPackageDef || carrier(symbol) then
+        designator(symbol).let: (designator: Designator) =>
+          record(designator.parent, designator.name, false, Api.Declaration(Api.Kind.Package), false, Unset)
+          designator.parent.let { (parent: Designator) => packageOf(parent) }
 
     private def packageOf(designator: Designator): Unit =
       record(designator.parent, designator.name, false, Api.Declaration(Api.Kind.Package), false, Unset)
       designator.parent.let(packageOf)
+
+    // A top-level class or module of a dependency, by the name its `.tasty` entry gives,
+    // loaded from the classpath; its packages are recorded with it.
+    def load(name: Text): Unit =
+      val isModule: Boolean = name.ends(t"$$")
+      val plainName: Text = if isModule then name.keep(name.length - 1) else name
+
+      val symbol: Optional[Symbol] =
+        try
+          val found: Symbol = if isModule then Symbol.requiredModule(plainName.s).moduleClass else Symbol.requiredClass(plainName.s)
+          if found.isNoSymbol then Unset else found
+        catch case _: Throwable => Unset
+
+      symbol.let: (symbol: Symbol) =>
+        try
+          packageEntity(symbol.owner)
+          template(symbol, false)
+        catch case _: Throwable => ()
 
     def walk(tree: Tree, own: Boolean): Unit = tree match
       case PackageClause(pid, statements) =>

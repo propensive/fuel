@@ -213,8 +213,12 @@ object Overlay:
     def concealed(entity: Api.Entity): Boolean =
       entity.hidden || entity.parent.let { (parent: Designator) => current(Api.key(parent)).let(concealed).or(false) }.or(false)
 
+    // A member which only overrides is documented by what it overrides.
+    def overriding(entity: Api.Entity): Boolean =
+      !entity.declarations.nil && entity.declarations.all { (d: Api.Declaration) => d.overrides || d.modifiers.has(t"override") }
+
     current.entities.values.toList.sortBy(_.key.s).foreach: entity =>
-      if entity.own && !entity.removed && !entity.isPackage && entity.doc.absent && within(entity) && !concealed(entity) then
+      if entity.own && !entity.removed && !entity.isPackage && entity.doc.absent && within(entity) && !concealed(entity) && !overriding(entity) then
         val overlay: Optional[Overlay] = overlays.seek { (o: Overlay) => entity.key.starts(t"${o.base}.") || entity.key.starts(t"${o.base}#") }
         val where: Text = entity.location.let(_.path).or(overlay.let(_.file).or(t""))
         val line: Int = entity.location.let(_.line).or(1)

@@ -47,6 +47,7 @@ object Checker:
 
     def enter(name: Text, unit: Text): Boolean = false
     def build(sources: Map[Text, Text], output: Text): List[Notice] = Nil
+    def context: Optional[dotty.tools.dotc.core.Contexts.Context] = Unset
     def compiles: Boolean = false
 
 // How a Scala fragment is highlighted: at tokenized depth, which needs nothing, or in a warm
@@ -64,6 +65,10 @@ trait Checker:
   // — classfiles and TASTy — beneath `output`, so that they can be inspected and put on a
   // classpath; the compiler's notices say what did not compile.
   def build(sources: Map[Text, Text], output: Text): List[Notice]
+
+  // The session's own context, whose symbol table loads the classpath lazily — what walks a
+  // dependency's API without unpickling a body — good only on the compiler's thread.
+  def context: Optional[dotty.tools.dotc.core.Contexts.Context]
 
   def compiles: Boolean
 
@@ -164,6 +169,7 @@ object Checking:
 
             process.notices
 
+          def context: Optional[dotty.tools.dotc.core.Contexts.Context] = frontend.context
           def compiles: Boolean = true
 
       body(checker)

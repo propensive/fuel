@@ -78,7 +78,8 @@ object Api:
       clauses:   List[Syntax]     = Nil,
       result:    Optional[Syntax] = Unset,
       parents:   List[Syntax]     = Nil,
-      group:     List[Syntax]     = Nil )
+      group:     List[Syntax]     = Nil,
+      overrides: Boolean          = false )   // implements or overrides an inherited member, which documents it
 
   // Where a declaration was written: its source file and line (from one), for the project's own
   // code, whose source the inspection has.
@@ -193,6 +194,31 @@ case class Api(entities: sci.Map[Text, Api.Entity]):
       (name, sorted)
 
   def add(entity: Api.Entity): Api = Api(entities.updated(entity.key, entity))
+
+  // Two models as one: an entity in both keeps the project's own declaration, and its members
+  // are those of either; the members are relinked afterwards.
+  def merge(other: Api): Api =
+    val combined: sci.Map[Text, Api.Entity] = other.entities.foldLeft(entities): (acc, pair) =>
+      val (key, entity) = pair
+      acc.get(key) match
+        case Some(existing) =>
+          val merged: Api.Entity =
+            if entity.own && !existing.own then entity.copy(doc = existing.doc.or(entity.doc))
+            else existing.copy(definition = existing.definition.or(entity.definition), template = existing.template.or(entity.template), overloads = existing.overloads + entity.overloads)
+          acc.updated(key, merged)
+        case None => acc.updated(key, entity)
+
+    Api(combined).relinked
+
+  // Every entity's `members`, from the parents its children name, sorted by name.
+  def relinked: Api =
+    val children: sci.Map[Text, scala.List[Api.Entity]] =
+      entities.values.toList.flatMap { e => e.parent.let { (p: Designator) => scala.List((Api.key(p), e)) }.or(scala.Nil) }.groupMap(_(0))(_(1))
+
+    Api(entities.map { (key, entity) =>
+      val known: scala.List[Api.Entity] = children.getOrElse(key, scala.Nil)
+      (key, entity.copy(members = List.from(known.sortBy(_.name.s).map(_.key))))
+    })
 
   def update(key: Text)(change: Api.Entity => Api.Entity): Api =
     apply(key).lay(this) { (entity: Api.Entity) => add(change(entity)) }

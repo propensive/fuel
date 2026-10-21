@@ -125,9 +125,12 @@ object ApiPages:
       def up(designator: Optional[Designator]): List[Text] = designator.lay(Nil: List[Text]) { (d: Designator) => List(Api.key(d)) + up(d.parent) }
       api(key).lay(Nil: List[Text]) { (e: Api.Entity) => List(e.key) + up(e.parent) }
 
-    def node(entity: Api.Entity): Block.TreeNode =
+    // The project's own tree is shown whole; a dependency's unfolds only along the way to the
+    // current page, since the dependencies together are tens of thousands of entities.
+    def node(entity: Api.Entity, whole: Boolean): Block.TreeNode =
       val children: List[Block.TreeNode] =
-        api.children(entity).filter { (c: Api.Entity) => !c.hidden && (c.isPackage || c.template.present || c.definition.let(_.kind == Api.Kind.Object).or(false)) }.map(node)
+        if !whole && !path.has(entity.key) then Nil
+        else api.children(entity).filter { (c: Api.Entity) => !c.hidden && (c.isPackage || c.template.present || c.definition.let(_.kind == Api.Kind.Object).or(false)) }.map(node(_, whole))
 
       val open: Optional[Boolean] = if children.nil then Unset else path.has(entity.key)
       val tone: Optional[Tone] = if entity.key == current then Tone.Accent else if entity.removed then Tone.Muted else Unset
@@ -135,11 +138,11 @@ object ApiPages:
 
     val roots: List[Api.Entity] = api.roots
     val (own, dependencies) = roots.partition(ownBeneath(api, _))
-    val ownNodes: List[Block.TreeNode] = own.map(node)
+    val ownNodes: List[Block.TreeNode] = own.map(node(_, true))
 
     val dependencyNodes: List[Block.TreeNode] =
       if dependencies.nil then Nil
-      else List(Block.TreeNode(Inline.text(t"Dependencies"), dependencies.map(node), Tone.Muted, Unset, dependencies.exists { (d: Api.Entity) => path.has(d.key) }))
+      else List(Block.TreeNode(Inline.text(t"Dependencies"), dependencies.map(node(_, false)), Tone.Muted, Unset, dependencies.exists { (d: Api.Entity) => path.has(d.key) }))
 
     Block.Tree(ownNodes + dependencyNodes)
 
