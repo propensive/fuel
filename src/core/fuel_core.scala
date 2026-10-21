@@ -102,7 +102,14 @@ object Embedding:
         else if foot == t"" then all.skip(all.size - count)
         else all.skip(head.cut(t"\n").size - 1).keep(count)
 
-    private def objectName(index: Int): Text = t"fuel_fragment_${index.show}"
+    // A fragment's object name, unique across the whole corpus: one session is shared by every
+    // document, so a name that reset per document would redefine an earlier document's object
+    // and leave a stale symbol behind. The document's path, reduced to word characters,
+    // scopes it.
+    private val scope: Text =
+      Text(java.util.regex.Pattern.compile("[^A-Za-z0-9]").nn.matcher(path.s).nn.replaceAll("_").nn)
+
+    private def objectName(index: Int): Text = t"fuel_${scope}_${index.show}"
 
     // The names a fragment defines at its top level, by their declarations, so that a later
     // fragment defining one of them again hides the earlier from its import — as a REPL
@@ -118,27 +125,30 @@ object Embedding:
     // The top-level imports of a fragment, which its object would not carry.
     private def imported(code: Text): List[Text] = code.cut(t"\n").filter(_.starts(t"import "))
 
-    // The imports of what has joined the session so far, as those to replay at file scope (every
-    // fragment's own) and those inside the object (each joined object's members, less any name
-    // a later object defines again, and its givens).
+    // The imports of what has joined the session so far, as those to replay at file scope
+    // (every fragment's own, oldest first so an `import soundness.*` precedes what depends on
+    // it) and those inside the object (one per joined object, importing its members and
+    // givens, less any name a later object defines again).
     private def replayed: (List[Text], List[Text]) =
-      // Walking newest first, a name defined by a newer object hides the older's.
-      def walk(rest: List[Joined], seen: List[Text]): (List[Text], List[Text]) = rest match
-        case Joined.Object(name, defined, imports) :: tail =>
-          val hidden: List[Text] = defined.filter(seen.has(_)).map { (name: Text) => t"$name as _" }
+      val ordered: List[Joined] = history.reverse   // oldest fragment first
+
+      val fileScope: List[Text] = ordered.bind:
+        case Joined.Object(_, _, imports) => imports
+        case Joined.Imports(lines)        => lines
+
+      val objects: List[(Text, List[Text])] =
+        ordered.bind:
+          case Joined.Object(name, defined, _) => List((name, defined))
+          case _                               => Nil
+
+      val inner: List[Text] =
+        objects.indexed.map: (entry: (Text, List[Text]), index: Ordinal) =>
+          val later: List[Text] = objects.skip(index.n0 + 1).bind(_(1))
+          val hidden: List[Text] = entry(1).filter(later.has(_)).map { (name: Text) => t"$name as _" }
           val selectors: Text = (hidden + List(t"*", t"given")).join(t", ")
-          val (file, inner) = walk(tail, seen + defined)
-          (imports + file, List(t"import $name.{$selectors}") + inner)
+          t"import ${entry(0)}.{$selectors}"
 
-        case Joined.Imports(lines) :: tail =>
-          val (file, inner) = walk(tail, seen)
-          (lines + file, inner)
-
-        case _ =>
-          (Nil: List[Text], Nil: List[Text])
-
-      val (file, inner) = walk(history, Nil)
-      (file.reverse, inner.reverse)
+      (fileScope, inner)
 
     // A session's framing: the language imports, this fragment's object with the session's
     // imports inside it, then the fragment, wrapped as a term or a type when its context says,
@@ -152,7 +162,11 @@ object Embedding:
       else
         val followed: List[Text] = preamble.follows.map(fragment(_))
         val (fileScope, inner) = replayed
-        val imports: Text = (features.map { (feature: Text) => t"import scala.language.$feature" } + fileScope).map { (line: Text) => t"$line\n" }.join(t"")
+        // A `feature` is recorded (a checker which runs fragments turns it on) but not turned
+        // on in fuel's own compile: a feature whose checking is a phase after typer, such as
+        // capture checking, would reject in the session's full compile a fragment typer
+        // accepted, and fuel checks only as far as typer.
+        val imports: Text = fileScope.map { (line: Text) => t"$line\n" }.join(t"")
         val opening: Text = t"object ${objectName(count)} {\n"
         val body: Text = (inner + followed).map { (text: Text) => t"$text\n" }.join(t"")
 
