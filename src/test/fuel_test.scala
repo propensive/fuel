@@ -36,6 +36,7 @@ package fuel
 import soundness.{Compilation as _, Language as _, Token as _, *}
 
 import dysasymptotics.linearSize
+import scala.jdk.CollectionConverters.*
 import pyrocosm.{Block, Inline, Language, TerminalRenderer, Token, Tone}
 import systems.javaBaseSystem
 
@@ -495,6 +496,105 @@ error oops
           Fragments.read(Fragments.tel(doc.blocks)) == doc.blocks
 
       . assert(_ == true)
+
+    suite(m"Inspection"):
+      // A project's own source, compiled in a session on the suite's classpath and saved, as
+      // `fuel compile` compiles the configured sources; then walked, with the saved output as
+      // the project's own and the classpath as its dependencies.
+      val sample: Text = t"""package sample
+
+trait Shape[+A]:
+  def area: Double
+
+case class Doc(title: String, size: Int = 0) extends Shape[Int]:
+  def area: Double = 0.0
+  def shout: String = title.toUpperCase
+  private def secret: Int = 1
+
+object Doc:
+  def parse(text: String): Doc = Doc(text)
+  def parse(text: String, size: Int): Doc = Doc(text, size)
+
+object Util:
+  extension (text: String) def twice: String = text + text
+  type Pair[A] = (A, A)
+  given Ordering[Doc] = Ordering.by(_.title)
+  val limit: Int = 10
+"""
+
+      val output: Text = Text(java.nio.file.Files.createTempDirectory("fuel-api").nn.toString)
+      val entries: List[Text] = classpath().cut(t":").filter(_ != t"")
+
+      lazy val notices: List[Notice] =
+        Checking.session(classpath, Nil) { (checker: Checker) => checker.build(Map(t"Sample.scala" -> sample), output) }
+
+      lazy val api: Api | Throwable =
+        notices
+        Inspection.walk(List(output), Nil, entries)
+
+      def entity(key: Text): Optional[Api.Entity] = api match
+        case api: Api => api(key)
+        case _        => Unset
+
+      test(m"the sources compile, and their TASTy is saved"):
+        (notices.filter(_.importance == Importance.Error).size, Inspection.tastyIn(output).size > 0)
+      . assert(_ == (0, true))
+
+      test(m"the inspection yields a model"):
+        api match
+          case api: Api         => t"${api.entities.size.toString} entities"
+          case error: Throwable => t"${error.toString}: ${java.lang.String.join("; ", error.getStackTrace.nn.take(6).map(_.toString)*).nn}"
+      . assert(_.ends(t"entities"))
+
+      test(m"a case class and its companion are one entity, with a template and a definition"):
+        entity(t"sample.Doc").let { (doc: Api.Entity) => (doc.own, doc.template.let(_.kind), doc.definition.let(_.kind)) }
+      . assert(_ == (true, Api.Kind.CaseClass, Api.Kind.Object))
+
+      test(m"a field is a member of the type, and a companion method of the term"):
+        (entity(t"sample.Doc#title").let(_.definition.let(_.kind)), entity(t"sample.Doc.parse").let(_.definition.let(_.kind)))
+      . assert(_ == (Api.Kind.Val, Api.Kind.Def))
+
+      test(m"an entity's page is at its path, with `~` after a type and `.` after a term"):
+        (entity(t"sample.Doc#title").let(_.url), entity(t"sample.Doc.parse").let(_.url))
+      . assert(_ == (t"/api/sample.Doc~title", t"/api/sample.Doc.parse"))
+
+      test(m"a path leads back to its entity"):
+        api match
+          case api: Api => api.locate(t"sample.Doc~title").let(_.key)
+          case _        => Unset
+      . assert(_ == t"sample.Doc#title")
+
+      test(m"a package is an entity whose members are its types and terms"):
+        entity(t"sample").let(_.members.has(t"sample.Doc"))
+      . assert(_ == true)
+
+      test(m"a private member is not walked"):
+        entity(t"sample.Doc#secret").present
+      . assert(_ == false)
+
+      test(m"a method's signature has its clauses and its result, and its overloads are kept"):
+        entity(t"sample.Doc.parse").let { (e: Api.Entity) => (e.definition.let(_.clauses.size), e.definition.let(_.result.let(_.qualified)), e.overloads.size) }
+      . assert(_ == (1, t"sample.Doc", 1))
+
+      test(m"a class's parents are its declared ones"):
+        entity(t"sample.Doc").let(_.template.let(_.parents.map(_.qualified)))
+      . assert(_ == List(t"sample.Shape[scala.Int]"))
+
+      test(m"an extension keeps the clause it extends apart from its own"):
+        entity(t"sample.Util.twice").let(_.definition.let { (d: Api.Declaration) => (d.kind, d.group.size, d.clauses.size) })
+      . assert(_ == (Api.Kind.Extension, 1, 0))
+
+      test(m"a type alias has its parameters and its right-hand side"):
+        entity(t"sample.Util.Pair").let(_.template.let { (d: Api.Declaration) => (d.kind, d.clauses.size, d.result.let(_.qualified)) })
+      . assert(_ == (Api.Kind.Type, 1, t"(A, A)"))
+
+      test(m"a given and a val are declarations of their kinds"):
+        (entity(t"sample.Util.given_Ordering_Doc").let(_.definition.let(_.kind)), entity(t"sample.Util.limit").let(_.definition.let(_.kind)))
+      . assert(_ == (Api.Kind.Given, Api.Kind.Val))
+
+      test(m"a symbolic name is encoded in its path, and decoded from it"):
+        Api.unpath(Api.path(stenography.Designator(t"a.B"), t"+:")).name
+      . assert(_ == t"+:")
 
     suite(m"Sections"):
       test(m"a section is named by its directory's last segment"):

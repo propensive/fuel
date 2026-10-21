@@ -83,6 +83,15 @@ object ui:
   val Fixtures =
     Setting[Text](t"fixtures", t"a directory of `<document>.scala` fixtures, compiled before each document's fragments")
 
+  val Source =
+    Setting[Text](t"source", t"a directory of the project's own Scala sources, whose API is documented")
+
+  val Overlay =
+    Setting[Text](t"overlay", t"a directory of TEL overlays, the API's documentation")
+
+  val Imports =
+    Setting[Text](t"imports", t"a package or object whose members a document's references resolve through, as `soundness`")
+
 // There is no `Boolean is Decodable in Text` given in distillate, so `Setting[Boolean]` reads
 // decode here: `true`, `yes` and `on` — case-insensitively — are true, and anything else false.
 given (Boolean is Decodable in Text) = (value: Text) =>

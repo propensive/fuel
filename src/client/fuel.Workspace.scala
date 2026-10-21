@@ -35,9 +35,11 @@ package fuel
 import soundness.*
 
 // The project as the settings describe it: its root (the parent of the `.pyrocosm` holding
-// `fuel/config.tel`, or the invocation's directory where there is none), the classpath
-// embedded code will be compiled against (read now, used from M2), and the directories of
-// documents. Relative entries resolve against the root, as flame's do.
+// `fuel/config.tel`, or the invocation's directory where there is none), the classpath — the
+// dependencies the project's sources, and the embedded code, are compiled against — the
+// directories of documents, of the project's own sources (whose API is documented) and of the
+// TEL overlays which document it, and the imports a document's references resolve through.
+// Relative entries resolve against the root, as flame's do.
 object Workspace:
   case class Config
     ( root:      Text,
@@ -45,7 +47,10 @@ object Workspace:
       documents: List[Text],
       options:   List[Text],
       session:   Boolean        = false,
-      fixtures:  Optional[Text] = Unset )
+      fixtures:  Optional[Text] = Unset,
+      sources:   List[Text]     = Nil,
+      overlays:  List[Text]     = Nil,
+      imports:   List[Text]     = Nil )
 
   def load(directory: Text)(using Cli, Interpreter, Configurator): Config =
     // The file's directory is `.pyrocosm/fuel`, so the root is three levels up.
@@ -65,4 +70,9 @@ object Workspace:
     val fixtures: Optional[Text] =
       ui.Fixtures().let { (entry: Text) => if entry.starts(t"/") then entry else t"$root/$entry" }
 
-    Config(root, entries(ui.Classpath()), entries(ui.Document()), options, ui.Session().or(false), fixtures)
+    val imports: List[Text] =
+      ui.Imports().lay(Nil: List[Text]) { (text: Text) => text.cut(t":").filter(_ != t"") }
+
+    Config
+      ( root, entries(ui.Classpath()), entries(ui.Document()), options, ui.Session().or(false), fixtures,
+        entries(ui.Source()), entries(ui.Overlay()), imports )
