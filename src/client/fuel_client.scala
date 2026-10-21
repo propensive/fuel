@@ -61,6 +61,7 @@ object ui:
   val Compile = Subcommand("compile", "compile the configured directories of Markdown documents")
   val Serve   = Subcommand("serve", "serve the compiled documents on the web until Ctrl+C")
   val Show    = Subcommand("show", "render one document in the terminal")
+  val Blocks  = Subcommand("blocks", "write one document's blocks as TEL, for another tool")
 
   // Each is read from the cascade every Pyrocosm tool shares: the flag, the `fuel.*` property,
   // the `FUEL_*` variable, the repository's `.pyrocosm/fuel/config.tel` and the user's. A
@@ -183,6 +184,12 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
       val operand: Optional[Text] = rest.map(_()).filter(!_.starts(t"-")).prim
       ambient(show(config, directory, operand))
 
+    // `fuel blocks <file>`: one document, compiled as `compile` would, as TEL.
+    case ui.Blocks() :: rest =>
+      val config: Workspace.Config = Workspace.load(directory)
+      val operand: Optional[Text] = rest.map(_()).filter(!_.starts(t"-")).prim
+      ambient(blocks(config, directory, operand))
+
     case ui.Compile() :: _ =>
       val config: Workspace.Config = Workspace.load(directory)
       ambient(compile(config))
@@ -193,6 +200,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
         Out.println(t"")
         Out.println(t"  compile    compile the configured directories of Markdown documents")
         Out.println(t"  show       render one document in the terminal")
+        Out.println(t"  blocks     write one document's blocks as TEL, for another tool")
         Out.println(t"  serve      serve the compiled documents on the web until Ctrl+C")
         Out.println(t"  about      show this tool's name, version and daemon")
         Out.println(t"  install    install shell tab-completions and the manpage")
@@ -278,20 +286,9 @@ private def show(config: Workspace.Config, directory: Text, operand: Optional[Te
       UsageError
 
     case operand: Text =>
-      val path: Text = if operand.starts(t"/") then operand else t"$directory/$operand"
-      def exists(entry: Text): Boolean = java.nio.file.Files.exists(java.nio.file.Path.of(entry.s))
-      val checked: Boolean = !config.classpath.nil && config.classpath.all(exists(_))
-      val regime: Compilation.Regime = Compilation.Regime(config.session, config.fixtures)
+      val path: Text = absolute(directory, operand)
 
-      val doc: Optional[Doc] =
-        if checked then
-          try Checking.session(config.classpath, config.options): (checker: Checker) =>
-            Compilation.document(path, checker, regime)
-          catch case error: Throwable => Compilation.document(path, Checker.tokenized, regime)
-        else
-          Compilation.document(path, Checker.tokenized, regime)
-
-      doc match
+      compiled(config, path) match
         case Unset =>
           Out.println(t"fuel: $path could not be read")
           NoDocument
@@ -308,6 +305,48 @@ private def show(config: Workspace.Config, directory: Text, operand: Optional[Te
           if doc.problems.nil then Exit.Ok else CompileFailed
 
 private def blank: Teletype = e""
+
+// One document's blocks as TEL, one TEL document per block (see `Fragments`), on standard
+// output: what Flame or any other tool reads to show the document as Fuel renders it.
+private def blocks(config: Workspace.Config, directory: Text, operand: Optional[Text])
+  ( using Stdio )
+:   Exit | UsageError.type | NoDocument.type =
+
+  operand match
+    case Unset =>
+      Out.println(t"fuel: usage: fuel blocks <file>")
+      UsageError
+
+    case operand: Text =>
+      val path: Text = absolute(directory, operand)
+
+      compiled(config, path) match
+        case Unset =>
+          Out.println(t"fuel: $path could not be read")
+          NoDocument
+
+        case doc: Doc =>
+          Out.print(Fragments.tel(doc.blocks))
+          Exit.Ok
+
+// A path as the command line gives it, from the directory `fuel` was run in.
+private def absolute(directory: Text, operand: Text): Text =
+  if operand.starts(t"/") then operand else t"$directory/$operand"
+
+// One document compiled as `compile` compiles it, with the session and the classpath the
+// configuration gives, or highlighted alone where there is no usable classpath or the
+// session fails; `Unset` if it cannot be read.
+private def compiled(config: Workspace.Config, path: Text): Optional[Doc] =
+  def exists(entry: Text): Boolean = java.nio.file.Files.exists(java.nio.file.Path.of(entry.s))
+  val checked: Boolean = !config.classpath.nil && config.classpath.all(exists(_))
+  val regime: Compilation.Regime = Compilation.Regime(config.session, config.fixtures)
+
+  if checked then
+    try Checking.session(config.classpath, config.options): (checker: Checker) =>
+      Compilation.document(path, checker, regime)
+    catch case error: Throwable => Compilation.document(path, Checker.tokenized, regime)
+  else
+    Compilation.document(path, Checker.tokenized, regime)
 
 // A failure of the compiler itself, which has no place in a document, as a diagnostic.
 private def failed(what: Text, error: Throwable): Block =
