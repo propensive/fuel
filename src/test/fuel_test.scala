@@ -680,6 +680,64 @@ entry .nowhere   nothing of the sort
           ( t"Sample.scala:6: `sample.Doc#size` is not documented: add `entry #size` under `sample.Doc` in doc/api/sample.tel.",
             t"Sample.scala:4: `sample.Shape#area` is not documented: add `entry #area` under `sample.Shape` in doc/api/sample.tel." ))
 
+    suite(m"Resolution"):
+      def resolver(scope: Scope): Resolver = Resolver(Tests.this.api0, scope)
+      def linked(scope: Scope, reference: Text): Optional[Text] = resolver(scope).link(reference) match
+        case Inline.Destination.Local(path, _) => path
+        case _                                 => Unset
+
+      test(m"a qualified name resolves as written"):
+        linked(Scope.document(Nil), t"sample.Doc")
+      . assert(_ == t"/api/sample.Doc")
+
+      test(m"a leaf resolves through an import"):
+        linked(Scope.document(List(t"sample")), t"Doc")
+      . assert(_ == t"/api/sample.Doc")
+
+      test(m"a leaf does not resolve without a scope"):
+        linked(Scope.document(Nil), t"Doc")
+      . assert(_ == Unset)
+
+      test(m"a member resolves through its enclosing entity, and by Amok's `.`/`#` forms"):
+        val doc: Api.Entity = Tests.this.api0(t"sample.Doc").or(Api.Entity(Unset, t"?"))
+        val scope: Scope = Scope.of(doc, Nil)
+        (linked(scope, t"parse"), linked(scope, t"#title"), linked(scope, t".parse"), linked(scope, t"Doc#shout"))
+      . assert(_ == (t"/api/sample.Doc.parse", t"/api/sample.Doc~title", t"/api/sample.Doc.parse", t"/api/sample.Doc~shout"))
+
+      test(m"a fragment's imports are learned"):
+        val r: Resolver = resolver(Scope.document(Nil))
+        r.learn(List(t"import sample.*"))
+        r.link(t"Util") match
+          case Inline.Destination.Local(path, _) => path
+          case _                                 => Unset
+      . assert(_ == t"/api/sample.Util")
+
+      test(m"a typed token links only when it is the name its type names"):
+        val r: Resolver = resolver(Scope.document(Nil))
+        val doc: stenography.Syntax = stenography.Syntax.Simple(stenography.Designator(t"sample.Doc"))
+        (r.link(t"Doc", doc).present, r.link(t"x", doc).present)
+      . assert(_ == (true, false))
+
+      test(m"a signature is tokens, its designators linked and elided by the scope"):
+        val api: Api = Tests.this.api0
+        val parse: Api.Declaration = api(t"sample.Doc.parse").let(_.definition).or(Api.Declaration(Api.Kind.Def))
+        val tokens = Signatures.declaration(t"parse", parse, api, Scope.document(List(t"sample")))
+        (tokens.map(_.text).join(t""), tokens.seek(_.text == t"Doc").let(_.link))
+      . assert(_ == (t"def parse(text: String): Doc", Inline.Destination.Local(t"/api/sample.Doc")))
+
+      test(m"a page has its heading, signature and member rows anchored by name"):
+        val api: Api = Tests.this.api0
+        val doc: Api.Entity = api(t"sample.Doc").or(Api.Entity(Unset, t"?"))
+        val page = ApiPages.page(api, doc, resolver(Scope.of(doc, Nil)), Scope.of(doc, Nil), Nil)
+        val rows: List[Text] = page.bind { case Block.Table(_, rows, _) => rows.bind { (r: Block.Row) => r.id.let(List(_)).or(Nil) }; case _ => Nil }
+        (page.prim, rows.has(t"title"), rows.has(t"parse"))
+      . assert(_ == (Block.Paragraph(List(Inline.Link(Inline.Destination.Local(t"/api/sample"), Inline.text(t"sample")), Inline.Toned(Tone.Muted, Inline.text(t".")))), true, true))
+
+      test(m"the tree links each node to its page, open along the way to the current one"):
+        val tree = ApiPages.tree(Tests.this.api0, t"sample.Doc")
+        tree.roots.prim.let { (n: Block.TreeNode) => (n.destination, n.open, n.children.map(_.label).map(Blocks.plain)) }
+      . assert(_ == (Inline.Destination.Local(t"/api/sample"), true, List(t"Doc", t"Shape", t"Util")))
+
     suite(m"Sections"):
       test(m"a section is named by its directory's last segment"):
         Compilation.name(t"/home/me/project/doc/modules/")

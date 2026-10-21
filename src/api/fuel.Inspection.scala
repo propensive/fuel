@@ -289,6 +289,11 @@ object Inspection:
               (Nil, typeResult(other, flags))
 
           record(parent, name, own, Api.Declaration(Api.Kind.Type, modifiers(symbol), params, rhs), true, where)
+
+          // An exported type is a page elsewhere: a reference through the export leads there.
+          if flags.is(Flags.Exported) then rhs match
+            case Syntax.Simple(target) => collected.computeIfPresent(Api.key(parent, name), (_, e) => e.nn.copy(alias = target))
+            case _                     => ()
         else if symbol.isDefDef then
           val kind: Api.Kind =
             if flags.is(Flags.Given) then Api.Kind.Given

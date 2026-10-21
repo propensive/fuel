@@ -114,7 +114,8 @@ object Api:
       members:    List[Text]            = Nil,
       location:   Optional[Location]    = Unset,
       doc:        Optional[Entry]       = Unset,
-      removed:    Boolean               = false ):
+      removed:    Boolean               = false,
+      alias:      Optional[Designator]  = Unset ):   // an export forwarder's target, whose page is this one's
 
     def key: Text = Api.key(parent, name)
     def path: Text = Api.path(parent, name)
