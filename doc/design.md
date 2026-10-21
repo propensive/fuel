@@ -273,8 +273,12 @@ variables reach it too.
   range, so that other ways of naming one can be tried there alone. Each frame goes to
   `Animation.of` as a `Slide.Detail`, and Pyrocosm derives the transition into each slide. Not yet: `scalaio.tel` as fixtures (its decks need the
   presentation layer, M7).
-- **M4 Terminal and fragments.** `fuel show <file>` renders a document in the terminal through
-  `TerminalFrontend` (navigation of headings, the document as the primary panel); `fuel
+- **M4 Terminal and fragments** (`show` done). `fuel show <file>` sets one document in the
+  terminal through `TerminalRenderer(justify = true)`: paragraphs justified and hyphenated at
+  the terminal's width, code highlighted, an animated block as its slides in sequence under
+  `step n of m` markers (the renderer's own addition, since a terminal cannot step), problems
+  after — compiled as `compile` compiles, so the page shows what the dashboard would. An
+  interactive view through `TerminalFrontend` (navigation of headings) can follow. `fuel
   blocks <file>` writes the document's blocks as TEL, which is the fragment form other tools
   consume, and the dashboard's `fallback` serves the same at `/blocks/<document>`. An MCP
   server (synesthesia, as fume's) answering `documents`, `document`, `search` over the corpus.
