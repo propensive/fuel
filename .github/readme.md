@@ -57,6 +57,9 @@ frame                   # a frame of an animation: its code, which must be there
   at 12.5
   language java
   highlight x  why
+restart                 # in a session, a fresh one begins at this fence
+typecheck               # how far the compiler goes: parse, typecheck (the default) or compile;
+feature experimental.captureChecking   # a language import from this fence on
 ```
 
 `caution` and `param` mark ranges as `highlight` and `error` do. Repeated `frame`s make the
@@ -65,7 +68,10 @@ across them so that a step moves what stays and fades what arrives and departs, 
 frame's marks fading out before the step and in after it; `autoplay` plays it when shown, and
 `loop` starts it again at the end. A frame with an `at` puts the block on the page's one clock,
 which a bar at the foot of the page plays. Each Scala frame is compiled on its own; a Java frame
-is highlighted. [`doc/markdown.md`](../doc/markdown.md) shows each.
+is highlighted. With `session` configured, every fence follows the ones before it, so a
+tutorial reads as one REPL session; a fence which names a mode is checked but, to a checker
+which runs fences, not run; and a line ending `// does not compile` is compiled alone and must
+fail. [`doc/markdown.md`](../doc/markdown.md) shows each.
 
 ## Configuration files
 
@@ -88,6 +94,11 @@ scalac-option -deprecation
 # The directories of Markdown documents, each a section named by its last segment.
 document doc
 document doc/modules
+
+# Compile each document's fences as one session, each following the ones before it (as a
+# REPL would), with `doc/fixtures/<document>.scala` compiled first where there is one.
+session
+fixtures doc/fixtures
 
 # Serve the documents from the daemon's start, on this port (8060 by default).
 serve

@@ -37,10 +37,19 @@ import soundness.{Language as _, Token as _, *}
 import pyrocosm.Block
 
 object Doc:
-  // Parses and converts one document, its Scala fragments checked by `checker`; `problems`
-  // are the fragments which did not do as their preambles said.
-  def parse(path: Text, text: Text, checker: Checker = Checker.tokenized): Doc =
-    val scala: Embedding.ScalaCode = Embedding.ScalaCode(checker, path)
+  // Parses and converts one document, its Scala fragments checked by `checker` — in one
+  // session, each following the ones before it, when `session` says so, with the fixture
+  // (its path and text) compiled first; `problems` are the fragments which did not do as
+  // their preambles said.
+  def parse
+    ( path:    Text,
+      text:    Text,
+      checker: Checker                  = Checker.tokenized,
+      session: Boolean                  = false,
+      fixture: Optional[(Text, Text)]   = Unset )
+  :   Doc =
+
+    val scala: Embedding.ScalaCode = Embedding.ScalaCode(checker, path, session, fixture)
     val blocks: List[Block] = Blocks.of(Parser.parse(text), List(scala, Embedding.JavaCode))
     Doc(path, Blocks.title(blocks).or(filename(path)), blocks, scala.problems)
 

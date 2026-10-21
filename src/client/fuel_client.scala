@@ -74,6 +74,17 @@ object ui:
   val ScalacOption =
     Setting[Text](t"scalacOption", t"a compiler option for the fragments, as `-deprecation`")
 
+  val Session =
+    Setting[Boolean](t"session", t"compile each document's fragments as one session, each following the ones before")
+
+  val Fixtures =
+    Setting[Text](t"fixtures", t"a directory of `<document>.scala` fixtures, compiled before each document's fragments")
+
+// There is no `Boolean is Decodable in Text` given in distillate, so `Setting[Boolean]` reads
+// decode here: `true`, `yes` and `on` — case-insensitively — are true, and anything else false.
+given (Boolean is Decodable in Text) = (value: Text) =>
+  value.lower == t"true" || value.lower == t"yes" || value.lower == t"on"
+
 // Fuel as a Pyrocosm tool: `about`, `install`, `quit` and `--version` come from `Tool`, as does
 // the search for `.pyrocosm/fuel/config.tel`, and the dashboard a config's `serve` launches.
 // Capitalised, since a `val fuel` would clash with the launcher's `object fuel`.
@@ -213,14 +224,19 @@ private def compile(config: Workspace.Config)(using Stdio, Environment)
     val outcome: Optional[Corpus] =
       if !checked then Unset else
         try Checking.session(config.classpath, config.options): (checker: Checker) =>
-          Compilation.corpus(config.documents, checker)
+          // Each document is reported as it is done, since a corpus can take a long while.
+          val regime: Compilation.Regime =
+            Compilation.Regime(config.session, config.fixtures, (path: Text, problems: Int) =>
+              Out.println(t"fuel: $path: ${problems.show} ${if problems == 1 then t"problem" else t"problems"}"))
+
+          Compilation.corpus(config.documents, checker, regime)
         catch case error: Throwable =>
           failures = failed(t"The fragments could not be compiled", error) :: failures
           Unset
 
     val corpus: Corpus =
       outcome.or:
-        try Compilation.corpus(config.documents) catch case error: Throwable =>
+        try Compilation.corpus(config.documents, Checker.tokenized, Compilation.Regime(config.session, config.fixtures)) catch case error: Throwable =>
           failures = failed(t"The documents could not be highlighted", error) :: failures
           Corpus(Nil)
 
