@@ -34,6 +34,7 @@ package fuel
 
 import soundness.*
 
+import dysasymptotics.linearSize
 import pyrocosm.{Block, Inline, Tone}
 
 // The compile step: every `*.md` beneath a document directory, read, parsed and converted.
@@ -41,7 +42,10 @@ object Compilation:
   // How a corpus's fragments are compiled: as one session per document, each fragment
   // following the ones before it, and with the document's fixture (`<fixtures>/<name>.scala`)
   // first.
-  case class Regime(session: Boolean = false, fixtures: Optional[Text] = Unset)
+  case class Regime
+    ( session:  Boolean                = false,
+      fixtures: Optional[Text]         = Unset,
+      progress: (Text, Int) => Unit    = (_, _) => () )
 
   // A section's name is its directory's last segment.
   def name(root: Text): Text = root.cut(t"/").filter(_ != t"").reverse.prim.or(root)
@@ -79,6 +83,7 @@ object Compilation:
         text match
           case text: Text =>
             val doc: Doc = Doc.parse(relative(path), text, checker, regime.session, fixture(path))
+            regime.progress(relative(path), doc.problems.size)
             recur(tail, docs + List(doc), skipped)
 
           case _ =>

@@ -338,8 +338,9 @@ object Embedding:
     :   List[Block] =
 
         // The lines marked as not compiling are blanked out of the fragment proper, so that
-        // it compiles without them, and compiled alone, each in its place, after it.
-        val marked: List[Int] = if checked then negatives(code) else Nil
+        // it compiles without them, and compiled alone, each in its place, after it; a
+        // fragment which is only parsed cannot judge them, so they stay as they are.
+        val marked: List[Int] = if checked && mode != Preamble.Mode.Parse then negatives(code) else Nil
         val positive: Text = if marked.nil then code else blank(code, marked, Unset)
 
         // A fragment the highlighter cannot handle (harlequin overflows on an expression

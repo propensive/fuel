@@ -224,7 +224,12 @@ private def compile(config: Workspace.Config)(using Stdio, Environment)
     val outcome: Optional[Corpus] =
       if !checked then Unset else
         try Checking.session(config.classpath, config.options): (checker: Checker) =>
-          Compilation.corpus(config.documents, checker, Compilation.Regime(config.session, config.fixtures))
+          // Each document is reported as it is done, since a corpus can take a long while.
+          val regime: Compilation.Regime =
+            Compilation.Regime(config.session, config.fixtures, (path: Text, problems: Int) =>
+              Out.println(t"fuel: $path: ${problems.show} ${if problems == 1 then t"problem" else t"problems"}"))
+
+          Compilation.corpus(config.documents, checker, regime)
         catch case error: Throwable =>
           failures = failed(t"The fragments could not be compiled", error) :: failures
           Unset
