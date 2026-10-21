@@ -35,7 +35,7 @@ package fuel
 // Excluded from the umbrella: `Compilation`, anthology's, which would outrank fuel's own.
 import soundness.{Compilation as _, Language as _, Token as _, *}
 
-import dysasymptotics.linearSize
+import dysasymptotics.{linearAccess, linearSize}
 import scala.jdk.CollectionConverters.*
 import pyrocosm.{Block, Inline, Language, TerminalRenderer, Token, Tone}
 import systems.javaBaseSystem
@@ -57,6 +57,10 @@ make run
   // The suite's own classpath, from its classloader (so it is the same under fume, which runs
   // the suite in-process, as under plain java), carrying the Scala library the fragments need.
   val classpath: LocalClasspath = LocalClasspath.of(Classloader[Tests.type])
+
+  // The sample's model, from the Inspection suite, for the Overlays suite to document.
+  @scala.caps.unsafe.untrackedCaptures
+  var api0: Api = Api.empty
 
   def run(): Unit =
     suite(m"Markdown to blocks"):
@@ -532,6 +536,10 @@ object Util:
         notices
         Inspection.walk(List(output), Nil, entries)
 
+      api0 = api match
+        case api: Api => api
+        case _        => Api.empty
+
       def entity(key: Text): Optional[Api.Entity] = api match
         case api: Api => api(key)
         case _        => Unset
@@ -595,6 +603,82 @@ object Util:
       test(m"a symbolic name is encoded in its path, and decoded from it"):
         Api.unpath(Api.path(stenography.Designator(t"a.B"), t"+:")).name
       . assert(_ == t"+:")
+
+    suite(m"Overlays"):
+      val overlay: Text = t"""base sample
+import scala
+
+info  a sample package
+detail
+    All about _sample_.
+
+entry .Doc   a document
+  detail
+      A `Doc` has a *title*.
+  import scala.util
+  entry #title   its title
+  entry #shout   its title, loudly
+  entry #area    nothing much
+  entry .parse   parses a document
+  entry #whisper  its title, quietly
+    until 0.2.0  sample.Doc#shout
+
+entry .Util   utilities
+  hidden
+entry .Shape   a shape
+entry .nowhere   nothing of the sort
+"""
+
+      lazy val read: Overlay | Block.Diagnostic = Overlay.read(t"doc/api/sample.tel", overlay)
+
+      def api: Api = Tests.this.api0
+
+      lazy val merged: Optional[(Api, List[Block])] = read match
+        case overlay: Overlay => Overlay.merge(api, List(overlay))
+        case _                => Unset
+
+      def problems(tone: Tone): List[Text] =
+        merged.lay(Nil: List[Block]) { (m: (Api, List[Block])) => m(1) }.bind:
+          case Block.Diagnostic(tone0, location, message, _, _) if tone0 == tone =>
+            List(t"${location.let(_.path).or(t"?")}:${location.let(_.line).or(0).toString}: ${Blocks.plain(message.bind { case Block.Paragraph(c) => c; case _ => Nil })}")
+          case _ => Nil
+
+      test(m"an overlay is read: its base, its package's info and detail, and its imports"):
+        read match
+          case overlay: Overlay => (overlay.base, overlay.doc.info, overlay.doc.detail.let(_.trim), overlay.doc.imports)
+          case other            => other
+      . assert(_ == (t"sample", t"a sample package", t"All about _sample_.", List(t"scala")))
+
+      test(m"an entry has its name, kind, info (inline), detail (source), line and inherited imports"):
+        read match
+          case overlay: Overlay =>
+            overlay.entries.prim.let { (e: Overlay.Entry) => (e.name, e.isType, e.doc.info, e.doc.detail.let(_.trim), e.line, e.doc.imports, e.entries.size) }
+          case other => other
+      . assert(_ == (t"Doc", false, t"a document", t"A `Doc` has a *title*.", 8, List(t"scala", t"scala.util"), 5))
+
+      test(m"a leaf entry's detail is its source atom"):
+        read match
+          case overlay: Overlay => overlay.entries.at(Sec).let(_.entries.prim.let(_.doc.detail))
+          case other            => other
+      . assert(_ == Unset)
+
+      test(m"an entry's children are placed by their parent's kind"):
+        merged.let(_(0)(t"sample.Doc#title").let(_.doc.let(_.info)))
+      . assert(_ == t"its title")
+
+      test(m"an entry for a member nothing declares is a failure at its line"):
+        problems(Tone.Failure)
+      . assert(_ == List(t"doc/api/sample.tel:22: `.nowhere` is documented here, but no such member of `sample` is declared."))
+
+      test(m"an entry marked `until` need not exist, and has a page which is removed"):
+        merged.let(_(0)(t"sample.Doc#whisper").let { (e: Api.Entity) => (e.removed, e.doc.let(_.until.let(_.replacement))) })
+      . assert(_ == (true, t"sample.Doc#shout"))
+
+      test(m"an undocumented public member is a caution where it is declared; a hidden entity's members are not"):
+        problems(Tone.Warning)
+      . assert(_ == List
+          ( t"Sample.scala:6: `sample.Doc#size` is not documented: add `entry #size` under `sample.Doc` in doc/api/sample.tel.",
+            t"Sample.scala:4: `sample.Shape#area` is not documented: add `entry #area` under `sample.Shape` in doc/api/sample.tel." ))
 
     suite(m"Sections"):
       test(m"a section is named by its directory's last segment"):
