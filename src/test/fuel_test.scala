@@ -412,6 +412,10 @@ error oops
         problems(t"```scala\nval a: Int = 1\n```\n```scala\nval a: Int = 2\n```\n```scala\nval b: Int = a + 1\n```\n")
       . assert(_ == Nil)
 
+      test(m"an earlier fragment's imports are in scope for a later one"):
+        problems(t"```scala\nimport scala.collection.mutable.ArrayBuffer\nval a: Int = 1\n```\n```scala\nval buffer: ArrayBuffer[Int] = ArrayBuffer(a)\n```\n")
+      . assert(_ == Nil)
+
       test(m"a fixture is compiled before the first fragment"):
         problems(t"```scala\nfixed + 1\n```\n", (t"doc/fixtures/check.scala", t"val fixed: Int = 1"))
       . assert(_ == Nil)
