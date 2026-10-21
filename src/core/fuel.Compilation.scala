@@ -94,6 +94,23 @@ object Compilation:
 
     recur(files, Nil, Nil)
 
+  // One document, by its path, compiled as a section's would be, with its fixture if the
+  // regime names a directory holding one; `Unset` if the file cannot be read.
+  def document(path: Text, checker: Checker = Checker.tokenized, regime: Regime = Regime()): Optional[Doc] =
+    import filesystemBackends.javaBaseFilesystem
+    import charsets.utf8Charset
+    import textSanitizers.skipSanitizer
+
+    val fixture: Optional[(Text, Text)] =
+      regime.fixtures.let: (directory: Text) =>
+        val file: Text = t"$directory/${Doc.filename(path)}.scala"
+
+        safely(file.as[Path on Linux]).let { (file: Path on Linux) => safely(file.read[Text]) }.let:
+          (text: Text) => (file, text)
+
+    safely(path.as[Path on Linux]).let { (file: Path on Linux) => safely(file.read[Text]) }.let:
+      (text: Text) => Doc.parse(path, text, checker, regime.session, fixture)
+
   // A file that could not be read or parsed, as a diagnostic.
   def unreadable(path: Text): Block =
     Block.Diagnostic(Tone.Failure, Block.Location(path), List(Block.paragraph(t"The file could not be read.")))

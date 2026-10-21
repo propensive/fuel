@@ -15,6 +15,7 @@ the subcommands and configuration files every Pyrocosm tool shares are fuel's to
 ```sh
 fuel compile       # compile the configured directories of Markdown documents
 fuel serve         # serve the compiled documents at http://localhost:8060/ until Ctrl+C
+fuel show doc/x.md # one document, set in the terminal: justified, hyphenated, highlighted
 fuel install       # install tab-completions and the manpage
 fuel about         # fuel's version, and the daemon serving it
 fuel --version     # the version alone

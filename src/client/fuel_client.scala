@@ -53,12 +53,14 @@ import threads.platformThreads
 // an `execute` block's result type documents them in the manpage's EXIT STATUS section.
 object UsageError extends Status(2, t"the command line was not understood")
 object NoDocuments extends Status(3, t"no document directory is configured")
+object NoDocument extends Status(5, t"the document could not be read")
 object CompileFailed extends Status(4, t"a code fragment did not do as its preamble said")
 
 // Fuel's user interface, in one namespace: its subcommands, flags and settings.
 object ui:
   val Compile = Subcommand("compile", "compile the configured directories of Markdown documents")
   val Serve   = Subcommand("serve", "serve the compiled documents on the web until Ctrl+C")
+  val Show    = Subcommand("show", "render one document in the terminal")
 
   // Each is read from the cascade every Pyrocosm tool shares: the flag, the `fuel.*` property,
   // the `FUEL_*` variable, the repository's `.pyrocosm/fuel/config.tel` and the user's. A
@@ -175,6 +177,12 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
 
     // `fuel compile`: read the settings here, where completion mode registers them, and
     // compile within the execution.
+    // `fuel show <file>`: one document, compiled as `compile` would, set in the terminal.
+    case ui.Show() :: rest =>
+      val config: Workspace.Config = Workspace.load(directory)
+      val operand: Optional[Text] = rest.map(_()).filter(!_.starts(t"-")).prim
+      ambient(show(config, directory, operand))
+
     case ui.Compile() :: _ =>
       val config: Workspace.Config = Workspace.load(directory)
       ambient(compile(config))
@@ -184,6 +192,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
         Out.println(t"Usage: fuel <subcommand>")
         Out.println(t"")
         Out.println(t"  compile    compile the configured directories of Markdown documents")
+        Out.println(t"  show       render one document in the terminal")
         Out.println(t"  serve      serve the compiled documents on the web until Ctrl+C")
         Out.println(t"  about      show this tool's name, version and daemon")
         Out.println(t"  install    install shell tab-completions and the manpage")
@@ -254,6 +263,51 @@ private def compile(config: Workspace.Config)(using Stdio, Environment)
     then Out.println(t"fuel: no classpath is configured, so no fragment was compiled")
 
     if problems.nil then Exit.Ok else CompileFailed
+
+// One document set in the terminal: its blocks at the terminal's width, paragraphs justified
+// and hyphenated, code highlighted, an animated block as its steps in sequence; its problems
+// after it. Compiled as `compile` compiles, with the session and the classpath the
+// configuration gives, so what the page shows is what the dashboard would.
+private def show(config: Workspace.Config, directory: Text, operand: Optional[Text])
+  ( using Stdio, Environment )
+:   Exit | UsageError.type | NoDocument.type | CompileFailed.type =
+
+  operand match
+    case Unset =>
+      Out.println(t"fuel: usage: fuel show <file>")
+      UsageError
+
+    case operand: Text =>
+      val path: Text = if operand.starts(t"/") then operand else t"$directory/$operand"
+      def exists(entry: Text): Boolean = java.nio.file.Files.exists(java.nio.file.Path.of(entry.s))
+      val checked: Boolean = !config.classpath.nil && config.classpath.all(exists(_))
+      val regime: Compilation.Regime = Compilation.Regime(config.session, config.fixtures)
+
+      val doc: Optional[Doc] =
+        if checked then
+          try Checking.session(config.classpath, config.options): (checker: Checker) =>
+            Compilation.document(path, checker, regime)
+          catch case error: Throwable => Compilation.document(path, Checker.tokenized, regime)
+        else
+          Compilation.document(path, Checker.tokenized, regime)
+
+      doc match
+        case Unset =>
+          Out.println(t"fuel: $path could not be read")
+          NoDocument
+
+        case doc: Doc =>
+          import hyphenations.englishHyphenation
+          val renderer = TerminalRenderer(justify = true)
+          renderer.blocks(doc.blocks, width).each: (line: Teletype) => Out.println(line)
+
+          if !doc.problems.nil then
+            Out.println(blank)
+            renderer.blocks(doc.problems, width).each: (line: Teletype) => Out.println(line)
+
+          if doc.problems.nil then Exit.Ok else CompileFailed
+
+private def blank: Teletype = e""
 
 // A failure of the compiler itself, which has no place in a document, as a diagnostic.
 private def failed(what: Text, error: Throwable): Block =

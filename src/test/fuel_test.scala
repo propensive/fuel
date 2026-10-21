@@ -36,7 +36,7 @@ package fuel
 import soundness.{Compilation as _, Language as _, Token as _, *}
 
 import dysasymptotics.linearSize
-import pyrocosm.{Block, Inline, Language, Token, Tone}
+import pyrocosm.{Block, Inline, Language, TerminalRenderer, Token, Tone}
 import systems.javaBaseSystem
 
 object Tests extends Suite(m"Fuel tests"):
@@ -470,6 +470,22 @@ error oops
       test(m"an HTML comment is no block"):
         Doc.parse(t"doc/x.md", t"<!-- doccheck: skip -->\n\n```scala\nval x = 1\n```\n").blocks.size
       . assert(_ == 1)
+
+    suite(m"Showing"):
+      test(m"a document is compiled by its path, and an animated block has steps in the terminal"):
+        import hyphenations.englishHyphenation
+        import textMetrics.uniformMetric
+        import tableStyles.thickTableStyle
+        import palettes.solarizedDarkGaugePalette
+
+        val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
+
+        Compilation.document(t"$here/doc/markdown.md").let: (doc: Doc) =>
+          val renderer = TerminalRenderer(justify = true)
+          val rows: List[Text] = renderer.blocks(doc.blocks, 80).map(_.plain)
+          (rows.count(_.starts(t"step 1 of")), rows.exists(_.starts(t"step 3 of 3")))
+
+      . assert(_ == (1, true))
 
     suite(m"Sections"):
       test(m"a section is named by its directory's last segment"):
