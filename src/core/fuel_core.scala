@@ -125,27 +125,30 @@ object Embedding:
     // The top-level imports of a fragment, which its object would not carry.
     private def imported(code: Text): List[Text] = code.cut(t"\n").filter(_.starts(t"import "))
 
-    // The imports of what has joined the session so far, as those to replay at file scope (every
-    // fragment's own) and those inside the object (each joined object's members, less any name
-    // a later object defines again, and its givens).
+    // The imports of what has joined the session so far, as those to replay at file scope
+    // (every fragment's own, oldest first so an `import soundness.*` precedes what depends on
+    // it) and those inside the object (one per joined object, importing its members and
+    // givens, less any name a later object defines again).
     private def replayed: (List[Text], List[Text]) =
-      // Walking newest first, a name defined by a newer object hides the older's.
-      def walk(rest: List[Joined], seen: List[Text]): (List[Text], List[Text]) = rest match
-        case Joined.Object(name, defined, imports) :: tail =>
-          val hidden: List[Text] = defined.filter(seen.has(_)).map { (name: Text) => t"$name as _" }
+      val ordered: List[Joined] = history.reverse   // oldest fragment first
+
+      val fileScope: List[Text] = ordered.bind:
+        case Joined.Object(_, _, imports) => imports
+        case Joined.Imports(lines)        => lines
+
+      val objects: List[(Text, List[Text])] =
+        ordered.bind:
+          case Joined.Object(name, defined, _) => List((name, defined))
+          case _                               => Nil
+
+      val inner: List[Text] =
+        objects.indexed.map: (entry: (Text, List[Text]), index: Ordinal) =>
+          val later: List[Text] = objects.skip(index.n0 + 1).bind(_(1))
+          val hidden: List[Text] = entry(1).filter(later.has(_)).map { (name: Text) => t"$name as _" }
           val selectors: Text = (hidden + List(t"*", t"given")).join(t", ")
-          val (file, inner) = walk(tail, seen + defined)
-          (imports + file, List(t"import $name.{$selectors}") + inner)
+          t"import ${entry(0)}.{$selectors}"
 
-        case Joined.Imports(lines) :: tail =>
-          val (file, inner) = walk(tail, seen)
-          (lines + file, inner)
-
-        case _ =>
-          (Nil: List[Text], Nil: List[Text])
-
-      val (file, inner) = walk(history, Nil)
-      (file.reverse, inner.reverse)
+      (fileScope, inner)
 
     // A session's framing: the language imports, this fragment's object with the session's
     // imports inside it, then the fragment, wrapped as a term or a type when its context says,
