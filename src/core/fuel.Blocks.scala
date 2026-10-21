@@ -48,7 +48,7 @@ object Blocks:
 
   // The first heading's text, of whatever level, which is what a document is called.
   def title(blocks: List[Block]): Optional[Text] = blocks match
-    case Block.Heading(_, content) :: _ => plain(content)
+    case Block.Heading(_, content, _) :: _ => plain(content)
     case _ :: tail                      => title(tail)
     case _                              => Unset
 
