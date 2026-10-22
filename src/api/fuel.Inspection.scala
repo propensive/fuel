@@ -64,6 +64,10 @@ object Inspection:
     skipped0.incrementAndGet()
     if firstFailure.absent then firstFailure = error
 
+  // How many types were rendered, and how many could not be and are shown as `?`.
+  val rendered: juc.atomic.AtomicInteger = juc.atomic.AtomicInteger(0)
+  val unrendered: juc.atomic.AtomicInteger = juc.atomic.AtomicInteger(0)
+
   // The count and the first failure since the last call, which resets them.
   def failures(): (Int, Optional[Throwable]) =
     val result = (skipped0.getAndSet(0), firstFailure)
@@ -206,7 +210,17 @@ object Inspection:
         symbol.pos.map { (pos: Position) => Api.Location(pos.sourceFile.path.tt, pos.startLine + 1) }.getOrElse(Unset)
       catch case _: Throwable => Unset
 
-    private def syntax(repr: TypeRepr): Syntax = try Syntax(repr) catch case _: Throwable => Syntax.Primitive(t"?")
+    // A type as stenography renders it; where stenography cannot (its named-tuple check
+    // asserts on an applied type whose head is one of proscenium's opaque types, among
+    // others), an applied type is rendered from its parts, and anything else is `?`, counted.
+    private def syntax(repr: TypeRepr): Syntax =
+      Inspection.rendered.incrementAndGet()
+
+      try Syntax(repr) catch case _: Throwable => repr match
+        case AppliedType(base, args) => Syntax.Application(syntax(base), List.from(args.map(syntax)), false)
+        case _ =>
+          Inspection.unrendered.incrementAndGet()
+          Syntax.Primitive(t"?")
 
     private def isAny(repr: TypeRepr): Boolean = repr.typeSymbol == defn.AnyClass
     private def isNothing(repr: TypeRepr): Boolean = repr.typeSymbol == defn.NothingClass

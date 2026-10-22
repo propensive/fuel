@@ -288,6 +288,9 @@ private def compile(config: Workspace.Config)(using Stdio, Environment)
       val own: Int = api.entities.values.count(_.own)
       val documented: Int = api.entities.values.count { e => e.own && e.doc.present }
       Out.println(t"api: ${api.entities.size.show} entities, ${own.show} of the project's own, ${documented.show} documented")
+      val unrendered: Int = Inspection.unrendered.getAndSet(0)
+      val rendered: Int = Inspection.rendered.getAndSet(0)
+      if unrendered > 0 then Out.println(t"api: ${unrendered.show} of ${rendered.show} types could not be rendered, and are shown as `?`")
 
     // Every diagnostic, rendered as the terminal renders them: at its place, with its excerpt.
     val problems: List[Block] = failures.reverse + apiProblems + corpus.problems

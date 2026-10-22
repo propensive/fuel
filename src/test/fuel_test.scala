@@ -608,10 +608,15 @@ object Util:
           Checking.session(classpath, Nil): (checker: Checker) =>
             checker.context.lay[Api | Throwable](Api.empty) { (context: dotty.tools.dotc.core.Contexts.Context) => Inspection.classpath(List(jar), context) }
 
+
         result match
           case api: Api         => (api.entities.size > 1000, api(t"scala.Option").let(_.own), api(t"scala.Option").let(_.template.let(_.kind)), api(t"scala.Option#map").present, api(t"scala.Option#map").let(_.definition.let(_.result.let(_.qualified))))
           case error: Throwable => error.toString
       . assert(_ == (true, false, Api.Kind.Class, true, t"scala.Option[B]"))
+
+      test(m"nearly every type of a dependency renders, an applied type from its parts where stenography cannot"):
+        Inspection.unrendered.get*1000 < Inspection.rendered.get
+      . assert(_ == true)
 
       test(m"a dependency jar is walked before a build, in a session on that jar under the project's options"):
         val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
