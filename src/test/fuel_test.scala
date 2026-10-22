@@ -614,9 +614,9 @@ object Util:
           case error: Throwable => error.toString
       . assert(_ == (true, false, Api.Kind.Class, true, t"scala.Option[B]"))
 
-      test(m"nearly every type of a dependency renders, an applied type from its parts where stenography cannot"):
-        Inspection.unrendered.get*1000 < Inspection.rendered.get
-      . assert(_ == true)
+      test(m"every type of a dependency renders through stenography, none from its parts and none as `?`"):
+        (Inspection.fallbacks.get, Inspection.unrendered.get, Inspection.rendered.get > 10000)
+      . assert(_ == (0, 0, true))
 
       test(m"a dependency jar is walked before a build, in a session on that jar under the project's options"):
         val here: Text = Text(java.lang.System.getProperty("user.dir").nn)

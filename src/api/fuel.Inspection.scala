@@ -64,8 +64,10 @@ object Inspection:
     skipped0.incrementAndGet()
     if firstFailure.absent then firstFailure = error
 
-  // How many types were rendered, and how many could not be and are shown as `?`.
+  // How many types were rendered, how many applied types from their parts because stenography
+  // could not, and how many could not be at all and are shown as `?`.
   val rendered: juc.atomic.AtomicInteger = juc.atomic.AtomicInteger(0)
+  val fallbacks: juc.atomic.AtomicInteger = juc.atomic.AtomicInteger(0)
   val unrendered: juc.atomic.AtomicInteger = juc.atomic.AtomicInteger(0)
 
   // The count and the first failure since the last call, which resets them.
@@ -217,7 +219,9 @@ object Inspection:
       Inspection.rendered.incrementAndGet()
 
       try Syntax(repr) catch case _: Throwable => repr match
-        case AppliedType(base, args) => Syntax.Application(syntax(base), List.from(args.map(syntax)), false)
+        case AppliedType(base, args) =>
+          Inspection.fallbacks.incrementAndGet()
+          Syntax.Application(syntax(base), List.from(args.map(syntax)), false)
         case _ =>
           Inspection.unrendered.incrementAndGet()
           Syntax.Primitive(t"?")
