@@ -311,7 +311,9 @@ object Inspection:
 
         case entity: Api.Entity =>
           declaration.lay(entity): (declaration: Api.Declaration) =>
-            if isType then entity.copy(own = entity.own || own, template = entity.template.or(declaration), location = entity.location.or(where))
+            // A package is met once per member loaded beneath it; it is declared once.
+            if declaration.kind == Api.Kind.Package && entity.definition.present then entity.copy(own = entity.own || own)
+            else if isType then entity.copy(own = entity.own || own, template = entity.template.or(declaration), location = entity.location.or(where))
             else if entity.definition.absent then entity.copy(own = entity.own || own, definition = declaration, location = entity.location.or(where))
             else entity.copy(own = entity.own || own, overloads = entity.overloads + List(declaration)))
 

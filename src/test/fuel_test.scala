@@ -572,9 +572,9 @@ object Util:
           case _        => Unset
       . assert(_ == t"sample.Doc#title")
 
-      test(m"a package is an entity whose members are its types and terms"):
-        entity(t"sample").let(_.members.has(t"sample.Doc"))
-      . assert(_ == true)
+      test(m"a package is an entity whose members are its types and terms, declared once"):
+        entity(t"sample").let { (p: Api.Entity) => (p.members.has(t"sample.Doc"), p.overloads.size) }
+      . assert(_ == (true, 0))
 
       test(m"a private member is not walked"):
         entity(t"sample.Doc#secret").present
