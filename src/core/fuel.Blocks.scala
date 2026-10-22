@@ -41,14 +41,14 @@ import pyrocosm.{Block, Inline, Language, Token}
 // scope. Inline HTML is dropped, as the parser already comments it out; an inline image becomes
 // a link to it. To be offered upstream once it has settled here.
 object Blocks:
-  def of(markdown: Markdown of Layout, embeddings: List[Embedding])
+  def of(markdown: Markdown of Layout, embeddings: List[Embedding], linker: Linker = Linker.none)
   :   List[Block] =
 
-    all(markdown.children, embeddings)
+    all(markdown.children, embeddings, linker)
 
   // The first heading's text, of whatever level, which is what a document is called.
   def title(blocks: List[Block]): Optional[Text] = blocks match
-    case Block.Heading(_, content) :: _ => plain(content)
+    case Block.Heading(_, content, _) :: _ => plain(content)
     case _ :: tail                      => title(tail)
     case _                              => Unset
 
@@ -65,36 +65,37 @@ object Blocks:
     case Inline.Code(_, tokens)     => tokens.map(_.text).join(t"")
     case _                          => t""
 
-  private def all(nodes: List[Layout], embeddings: List[Embedding]): List[Block] = nodes match
-    case head :: tail => layout(head, embeddings) + all(tail, embeddings)
+  private def all(nodes: List[Layout], embeddings: List[Embedding], linker: Linker): List[Block] = nodes match
+    case head :: tail => layout(head, embeddings, linker) + all(tail, embeddings, linker)
     case _            => Nil
 
-  private def phrasing(nodes: List[Prose]): List[Inline] = nodes.map(prose)
+  private def phrasing(nodes: List[Prose], linker: Linker = Linker.none): List[Inline] = nodes.map(prose(_, linker))
 
   // A run of Markdown phrasing — a frame's label, say — as inlines: the first paragraph the
   // text parses to, or the text itself when it has none.
-  def inline(text: Text): List[Inline] =
+  def inline(text: Text, linker: Linker = Linker.none): List[Inline] =
     def first(nodes: List[Layout]): List[Inline] = nodes match
-      case Layout.Paragraph(_, prose*) :: _ => phrasing(List.from(prose))
+      case Layout.Paragraph(_, prose*) :: _ => phrasing(List.from(prose), linker)
       case _ :: tail                        => first(tail)
       case _                                => Inline.text(text)
 
     first(Parser.parse(text).children)
 
-  private def prose(node: Prose): Inline = node match
+  // Inline code is a reference when the linker says so: then its one token links.
+  private def prose(node: Prose, linker: Linker): Inline = node match
     case Prose.Textual(text)       => Inline.Textual(text)
-    case Prose.Emphasis(children*) => Inline.Emphasis(phrasing(List.from(children)))
-    case Prose.Strong(children*)   => Inline.Strong(phrasing(List.from(children)))
-    case Prose.Code(code)          => Inline.Code(Language.Plain, List(Token.plain(code)))
+    case Prose.Emphasis(children*) => Inline.Emphasis(phrasing(List.from(children), linker))
+    case Prose.Strong(children*)   => Inline.Strong(phrasing(List.from(children), linker))
+    case Prose.Code(code)          => Inline.Code(Language.Plain, List(Token.plain(code).copy(link = linker.link(code))))
     case Prose.Softbreak           => Inline.Textual(t" ")
     case Prose.Linebreak           => Inline.Break()
     case Prose.HtmlInline(_)       => Inline.Textual(t"")
 
     case Prose.Link(destination, _, content*) =>
-      Inline.Link(Inline.Destination.External(destination), phrasing(List.from(content)))
+      Inline.Link(Inline.Destination.External(destination), phrasing(List.from(content), linker))
 
     case Prose.Image(destination, _, content*) =>
-      Inline.Link(Inline.Destination.External(destination), phrasing(List.from(content)))
+      Inline.Link(Inline.Destination.External(destination), phrasing(List.from(content), linker))
 
   // The first embedding to answer a fence, else the plain rendering.
   private def fence(info: List[Text], content: Text, line: Int, embeddings: List[Embedding])
@@ -111,18 +112,18 @@ object Blocks:
     case Prose.Softbreak     => true
     case _                   => false
 
-  private def layout(node: Layout, embeddings: List[Embedding]): List[Block] = node match
+  private def layout(node: Layout, embeddings: List[Embedding], linker: Linker): List[Block] = node match
     case Layout.Paragraph(_, prose*) if prose.nonEmpty && prose.forall(hidden) =>
       Nil
 
     case Layout.Paragraph(_, prose*) =>
-      List(Block.Paragraph(phrasing(List.from(prose))))
+      List(Block.Paragraph(phrasing(List.from(prose), linker)))
 
     case Layout.Heading(_, level, prose*) =>
-      List(Block.Heading(level, phrasing(List.from(prose))))
+      List(Block.Heading(level, phrasing(List.from(prose), linker)))
 
     case Layout.BlockQuote(_, layouts*) =>
-      List(Block.Quotation(all(List.from(layouts), embeddings)))
+      List(Block.Quotation(all(List.from(layouts), embeddings, linker)))
 
     case Layout.ThematicBreak(_) =>
       List(Block.Rule())
@@ -139,12 +140,12 @@ object Blocks:
 
     case Layout.BulletList(_, _, items*) =>
       val listed: List[Block.Item] =
-        List.from(items.map { (item: List[Layout]) => Block.Item(all(item, embeddings)) })
+        List.from(items.map { (item: List[Layout]) => Block.Item(all(item, embeddings, linker)) })
 
       List(Block.Listing(false, listed))
 
     case Layout.OrderedList(_, _, _, _, items*) =>
       val listed: List[Block.Item] =
-        List.from(items.map { (item: List[Layout]) => Block.Item(all(item, embeddings)) })
+        List.from(items.map { (item: List[Layout]) => Block.Item(all(item, embeddings, linker)) })
 
       List(Block.Listing(true, listed))

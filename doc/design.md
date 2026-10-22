@@ -291,13 +291,30 @@ variables reach it too.
   diagnostic's location names the document as its compile did — absolutely for `blocks` and
   `show`, relative to its section for the dashboard's corpus — which a consumer should not
   rely on until locations are settled across sections.
-- **M5 API documentation.** The TASTy walker (`Model`, `Declaration`, `Node`) rebuilt on
-  `scala3-tasty-inspector` and `stenography.Designator`/`Syntax`; TEL overlays in the `Flux`
-  format, their `info`/`detail` Markdown rendered through M1–M3 and typechecked against the
-  jar they document (an entry naming a member that does not exist is a failure, as a fragment
-  that does not compile is); `Block.Tree` navigation of packages, types and terms;
-  signatures as `Inline.Code`; `Criteria` search in the dashboard; import elision as a
-  setting. Fuel's own API docs as the fixture.
+- **M5 API documentation** (done, first cut; search is not). The model (`Api`, in a new
+  `fuel-api` module) is every package, type and term of the project *and its dependencies*,
+  keyed by its fully-qualified name, a type and its companion one entity and one page at
+  `/api/<name>` (`.` after a term, `~` after a type), with signatures as `stenography.Syntax`
+  rendered to linked tokens (`Signatures`); TEL overlays in Amok's format (`Overlay`), merged
+  with failures and cautions both ways; references in prose and typed tokens in fences resolved
+  through a `Scope` (`Resolver`, behind the `Linker` hook in `fuel-core`); pages and the
+  navigation tree (`ApiPages`); the dashboard on per-tab sessions answering `Event.Located`.
+  Pyrocosm gained `Destination.Local`, linked tokens, anchored headings and rows, and a page at
+  any path (propensive/pyrocosm#73). Found while building it:
+  - The project's own sources are compiled in the warm session (`Checker.build`), saved
+    beneath `$XDG_CACHE_HOME/fuel/<project>/classes`, and read by the TASTy inspector; a
+    dependency jar is walked through the *session's symbol table* instead (`Inspection.classpath`,
+    a `QuotesImpl` over the session's context with a `QuotesCache`), since the inspector's full
+    unpickling of a whole jar trips over a tree it cannot read (an `owner discrepancy` in
+    zephyrine's) and one such file loses the jar. The walk must come *before* the session
+    compiles anything: under the project's options, a walk after a compile reads next to
+    nothing. A jar's model is kept by the daemon per version of the jar.
+  - TEL does not take children after a source atom, so an entry with children carries its
+    Markdown as a `detail` child; a leaf entry's may follow it. `entry #Name` is fine: the
+    sigil needs a space after it.
+  - Overloads are kept (one entity, every signature); an exported type is an `alias` whose
+    page is its target's; a member which overrides is documented by what it overrides.
+  - Not yet: `Criteria` search; a dependency's own overlays; `fuel watch`.
 - **M6 Outputs and languages.** A static site: Pyrocosm's `HtmlRenderer` and `PyrocosmPage`
   written to files, one page per document, with the stylesheet and no socket (a Pyrocosm
   feature: `WebFrontend` has the pieces, a batch writer does not exist). Languages beyond Scala

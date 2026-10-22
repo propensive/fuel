@@ -3,9 +3,11 @@
 __Fuel__ is the documentation tool of the [Soundness](https://soundness.dev/) ecosystem. It
 compiles a project's Markdown documentation — with the code embedded in it highlighted, and in
 time checked against the project's classpath and animated — into
-[Pyrocosm](https://github.com/propensive/pyrocosm)'s semantic model, and serves it on the web.
-Later it will document a project's API, from its TASTy and TEL overlays, as a navigable site.
-Its design and roadmap are [`doc/design.md`](../doc/design.md).
+[Pyrocosm](https://github.com/propensive/pyrocosm)'s semantic model, and serves it on the web,
+with the project's API — its structure and signatures from the compiled code, its prose from
+TEL overlays — as pages of the same site, one per type and term at a predictable URL, which
+everything that names one links to. Its design and roadmap are
+[`doc/design.md`](../doc/design.md).
 
 Fuel runs as an [Ethereal](https://soundness.dev/ethereal/) daemon and is a Pyrocosm tool, so
 the subcommands and configuration files every Pyrocosm tool shares are fuel's too.
@@ -75,6 +77,57 @@ tutorial reads as one REPL session; a fence which names a mode is checked but, t
 which runs fences, not run; and a line ending `// does not compile` is compiled alone and must
 fail. [`doc/markdown.md`](../doc/markdown.md) shows each.
 
+## API documentation
+
+With `source` directories configured, `fuel compile` compiles the project's own sources in the
+same warm session (against the `classpath`, which is the project's dependencies), and builds a
+model of all the code — the project's and its dependencies' — from the compiled output and the
+dependency jars: every package, type and term, with the signatures of its declarations. A type
+and its companion object are one *entity* and one page, served at `/api/<name>`: a member of a
+term follows `.` and a member of a type follows `~` (`#` being a URL's fragment), so
+`gossamer.Text`'s `length` is at `/api/gossamer.Text~length`, and a member's row on its parent's
+page is the anchor `/api/gossamer.Text#length`. A dependency's page is rendered when it is asked
+for; a project's own pages are rendered by the compile, with the examples in them compiled.
+
+An **overlay** documents a package, in a TEL file beneath an `overlay` directory: Amok's format.
+
+```
+tel 1.0
+
+base gossamer                        # the package this file documents
+import soundness                     # scope for references in this file's prose (repeated)
+info a one-line summary of the package
+detail                               # Markdown, as an indented source atom
+    All about _gossamer_.
+
+entry .Text   a one-line summary     # `.name` is a member of the term, `#Name` of the type
+  detail
+      Markdown about `Text`, with examples in fences, which are compiled.
+  import gossamer.*                  # a scope of this entry's own, inherited by those within
+  entry #length   its length          # a leaf entry's Markdown may follow it as a source atom
+  entry .apply    makes one
+  entry #whisper  gone
+    until 0.74.0  gossamer.Text#shout # removed in that version; its replacement, if any
+  entry .Internal
+    hidden                           # not listed, and its members not asked for
+  refer gossamer.Textual             # "See also"
+```
+
+The overlay and the code are held to each other: an entry naming a member nothing declares
+fails the compile (unless it is marked `until`, when it keeps a page saying what replaced it),
+an `until` on a member which still exists is a caution, and a public member of a documented
+package with no entry is a caution at the line it is declared, naming the entry to write. A
+member which overrides or implements an inherited one is documented by it.
+
+Everything that names an entity links to its page, when the page exists: the identifiers in a
+signature; inline code in prose (`` `Text` ``), resolved as a name in code would be — as
+written, then under the page's own entity and those enclosing it, then under the `import`s of
+the overlay (or, for a Markdown document, the `imports` setting and the imports its own fences
+make), then `scala`, `scala.Predef` and `java.lang` — a name which several entities answer to
+in the same scope is a caution and stays plain; and the typed tokens of a compiled fence, when
+the token is the name of what its type names. Amok's `` `#member` `` and `` `.member` `` name a
+member of the page's own entity.
+
 ## Configuration files
 
 A project configures fuel with a [TEL](https://soundness.dev/tel/) document at
@@ -102,6 +155,12 @@ document doc/modules
 session
 fixtures doc/fixtures
 
+# The project's own sources, whose API is documented by the overlays beneath doc/api, and the
+# packages a document's references resolve through.
+source src/core
+overlay doc/api
+imports soundness
+
 # Serve the documents from the daemon's start, on this port (8060 by default).
 serve
 port 8060
@@ -114,8 +173,10 @@ and a `FUEL_`-prefixed environment variable, in that order of priority ahead of 
 
 - `fuel-core` (`src/core`): `Doc`, `Corpus`, the `Blocks` conversion of Markdown to Pyrocosm
   blocks, and the `Embedding` of fenced code, for another tool to embed.
+- `fuel-api` (`src/api`): the `Api` model, read from compiled code by `Inspection`, documented
+  by `Overlay`s, with the `Resolver` of references, `Signatures` as tokens and `ApiPages`.
 - `fuel-client` (`src/client`): the `Tool`, its subcommands and settings, the daemon's corpus
-  and the dashboard.
+  and model, and the dashboard.
 - `launcher` (`src/launcher`): the entry point alone, built into the executable.
 - `test` (`src/test`): the suite, run by fume.
 

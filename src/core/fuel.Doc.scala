@@ -34,7 +34,7 @@ package fuel
 
 import soundness.{Language as _, Token as _, *}
 
-import pyrocosm.Block
+import pyrocosm.{Block, Tone}
 
 object Doc:
   // Parses and converts one document, its Scala fragments checked by `checker` — in one
@@ -46,12 +46,19 @@ object Doc:
       text:    Text,
       checker: Checker                  = Checker.tokenized,
       session: Boolean                  = false,
-      fixture: Optional[(Text, Text)]   = Unset )
+      fixture: Optional[(Text, Text)]   = Unset,
+      linker:  Linker                   = Linker.none )
   :   Doc =
 
-    val scala: Embedding.ScalaCode = Embedding.ScalaCode(checker, path, session, fixture)
-    val blocks: List[Block] = Blocks.of(Parser.parse(text), List(scala, Embedding.JavaCode))
-    Doc(path, Blocks.title(blocks).or(filename(path)), blocks, scala.problems)
+    val scala: Embedding.ScalaCode = Embedding.ScalaCode(checker, path, session, fixture, linker)
+    val blocks: List[Block] = Blocks.of(Parser.parse(text), List(scala, Embedding.JavaCode), linker)
+
+    // A reference which named several entities is a caution: it is shown unlinked.
+    val ambiguous: List[Block] =
+      linker.ambiguities.map: (reference: Text) =>
+        Block.Diagnostic(Tone.Warning, Block.Location(path), List(Block.paragraph(t"`$reference` names more than one entity, so it is not linked; qualify it.")))
+
+    Doc(path, Blocks.title(blocks).or(filename(path)), blocks, scala.problems + ambiguous)
 
   // The last segment of a path, without a `.md` extension.
   def filename(path: Text): Text =

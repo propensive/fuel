@@ -46,6 +46,8 @@ object Checker:
       harlequin.Scala.highlight(code, context)
 
     def enter(name: Text, unit: Text): Boolean = false
+    def build(sources: Map[Text, Text], output: Text): List[Notice] = Nil
+    def context: Optional[dotty.tools.dotc.core.Contexts.Context] = Unset
     def compiles: Boolean = false
 
 // How a Scala fragment is highlighted: at tokenized depth, which needs nothing, or in a warm
@@ -58,6 +60,15 @@ trait Checker:
   // Compiles a unit into the session under its own source name, so that what it defines stays
   // in scope for every later check, as a REPL's lines do for one another; true if it compiled.
   def enter(name: Text, unit: Text): Boolean
+
+  // Compiles a project's own sources, as one compile in the session, and writes what it emits
+  // — classfiles and TASTy — beneath `output`, so that they can be inspected and put on a
+  // classpath; the compiler's notices say what did not compile.
+  def build(sources: Map[Text, Text], output: Text): List[Notice]
+
+  // The session's own context, whose symbol table loads the classpath lazily — what walks a
+  // dependency's API without unpickling a body — good only on the compiler's thread.
+  def context: Optional[dotty.tools.dotc.core.Contexts.Context]
 
   def compiles: Boolean
 
@@ -146,6 +157,19 @@ object Checking:
           def enter(name: Text, unit: Text): Boolean =
             compilation.compile(Map(name -> unit)).errors == 0
 
+          def build(sources: Map[Text, Text], output: Text): List[Notice] =
+            val process = compilation.compile(sources)
+            val root = java.nio.file.Path.of(output.s).nn
+
+            process.classfiles.each: (path, data) =>
+              val target = root.resolve(path.encode.s).nn
+              java.nio.file.Files.createDirectories(target.getParent.nn)
+              java.nio.file.Files.write(target, Array.unsafeJvm(data))
+              ()
+
+            process.notices
+
+          def context: Optional[dotty.tools.dotc.core.Contexts.Context] = frontend.context
           def compiles: Boolean = true
 
       body(checker)

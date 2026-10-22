@@ -209,6 +209,9 @@ object settings:
   // compiler, at the version this build uses, resolved from the `toolchain` repository below.
   def compilerDeps = Seq(mvn"org.scala-lang:scala3-compiler_3:${settings.scalaVersion}")
 
+  // The TASTy inspector, through which the API model reads compiled code.
+  def inspectorDeps = Seq(mvn"org.scala-lang:scala3-tasty-inspector_3:${settings.scalaVersion}")
+
   // probably-events carries `probably.Streamer`, the BinTEL event stream fume drives a suite
   // through.
   def testDeps(soundness: String) = Seq("probably-cli", "probably-events").map(component(soundness))
@@ -471,14 +474,25 @@ object fuel extends Project:
         ++ settings.pyrocosmDeps(deps.pyrocosm())
         ++ settings.compilerDeps
 
+  // Released as `dev.propensive:fuel-api`: the API model (`Api`), read from TASTy by
+  // `Inspection`, documented by TEL `Overlay`s, with the resolution of references and the
+  // pages — what a tool which documents an API embeds.
+  object api extends Component(core), Publishing:
+    def mvnDeps = Task:
+      settings.coreDeps(deps.soundness())
+        ++ settings.pyrocosmDeps(deps.pyrocosm())
+        ++ settings.compilerDeps
+        ++ settings.inspectorDeps
+
   // Released as `dev.propensive:fuel-client`: the daemon's commands and the dashboard. NOT an
   // assembled app: the `@main`/`externalize` entry point lives in the `launcher` module.
-  object client extends Component(core), Publishing:
+  object client extends Component(api), Publishing:
     def mvnDeps = Task:
       settings.coreDeps(deps.soundness())
         ++ settings.clientDeps(deps.soundness())
         ++ settings.pyrocosmDeps(deps.pyrocosm())
         ++ settings.compilerDeps
+        ++ settings.inspectorDeps
 
   // Fuel's own suite, assembled into one jar that fume runs (`make test`, through
   // .pyrocosm/fume/config.tel) or plain `java` does (`make test-plain`, `fuel.runTests`).
@@ -499,7 +513,8 @@ object fuel extends Project:
         +: (settings.coreDeps(deps.soundness())
             ++ settings.clientDeps(deps.soundness())
             ++ settings.pyrocosmDeps(deps.pyrocosm())
-            ++ settings.compilerDeps)
+            ++ settings.compilerDeps
+            ++ settings.inspectorDeps)
 
     def finalMainClass = "fuel.fuel"
 
