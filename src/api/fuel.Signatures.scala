@@ -67,7 +67,12 @@ object Signatures:
             case Designator.Type(_, _) => t"#"
             case _                     => t"."
 
-          this.designator(parent, api, scope) + List(symbol(separator), linked(designator, accent))
+          // Each segment after the first continues the name, so that it is a link of its own
+          // and the name up to it one thing (Pyrocosm's `chained`).
+          val next: Token = linked(designator, accent).copy(chained = true)
+          val continued: List[Token] = List(symbol(separator).copy(chained = true), next)
+
+          this.designator(parent, api, scope) + continued
 
   private def joined(items: List[List[Token]], separator: Text): List[Token] = items match
     case head :: tail if !tail.nil => head + List(symbol(separator)) + joined(tail, separator)

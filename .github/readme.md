@@ -162,7 +162,9 @@ the overlay (or, for a Markdown document, the `imports` setting and the imports 
 make), then `scala`, `scala.Predef` and `java.lang` — a name which several entities answer to
 in the same scope is a caution and stays plain; and the typed tokens of a compiled fence, when
 the token is the name of what its type names. Amok's `` `#member` `` and `` `.member` `` name a
-member of the page's own entity.
+member of the page's own entity. A qualified name — in a signature, in inline code, or in a
+fence — is a link for each segment, and pointing at one underlines the name up to it, as on
+Amok's pages: `com`, then `com.example`, then `com.example.Foo`.
 
 ## Configuration files
 

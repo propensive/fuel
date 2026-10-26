@@ -37,7 +37,7 @@ import java.util.concurrent as juc
 import soundness.{Language as _, Token as _, *}
 
 import dysasymptotics.{linearAccess, linearSize}
-import pyrocosm.Inline
+import pyrocosm.{Inline, Token}
 import stenography.{Designator, Syntax}
 
 // The scope a page's references resolve in: the entity it is about and those enclosing it (so
@@ -116,7 +116,47 @@ class Resolver(api: Api, scope0: Scope) extends Linker:
   // as a term member is.
   private def destination(entity: Api.Entity): Inline.Destination = Inline.Destination.Local(entity.url)
 
-  def link(reference: Text): Optional[Inline.Destination] =
+  def link(reference: Text): Optional[Inline.Destination] = resolve(reference, true)
+
+  // A qualified name which resolves, as a token for each segment and each separator, each
+  // segment linked to what the name up to it resolves to in the same scope — so a prefix
+  // written through an export links where the export leads — and each token after the first
+  // chained to the name before it. A member of the page's own entity (`#title`), or a
+  // reference which does not resolve, is one token.
+  override def tokens(reference: Text): List[Token] =
+    val text: Text = reference.trim
+    val whole: Optional[Inline.Destination] = link(reference)
+
+    val qualified: Boolean = text.s.indexOf('.') > 0 || text.s.indexOf('#') > 0
+
+    if whole.absent || text.starts(t".") || text.starts(t"#") || !qualified
+    then List(Token.plain(reference).copy(link = whole))
+    else
+      // The segments with the separators between them, in order: `a.b#C` is `a`, `.`, `b`,
+      // `#`, `C`.
+      def hashed(segment: Text): List[Text] = segment.cut(t"#").flatMap(List(t"#", _)).skip(1)
+      val parts: List[Text] = text.cut(t".").map(hashed).flatMap(List(t".") + _).skip(1)
+
+      def recur(parts: List[Text], written: Text, first: Boolean): List[Token] = parts match
+        case part :: rest if part == t"." || part == t"#" =>
+          Token.plain(part).copy(chained = true) :: recur(rest, written + part, false)
+
+        case part :: rest =>
+          val prefix: Text = written + part
+
+          val target: Optional[Inline.Destination] =
+            if rest.nil then whole else resolve(prefix, false)
+
+          Token.plain(part).copy(link = target, chained = !first) :: recur(rest, prefix, false)
+
+        case _ =>
+          Nil
+
+      recur(parts, t"", true)
+
+  // A reference resolved, recording it as ambiguous when several entities answer it and
+  // `record` says so: a prefix of a name already resolved is not reported again.
+  private def resolve(reference: Text, record: Boolean): Optional[Inline.Destination] =
     val text: Text = reference.trim
 
     def plausible: Boolean =
@@ -137,7 +177,7 @@ class Resolver(api: Api, scope0: Scope) extends Linker:
         case many       =>
           // The same page reached by several routes is no ambiguity.
           if many.map(_.key).distinct.size == 1 then many.prim.let(destination) else
-            ambiguous.add(text)
+            if record then ambiguous.add(text)
             Unset
 
   // A token whose type is exactly what it names: a type's token, a stable value's, or the

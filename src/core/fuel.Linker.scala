@@ -57,6 +57,12 @@ trait Linker:
   // The references which named several entities, and so were not linked.
   def ambiguities: List[Text]
 
+  // A reference as the tokens of inline code: by default one token, linked as a whole; a
+  // linker which can, gives a qualified name a linked token for each segment, each after the
+  // first `chained` to the name before it.
+  def tokens(reference: Text): List[Token] =
+    List(Token.plain(reference).copy(link = link(reference)))
+
 object Linker:
   // Links nothing: what a document without an API is converted with.
   object none extends Linker:
@@ -71,4 +77,34 @@ object Linker:
     token.meta.lay(plain) { (meta: harlequin.Token.Meta) => plain.copy(link = linker.link(token.text, meta.tpe)) }
 
   def lines(linker: Linker, source: SourceCode): List[pyrocosm.Block.Line] =
-    source.lines.to[List].map { (line: List[harlequin.Token]) => pyrocosm.Block.Line(line.map(token(linker, _))) }
+    source.lines.to[List].map: (line: List[harlequin.Token]) =>
+      pyrocosm.Block.Line(chain(line.map(token(linker, _))))
+
+  // A line of code with each qualified name chained: a linked token, a `.` or `#`, and a linked
+  // token whose page is a member of the first's — `com`, `.`, `example` — continue the name the
+  // first began, however many segments it has. Pages nest as names do (`/api/com.example` is a
+  // member of `/api/com`), which is what says one segment qualifies the next.
+  def chain(tokens: List[Token]): List[Token] =
+    def path(token: Token): Optional[Text] = token.link match
+      case Inline.Destination.Local(path, _) => path
+      case _                                 => Unset
+
+    def nested(outer: Text, inner: Text): Boolean =
+      inner.starts(t"$outer.") || inner.starts(t"$outer~")
+
+    def member(outer: Token, inner: Token): Boolean =
+      path(outer).let { (outer: Text) => path(inner).let(nested(outer, _)) }.or(Unset).or(false)
+
+    def recur(tokens: List[Token], done: List[Token]): List[Token] = tokens match
+      case left :: separator :: right :: rest
+      if (separator.text == t"." || separator.text == t"#") && member(left, right) =>
+        val chained: Token = right.copy(chained = true)
+        recur(chained :: rest, separator.copy(chained = true) :: left :: done)
+
+      case head :: rest =>
+        recur(rest, head :: done)
+
+      case _ =>
+        done.reverse
+
+    recur(tokens, Nil)
