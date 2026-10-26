@@ -50,7 +50,8 @@ object Workspace:
       fixtures:  Optional[Text] = Unset,
       sources:   List[Text]     = Nil,
       overlays:  List[Text]     = Nil,
-      imports:   List[Text]     = Nil )
+      imports:   List[Text]     = Nil,
+      output:    Optional[Text] = Unset )
 
   def load(directory: Text)(using Cli, Interpreter, Configurator): Config =
     // The file's directory is `.pyrocosm/fuel`, so the root is three levels up.
@@ -73,6 +74,9 @@ object Workspace:
     val imports: List[Text] =
       ui.Imports().lay(Nil: List[Text]) { (text: Text) => text.cut(t":").filter(_ != t"") }
 
+    val output: Optional[Text] =
+      ui.Output().let { (entry: Text) => if entry.starts(t"/") then entry else t"$root/$entry" }
+
     Config
       ( root, entries(ui.Classpath()), entries(ui.Document()), options, ui.Session().or(false), fixtures,
-        entries(ui.Source()), entries(ui.Overlay()), imports )
+        entries(ui.Source()), entries(ui.Overlay()), imports, output )

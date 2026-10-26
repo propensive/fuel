@@ -273,24 +273,18 @@ variables reach it too.
   range, so that other ways of naming one can be tried there alone. Each frame goes to
   `Animation.of` as a `Slide.Detail`, and Pyrocosm derives the transition into each slide. Not yet: `scalaio.tel` as fixtures (its decks need the
   presentation layer, M7).
-- **M4 Terminal and fragments** (`show` and `blocks` done; the MCP server deferred). `fuel show <file>` sets one document in the
+- **M4 Terminal and fragments** (`show` done; `blocks` removed; the MCP server deferred). `fuel
+  show <file>` sets one document in the
   terminal through `TerminalRenderer(justify = true)`: paragraphs justified and hyphenated at
   the terminal's width, code highlighted, an animated block as its slides in sequence under
   `step n of m` markers (the renderer's own addition, since a terminal cannot step), problems
   after — compiled as `compile` compiles, so the page shows what the dashboard would. An
-  interactive view through `TerminalFrontend` (navigation of headings) can follow. `fuel
-  blocks <file>` writes the document's blocks as TEL, which is the fragment form other tools
-  consume, and the dashboard's `fallback` serves the same at `/blocks/<document>`. An MCP
+  interactive view through `TerminalFrontend` (navigation of headings) can follow. An MCP
   server (synesthesia, as fume's) answering `documents`, `document`, `search` over the corpus.
-  `fuel blocks <file>` writes a document's blocks in Pyrocosm's wire form, and the dashboard
-  serves the same at `/blocks/<section>/<document>` (`text/plain`, 404 for an unknown one):
-  a TEL stream of one document per block, encoded by the model's own codecs and separated by
-  `##` lines, which `Fragments.read` reads back to equal blocks. The separator is not optional:
-  a document's text ends without a newline, often on a literal's closing delimiter, which the
-  next document's first keyword would otherwise join, so that the literal never closes. A
-  diagnostic's location names the document as its compile did — absolutely for `blocks` and
-  `show`, relative to its section for the dashboard's corpus — which a consumer should not
-  rely on until locations are settled across sections.
+  `fuel blocks <file>` once wrote a document's blocks as a stream of TEL documents, and the
+  dashboard served the same at `/blocks/<section>/<document>`; both are gone, since `fuel
+  compile` writes every document and API page as BinTEL into the configured `output`
+  directory (see *Output* below), which is how another tool reads what Fuel rendered.
 - **M5 API documentation** (done, first cut; search is not). The model (`Api`, in a new
   `fuel-api` module) is every package, type and term of the project *and its dependencies*,
   keyed by its fully-qualified name, a type and its companion one entity and one page at
@@ -315,6 +309,33 @@ variables reach it too.
   - Overloads are kept (one entity, every signature); an exported type is an `alias` whose
     page is its target's; a member which overrides is documented by what it overrides.
   - Not yet: `Criteria` search; a dependency's own overlays; `fuel watch`.
+- **Output** (done, first cut). `fuel compile` writes its output, when an `output` directory is
+  configured, as BinTEL records under the schema derived from each record's type (`Output`):
+  each fence's output with what it left to its session, each document's prose with a sentinel
+  per fence, each document as compiled, each API page; `objects/<blake3>.fuel`, content-addressed
+  so that names never collide (two `document` directories ending alike, `Foo` and `foo` on a
+  case-insensitive filesystem, symbolic names), and `index.fuel`, the manifest, written last. A
+  document's prose and each of its fences is compiled only when the Blake3 key of its inputs is
+  not kept (`Cache`, `Store`): a fence's key is chained from the one before it in a session,
+  since a fragment sees what came before it, and leaves out the fence's line, so its output is
+  shifted (`Relocation`) and prose can change around it. A kept fence's effect on the session
+  is replayed from what was kept, its unit entered into the warm session only when a later
+  fence must be compiled after it. Found while building it:
+  - Pyrocosm's model could not be written as BinTEL: stratiform names a derived definition by
+    its type's simple name, so `Inline.Code` and `Block.Code` collided, and types a sum-typed
+    member as a `Reference` to a select, which is E217 (propensive/soundness#2319). Pyrocosm
+    renamed `Inline.Code` and `Inline.Figure` to `Snippet` and `Numeral`, declared the schema of
+    every hand-coded type, and types its sums at a member position as the specification does
+    (propensive/pyrocosm#76).
+  - Records are derived where Pyrocosm's package-level codecs are in scope (`Output.Fragment`
+    and its siblings), not at each use, since a derivation at a call site outside that scope
+    cannot derive the model.
+  - The classpath is hashed by its bytes (a jar once per size and modification time, in the
+    daemon); a hash of its API, by a LIRA analysis of its TASTy, is to replace it, so that a
+    change which leaves the API as it was compiles nothing.
+  - Not yet: the project's own sources are compiled on every compile, since the warm session
+    needs their symbols; skipping that when they are unchanged means loading the saved classes
+    into the session instead.
 - **M6 Outputs and languages.** A static site: Pyrocosm's `HtmlRenderer` and `PyrocosmPage`
   written to files, one page per document, with the stylesheet and no socket (a Pyrocosm
   feature: `WebFrontend` has the pieces, a batch writer does not exist). Languages beyond Scala

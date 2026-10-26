@@ -161,5 +161,5 @@ object Signatures:
       case kind =>
         modifiers + List(keyword(kind.keyword), plain(t" "), named) + clauses + result + parents
 
-  def code(tokens: List[Token]): Inline.Code = Inline.Code(Language.Scala, tokens)
+  def code(tokens: List[Token]): Inline.Snippet = Inline.Snippet(Language.Scala, tokens)
   def line(tokens: List[Token]): Block.Code = Block.Code(Language.Scala, List(Block.Line(tokens)))

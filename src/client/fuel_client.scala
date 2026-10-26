@@ -63,7 +63,6 @@ object ui:
   val Compile = Subcommand("compile", "compile the configured directories of Markdown documents")
   val Serve   = Subcommand("serve", "serve the compiled documents on the web until Ctrl+C")
   val Show    = Subcommand("show", "render one document in the terminal")
-  val Blocks  = Subcommand("blocks", "write one document's blocks as TEL, for another tool")
 
   // Each is read from the cascade every Pyrocosm tool shares: the flag, the `fuel.*` property,
   // the `FUEL_*` variable, the repository's `.pyrocosm/fuel/config.tel` and the user's. A
@@ -93,6 +92,11 @@ object ui:
 
   val Imports =
     Setting[Text](t"imports", t"a package or object whose members a document's references resolve through, as `soundness`")
+
+  val Output =
+    Setting[Text](t"output", t"a directory `fuel compile` writes its output into, as BinTEL, compiling only what changed")
+
+  val Force = Flag[Unit]("force", false, List('f'), "compile everything again, ignoring what the output directory keeps")
 
 // There is no `Boolean is Decodable in Text` given in distillate, so `Setting[Boolean]` reads
 // decode here: `true`, `yes` and `on` — case-insensitively — are true, and anything else false.
@@ -195,15 +199,10 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
       val operand: Optional[Text] = rest.map(_()).filter(!_.starts(t"-")).prim
       ambient(show(config, directory, operand))
 
-    // `fuel blocks <file>`: one document, compiled as `compile` would, as TEL.
-    case ui.Blocks() :: rest =>
-      val config: Workspace.Config = Workspace.load(directory)
-      val operand: Optional[Text] = rest.map(_()).filter(!_.starts(t"-")).prim
-      ambient(blocks(config, directory, operand))
-
     case ui.Compile() :: _ =>
       val config: Workspace.Config = Workspace.load(directory)
-      ambient(compile(config))
+      val force: Boolean = ui.Force().present
+      ambient(compile(config, force))
 
     case _ =>
       ambient:
@@ -211,7 +210,6 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
         Out.println(t"")
         Out.println(t"  compile    compile the configured directories of Markdown documents")
         Out.println(t"  show       render one document in the terminal")
-        Out.println(t"  blocks     write one document's blocks as TEL, for another tool")
         Out.println(t"  serve      serve the compiled documents on the web until Ctrl+C")
         Out.println(t"  about      show this tool's name, version and daemon")
         Out.println(t"  install    install shell tab-completions and the manpage")
@@ -224,7 +222,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
 private def width(using Environment): Int =
   safely(Environment.columns[Text].s.toInt).lay(120)(_.min(160))
 
-private def compile(config: Workspace.Config)(using Stdio, Environment)
+private def compile(config: Workspace.Config, force: Boolean)(using Stdio, Environment)
 :   Exit | NoDocuments.type | CompileFailed.type =
 
   if config.documents.nil then
@@ -249,32 +247,62 @@ private def compile(config: Workspace.Config)(using Stdio, Environment)
     // are then compiled without it (tokenized, unchecked): the documents are still produced.
     val checked: Boolean = !config.classpath.nil && missing.nil
 
+    // With an output directory, what the last compile kept is used wherever its inputs are
+    // unchanged, unless `--force` says to compile everything again.
+    val store: Optional[Store] = config.output.let(Store(_, force))
+
+    // The hash of the classpath: of its bytes, until the hash of its API is available.
+    val classpath: Text = Hashes.of(config.classpath.map(Server.hash)*)
+
+    // The key of everything a document or a page depends on beyond its own text: Fuel's
+    // version, the classpath, the project's sources, the compiler's options, whether documents
+    // are sessions and fragments checked, the imports references resolve through, and which
+    // entities the API has, which decides what links.
+    def environment(sources: Text, api: Api): Text =
+      val entities: Text = Hashes.of(List.from(api.entities.keys.toList.sortBy(_.s)).join(t"\n"))
+
+      Hashes.of
+        ( t"fuel ${Fuel.version}", classpath, sources, config.options.join(t"\n"),
+          if config.session then t"session" else t"single", if checked then t"checked" else t"tokenized",
+          config.imports.join(t"\n"), entities )
+
+    def regime(environment: Text, linker: Text -> Linker): Compilation.Regime =
+      // Each document is reported as it is done, since a corpus can take a long while.
+      Compilation.Regime
+        ( config.session,
+          config.fixtures,
+          (path: Text, problems: Int) =>
+            Out.println(t"fuel: $path: ${problems.show} ${if problems == 1 then t"problem" else t"problems"}"),
+          linker,
+          store,
+          (path: Text) => Hashes.of(environment, path) )
+
     // The API first, since the documents link to it: the sources compiled and saved, their
     // output and the dependencies walked, the overlays merged, and the pages of the project's
-    // own documented entities rendered with their examples compiled.
+    // own entities rendered with their examples compiled.
     @scala.caps.unsafe.untrackedCaptures
     var apiProblems: List[Block] = Nil
 
-    val outcome: Optional[(Corpus, Api, sci.Map[Text, List[Block]])] =
+    val outcome: Optional[(Corpus, Api, sci.Map[Text, List[Block]], Text)] =
       if !checked then Unset else
         try Checking.session(config.classpath, config.options): (checker: Checker) =>
-          val (api, pages, problems) = model(config, checker)
-          apiProblems = problems
+          val (api, problems, sources) = model(config, checker)
+          val key: Text = environment(sources, api)
+          val (pages, pageProblems) = rendered(api, checker, store, key)
+          apiProblems = problems + pageProblems
+          val linker: Text -> Linker = (_: Text) => Resolver(api, Scope.document(config.imports))
 
-          // Each document is reported as it is done, since a corpus can take a long while.
-          val regime: Compilation.Regime =
-            Compilation.Regime(config.session, config.fixtures, (path: Text, problems: Int) =>
-              Out.println(t"fuel: $path: ${problems.show} ${if problems == 1 then t"problem" else t"problems"}"),
-              (_: Text) => Resolver(api, Scope.document(config.imports)))
-
-          (Compilation.corpus(config.documents, checker, regime), api, pages)
+          (Compilation.corpus(config.documents, checker, regime(key, linker)), api, pages, key)
         catch case error: Throwable =>
           failures = failed(t"The fragments could not be compiled", error) :: failures
           Unset
 
+    val unchecked: Text = environment(t"", Api.empty)
+
     val corpus: Corpus =
       outcome.let(_(0)).or:
-        try Compilation.corpus(config.documents, Checker.tokenized, Compilation.Regime(config.session, config.fixtures)) catch case error: Throwable =>
+        try Compilation.corpus(config.documents, Checker.tokenized, regime(unchecked, (_: Text) => Linker.none))
+        catch case error: Throwable =>
           failures = failed(t"The documents could not be highlighted", error) :: failures
           Corpus(Nil)
 
@@ -283,6 +311,21 @@ private def compile(config: Workspace.Config)(using Stdio, Environment)
 
     corpus.sections.each: (section: Corpus.Section) =>
       Out.println(t"${section.name}: ${section.docs.size.show} documents from ${section.root}")
+
+    // The output: every document, by its section's directory relative to the project root,
+    // and the manifest.
+    store.let: (store: Store) =>
+      corpus.sections.each: (section: Corpus.Section) =>
+        val directory: Text =
+          if section.root.starts(t"${config.root}/") then section.root.skip(config.root.length + 1)
+          else section.root
+
+        section.docs.each(store.document(directory, _))
+
+      store.finish(Fuel.version, classpath, outcome.let(_(3)).or(unchecked))
+      val kept: Int = store.hits.get
+      val compiled: Int = store.misses.get
+      Out.println(t"fuel: wrote ${config.output.or(t"")}: ${kept.show} kept, ${compiled.show} compiled")
 
     if !api.entities.isEmpty then
       val own: Int = api.entities.values.count(_.own)
@@ -308,7 +351,7 @@ private def compile(config: Workspace.Config)(using Stdio, Environment)
 // merged, and the pages of the project's own documented entities rendered — their examples
 // compiled as a document's are — with every problem found on the way.
 private def model(config: Workspace.Config, checker: Checker)(using Stdio)
-:   (Api, sci.Map[Text, List[Block]], List[Block]) =
+:   (Api, List[Block], Text) =
 
   @scala.caps.unsafe.untrackedCaptures
   var problems: List[Block] = Nil
@@ -429,21 +472,49 @@ private def model(config: Workspace.Config, checker: Checker)(using Stdio)
   val (api, merging) = if overlays.nil then (inspected, Nil: List[Block]) else Overlay.merge(inspected, overlays)
   merging.each(report)
 
-  // The pages of the project's own documented entities, their examples compiled.
-  val pages: sci.Map[Text, List[Block]] =
-    sci.Map.from:
-      api.entities.values.filter { e => e.own && e.doc.present }.map: entity =>
-        val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Nil))
-        val resolver: Resolver = Resolver(api, scope)
-        val scala: Embedding.ScalaCode = Embedding.ScalaCode(checker, entity.doc.let(_.file).or(entity.key), false, Unset, resolver)
-        val blocks: List[Block] = ApiPages.page(api, entity, resolver, scope, List(scala, Embedding.JavaCode))
-        scala.problems.each(report)
-        resolver.ambiguities.each { (reference: Text) => report(Block.Diagnostic(Tone.Warning, Block.Location(entity.doc.let(_.file).or(entity.key), entity.doc.let(_.line)), List(Block.paragraph(t"`$reference` names more than one entity, so it is not linked; qualify it.")))) }
-        (entity.key, blocks)
+  if !overlays.nil then Out.println(t"fuel: ${overlays.size.show} overlays")
 
-  if !overlays.nil then Out.println(t"fuel: ${overlays.size.show} overlays, ${pages.size.show} pages")
+  // The sources, as one hash: their paths and their texts.
+  val hashed: Text = Hashes.of(sources.bind { (path: Text, text: Text) => List(path, text) }*)
 
-  (api, pages, problems.reverse)
+  (api, problems.reverse, hashed)
+
+// The pages of the project's own entities, each rendered — its examples compiled as a
+// document's are, its references resolved in its own scope — unless the output keeps it under
+// the key of its inputs: everything the compile depends on (`environment`), the entity, and the
+// members its page lists. Their problems are kept with them.
+private def rendered(api: Api, checker: Checker, store: Optional[Store], environment: Text)
+:   (sci.Map[Text, List[Block]], List[Block]) =
+
+  @scala.caps.unsafe.untrackedCaptures
+  var problems: List[Block] = Nil
+
+  def render(entity: Api.Entity): (List[Block], List[Block]) =
+    val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Nil))
+    val resolver: Resolver = Resolver(api, scope)
+    val place: Text = entity.doc.let(_.file).or(entity.key)
+    val scala: Embedding.ScalaCode = Embedding.ScalaCode(checker, place, false, Unset, resolver)
+    val blocks: List[Block] = ApiPages.page(api, entity, resolver, scope, List(scala, Embedding.JavaCode))
+
+    val ambiguous: List[Block] = resolver.ambiguities.map: (reference: Text) =>
+      val text: Text = t"`$reference` names more than one entity, so it is not linked; qualify it."
+      Block.Diagnostic(Tone.Warning, Block.Location(place, entity.doc.let(_.line)), List(Block.paragraph(text)))
+
+    (blocks, scala.problems + ambiguous)
+
+  val own: scala.List[Api.Entity] = api.entities.values.filter(_.own).toList.sortBy(_.key.s)
+
+  val pages: scala.List[(Text, List[Block])] = own.map: (entity: Api.Entity) =>
+    val (blocks, raised) = store.lay(render(entity)): (store: Store) =>
+      val members: Text = api.children(entity).map(_.toString.tt).join(t"\n")
+      val key: Text = Hashes.of(environment, t"page", entity.toString.tt, members)
+      val page: Output.Page = store.page(key, entity.key, entity.path)(render(entity))
+      (page.blocks, page.problems)
+
+    problems = raised.reverse + problems
+    (entity.key, blocks)
+
+  (sci.Map.from(pages), problems.reverse)
 
 // One document set in the terminal: its blocks at the terminal's width, paragraphs justified
 // and hyphenated, code highlighted, an animated block as its steps in sequence; its problems
@@ -478,29 +549,6 @@ private def show(config: Workspace.Config, directory: Text, operand: Optional[Te
           if doc.problems.nil then Exit.Ok else CompileFailed
 
 private def blank: Teletype = e""
-
-// One document's blocks as TEL, one TEL document per block (see `Fragments`), on standard
-// output: what Flame or any other tool reads to show the document as Fuel renders it.
-private def blocks(config: Workspace.Config, directory: Text, operand: Optional[Text])
-  ( using Stdio )
-:   Exit | UsageError.type | NoDocument.type =
-
-  operand match
-    case Unset =>
-      Out.println(t"fuel: usage: fuel blocks <file>")
-      UsageError
-
-    case operand: Text =>
-      val path: Text = absolute(directory, operand)
-
-      compiled(config, path) match
-        case Unset =>
-          Out.println(t"fuel: $path could not be read")
-          NoDocument
-
-        case doc: Doc =>
-          Out.print(Fragments.tel(doc.blocks))
-          Exit.Ok
 
 // A path as the command line gives it, from the directory `fuel` was run in.
 private def absolute(directory: Text, operand: Text): Text =

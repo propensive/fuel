@@ -47,18 +47,68 @@ object Doc:
       checker: Checker                  = Checker.tokenized,
       session: Boolean                  = false,
       fixture: Optional[(Text, Text)]   = Unset,
-      linker:  Linker                   = Linker.none )
+      linker:  Linker                   = Linker.none,
+      cache:   Optional[Cache]          = Unset,
+      base:    Text                     = t"" )
   :   Doc =
 
-    val scala: Embedding.ScalaCode = Embedding.ScalaCode(checker, path, session, fixture, linker)
-    val blocks: List[Block] = Blocks.of(Parser.parse(text), List(scala, Embedding.JavaCode), linker)
+    cache match
+      case cache: Cache =>
+        kept(path, text, checker, session, fixture, linker, cache, base)
 
-    // A reference which named several entities is a caution: it is shown unlinked.
-    val ambiguous: List[Block] =
-      linker.ambiguities.map: (reference: Text) =>
-        Block.Diagnostic(Tone.Warning, Block.Location(path), List(Block.paragraph(t"`$reference` names more than one entity, so it is not linked; qualify it.")))
+      case _ =>
+        val scala = Embedding.ScalaCode(checker, path, session, fixture, linker)
+        val embeddings: List[Embedding] = List(scala, Embedding.JavaCode)
+        val blocks: List[Block] = Blocks.of(Parser.parse(text), embeddings, linker)
+        val problems: List[Block] = scala.problems + ambiguous(path, linker)
+        Doc(path, Blocks.title(blocks).or(filename(path)), blocks, problems)
 
-    Doc(path, Blocks.title(blocks).or(filename(path)), blocks, scala.problems + ambiguous)
+  // A reference which named several entities is a caution: it is shown unlinked.
+  private def ambiguous(path: Text, linker: Linker): List[Block] =
+    linker.ambiguities.map: (reference: Text) =>
+      val text: Text = t"`$reference` names more than one entity, so it is not linked; qualify it."
+      Block.Diagnostic(Tone.Warning, Block.Location(path), List(Block.paragraph(text)))
+
+  // A document compiled in two parts, each kept by the key of its own inputs: its prose, with a
+  // sentinel where each fence is — keyed by that prose, unlinked, and the imports its fences
+  // make, which its references resolve through — and its fences, each kept by `ScalaCode`;
+  // then the prose filled with the fences' output.
+  private def kept
+    ( path:    Text,
+      text:    Text,
+      checker: Checker,
+      session: Boolean,
+      fixture: Optional[(Text, Text)],
+      linker:  Linker,
+      cache:   Cache,
+      base:    Text )
+  :   Doc =
+
+    val markdown: Markdown of Layout = Parser.parse(text)
+    val fences: List[Blocks.Fence] = Blocks.fences(markdown)
+
+    val imports: List[Text] = fences.bind: (fence: Blocks.Fence) =>
+      fence.content.cut(t"\n").filter(_.trim.starts(t"import ")).map(_.trim)
+
+    val unlinked: List[Block] = Blocks.of(markdown, List(Blocks.sentinels()), Linker.none)
+    val shape: Text = Hashes.of(Output.Prose.encode(Output.Prose(unlinked, Nil)))
+    val key: Text = Hashes.of(base, t"prose", shape, imports.join(t"\n"))
+
+    val prose: Output.Prose = cache.prose(key).or:
+      linker.learn(imports)
+      val blocks: List[Block] = Blocks.of(markdown, List(Blocks.sentinels()), linker)
+      val prose: Output.Prose = Output.Prose(blocks, ambiguous(path, linker))
+      cache.prose(key, prose)
+      prose
+
+    val scala = Embedding.ScalaCode(checker, path, session, fixture, linker, cache, base)
+    val embeddings: List[Embedding] = List(scala, Embedding.JavaCode)
+
+    val outputs: List[List[Block]] = fences.map: (fence: Blocks.Fence) =>
+      Blocks.fence(fence.info, fence.content, fence.line, embeddings)
+
+    val blocks: List[Block] = Blocks.fill(prose.blocks, outputs)
+    Doc(path, Blocks.title(blocks).or(filename(path)), blocks, scala.problems + prose.problems)
 
   // The last segment of a path, without a `.md` extension.
   def filename(path: Text): Text =

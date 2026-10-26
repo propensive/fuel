@@ -80,6 +80,16 @@ object Server:
     case Some(blocks) => blocks
     case _            => Unset
 
+  private val hashes: juc.ConcurrentHashMap[(Text, Long, Long), Text] = juc.ConcurrentHashMap()
+
+  // A classpath entry's hash, computed once per size and modification time of the entry.
+  def hash(entry: Text): Text =
+    val path = java.nio.file.Path.of(entry.s).nn
+
+    if !java.nio.file.Files.isRegularFile(path) then Hashes.path(entry) else
+      val modified: Long = java.nio.file.Files.getLastModifiedTime(path).nn.toMillis
+      hashes.computeIfAbsent((entry, java.nio.file.Files.size(path), modified), _ => Hashes.path(entry)).nn
+
   // A jar's model, walked once per version of the jar.
   def jar(path: Text)(walk: => Api): Api =
     val modified: Long = java.nio.file.Files.getLastModifiedTime(java.nio.file.Path.of(path.s)).nn.toMillis

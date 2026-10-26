@@ -34,6 +34,7 @@ package fuel
 
 import soundness.{Language as _, Token as _, *}
 
+import dysasymptotics.{linearAccess, linearSize}
 import pyrocosm.{Block, Inline, Language, Token}
 
 // A Markdown document as Pyrocosm blocks, node for node: Pyrocosm's own conversion
@@ -62,7 +63,7 @@ object Blocks:
     case Inline.Strong(content)     => plain(content)
     case Inline.Toned(_, content)   => plain(content)
     case Inline.Link(_, content)    => plain(content)
-    case Inline.Code(_, tokens)     => tokens.map(_.text).join(t"")
+    case Inline.Snippet(_, tokens)     => tokens.map(_.text).join(t"")
     case _                          => t""
 
   private def all(nodes: List[Layout], embeddings: List[Embedding], linker: Linker): List[Block] = nodes match
@@ -81,12 +82,16 @@ object Blocks:
 
     first(Parser.parse(text).children)
 
+  // Inline code, whose one token links when the linker says it is a reference.
+  private def snippet(code: Text, linker: Linker): Inline =
+    Inline.Snippet(Language.Plain, List(Token.plain(code).copy(link = linker.link(code))))
+
   // Inline code is a reference when the linker says so: then its one token links.
   private def prose(node: Prose, linker: Linker): Inline = node match
     case Prose.Textual(text)       => Inline.Textual(text)
     case Prose.Emphasis(children*) => Inline.Emphasis(phrasing(List.from(children), linker))
     case Prose.Strong(children*)   => Inline.Strong(phrasing(List.from(children), linker))
-    case Prose.Code(code)          => Inline.Code(Language.Plain, List(Token.plain(code).copy(link = linker.link(code))))
+    case Prose.Code(code)          => snippet(code, linker)
     case Prose.Softbreak           => Inline.Textual(t" ")
     case Prose.Linebreak           => Inline.Break()
     case Prose.HtmlInline(_)       => Inline.Textual(t"")
@@ -98,12 +103,70 @@ object Blocks:
       Inline.Link(Inline.Destination.External(destination), phrasing(List.from(content), linker))
 
   // The first embedding to answer a fence, else the plain rendering.
-  private def fence(info: List[Text], content: Text, line: Int, embeddings: List[Embedding])
+  def fence(info: List[Text], content: Text, line: Int, embeddings: List[Embedding])
   :   List[Block] =
 
     embeddings match
       case head :: tail => head.embed(info, content, line).or(fence(info, content, line, tail))
       case _            => List(Embedding.plain(info, content, line))
+
+  // A fenced block of a document: its info string, its content and its line (from zero).
+  case class Fence(info: List[Text], content: Text, line: Int)
+
+  // Every fenced block of a document, in the order its conversion meets them: depth first,
+  // through block quotes and list items.
+  def fences(markdown: Markdown of Layout): List[Fence] = gathered(markdown.children)
+
+  private def gathered(nodes: List[Layout]): List[Fence] = nodes match
+    case head :: tail => within(head) + gathered(tail)
+    case _            => Nil
+
+  private def within(node: Layout): List[Fence] = node match
+    case Layout.CodeBlock(line, info, content)  => List(Fence(info, content, line.n0))
+    case Layout.BlockQuote(_, layouts*)         => gathered(List.from(layouts))
+    case Layout.BulletList(_, _, items*)        => listed(List.from(items))
+    case Layout.OrderedList(_, _, _, _, items*) => listed(List.from(items))
+    case _                                      => Nil
+
+  private def listed(items: List[List[Layout]]): List[Fence] = items match
+    case head :: tail => gathered(head) + listed(tail)
+    case _            => Nil
+
+  // An embedding which answers every fence with its sentinel, numbered in the order the
+  // conversion meets them, which is the order of `fences`: a document's prose, with a place for
+  // each fence's output.
+  def sentinels(): Embedding = new Embedding:
+    private var index: Int = 0
+
+    def embed(info: List[Text], content: Text, fence: Int): Optional[List[Block]] =
+      val sentinel: Block = Output.sentinel(index)
+      index += 1
+      List(sentinel)
+
+  // A document's prose with each sentinel replaced by its fence's output.
+  def fill(blocks: List[Block], outputs: List[List[Block]]): List[Block] = blocks match
+    case head :: tail => filled(head, outputs) + fill(tail, outputs)
+    case _            => Nil
+
+  private def filled(block: Block, outputs: List[List[Block]]): List[Block] = block match
+    case Block.Code(Output.fence, _, _, index: Int, _) =>
+      val empty: List[Block] = Nil
+      outputs.skip(index).prim.or(empty)
+
+    case Block.Quotation(content) =>
+      List(Block.Quotation(fill(content, outputs)))
+
+    case Block.Group(content) =>
+      List(Block.Group(fill(content, outputs)))
+
+    case Block.Listing(ordered, items) =>
+      val refilled: List[Block.Item] = items.map: (item: Block.Item) =>
+        item.copy(content = fill(item.content, outputs))
+
+      List(Block.Listing(ordered, refilled))
+
+    case other =>
+      List(other)
 
   // Inline HTML (an HTML comment the parser read inline, say) is for the author, not the
   // reader: a paragraph of nothing else is no paragraph.

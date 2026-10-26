@@ -55,12 +55,22 @@ object Embedding:
   // scope from then on, and a fragment costs its own size rather than the whole document's.
   // `restart` begins again. An object opens at column zero, so a diagnostic's column is the
   // fragment's own and only its line shifts.
+  //
+  // With a `cache`, each fence's output is kept by a key of its inputs — `base`, which stands
+  // for everything the whole compile depends on and this document's path, with the fence's own
+  // info string and content and, in a session, the key of the fence before it (the fixture's
+  // first), or outside one, the text of the fragments it follows — and a fence whose key is
+  // kept is not compiled: its output is shifted to the fence's line, and what it left to the
+  // session is taken from what was kept, its unit being entered into the warm session only if
+  // a later fence must be compiled after it.
   final class ScalaCode
     ( checker: Checker,
       path:    Text,
       session: Boolean                = false,
       fixture: Optional[(Text, Text)] = Unset,
-      linker:  Linker                 = Linker.none )
+      linker:  Linker                 = Linker.none,
+      cache:   Optional[Cache]        = Unset,
+      base:    Text                   = t"" )
   extends Embedding:
 
     // A fragment's lines as the model's, each typed token linked to what it names.
@@ -81,6 +91,36 @@ object Embedding:
     private var prepared: Boolean = false
     private var count: Int = 0
     private var problems0: List[Block] = Nil
+
+    // The units of kept fragments not yet entered into the session, newest first, and the key
+    // of the last fence in a session's chain.
+    private var pending: List[(Text, Text)] = Nil
+    private var chain: Text = Hashes.of(base, t"fixture", fixture.let(_(1)).or(t""))
+
+    // The kept fragments' units, entered before a fence is compiled after them.
+    private def flush(): Unit =
+      pending.reverse.each { (name: Text, unit: Text) => checker.enter(name, unit) }
+      pending = Nil
+
+    // What a fragment left to the session, as `history` grew from `before`: whether it joined
+    // it as an object, with the names it defines, and the imports it left.
+    private def left(before: List[Joined]): (Boolean, List[Text], List[Text]) =
+      val none: List[Text] = Nil
+
+      history match
+        case Joined.Object(_, defined, imports) :: rest if rest.size == before.size => (true, defined, imports)
+        case Joined.Imports(lines) :: rest if rest.size == before.size              => (false, none, lines)
+        case _                                                                      => (false, none, none)
+
+    // A kept fragment's effect on the session, as if it had been compiled: its object, whose
+    // unit is entered when a later fence is compiled, or its imports.
+    private def rejoin(fragment: Output.Fragment, unit: Text => Text, index: Int): Unit =
+      if session then
+        if fragment.joined then
+          history = Joined.Object(objectName(index), fragment.defined, fragment.imports) :: history
+          if checker.compiles then pending = (t"${objectName(index)}.scala", unit(fragment.follow)) :: pending
+        else if !fragment.imports.nil then
+          history = Joined.Imports(fragment.imports) :: history
 
     def problems: List[Block] = problems0.reverse
 
@@ -190,7 +230,20 @@ object Embedding:
         fixture.let: (entry: (Text, Text)) =>
           val (fixturePath, text) = entry
           val framed: Framing = Framing(t"object ${objectName(0)} {\n", t"\n}", 0, Unset)
+          val kept: Optional[Output.Fragment] = cache.let(_.fragment(chain))
 
+          kept.let: (fragment: Output.Fragment) =>
+            rejoin(fragment.copy(follow = text), framed.unit, 0)
+            problems0 = fragment.problems.reverse + problems0
+
+          if kept.absent then
+            val before: List[Block] = problems0
+            compileFixture(fixturePath, text, framed)
+            val (joined, defined, imports) = left(Nil)
+            val raised: List[Block] = problems0.keep(problems0.size - before.size).reverse
+            cache.let(_.fragment(chain, Output.Fragment(Nil, raised, joined, defined, imports, text, 0)))
+
+    private def compileFixture(fixturePath: Text, text: Text, framed: Framing): Unit =
           highlight(t"scala", text, framed, Preamble.Mode.Typecheck, checker.compiles) match
             case source: SourceCode =>
               val errors: List[harlequin.Diagnostic] =
@@ -239,6 +292,7 @@ object Embedding:
     def embed(info: List[Text], content: Text, fence: Int): Optional[List[Block]] =
       if info.prim != t"scala" && !info.has(t"fuel") then Unset else
         prepare()
+        val before: List[Block] = problems0
 
         val (header, code0) =
           if info.has(t"fuel") then Preamble.split(content) else (Unset, content)
@@ -297,11 +351,39 @@ object Embedding:
           else if code.trim == t"" then described
           else described + List(Preamble.Frame(code))
 
-        if !frames.nil then animated(frames, preamble, language, framed, mode, checked, id, start)
-        else if language == t"scala" then embedPlain(code, preamble, framed, mode, checked, id, start)
-        else List(Block.Code(Language(language), highlight(language, code, Framing(t"", t"", 0, Unset), mode, false) match
-          case source: SourceCode => linked(source)
-          case _                  => lines(code), notes(code, preamble.marks), start))
+        def compile(): List[Block] =
+          if !frames.nil then animated(frames, preamble, language, framed, mode, checked, id, start)
+          else if language == t"scala" then embedPlain(code, preamble, framed, mode, checked, id, start)
+          else List(Block.Code(Language(language), highlight(language, code, Framing(t"", t"", 0, Unset), mode, false) match
+            case source: SourceCode => linked(source)
+            case _                  => lines(code), notes(code, preamble.marks), start))
+
+        // The fence's key: in a session, chained from the fence before it; outside one, with
+        // the text of what it follows. Its line is not part of it, since its output moves.
+        val key: Text =
+          val own: Text = info.join(t" ")
+          if session then Hashes.of(chain, own, content)
+          else Hashes.of(base, own, content, preamble.follows.map(fragment(_)).join(t"\u0000"))
+
+        if session then chain = key
+
+        cache.let(_.fragment(key)) match
+          case kept: Output.Fragment =>
+            val delta: Int = fence - kept.line
+            problems0 = Relocation.shift(kept.problems, path, delta).reverse + before
+            fragments = (id, kept.follow) :: fragments
+            rejoin(kept, framed.unit, count)
+            Relocation.shift(kept.blocks, path, delta)
+
+          case _ =>
+            flush()
+            val history0: List[Joined] = history
+            val blocks: List[Block] = compile()
+            val (joined, defined, imports) = left(history0)
+            val raised: List[Block] = problems0.keep(problems0.size - before.size).reverse
+            val record = Output.Fragment(blocks, raised, joined, defined, imports, fragment(id), fence)
+            cache.let(_.fragment(key, record))
+            blocks
 
     // One fragment highlighted in a language: Scala through the checker (in its framing, as
     // far as its mode asks, when checking), Java through harlequin alone, another language

@@ -65,7 +65,7 @@ object ApiPages:
 
     val removed: List[Block] = doc.let(_.until).lay(Nil: List[Block]): (until: Api.Until) =>
       val replacement: List[Inline] = until.replacement.lay(Nil: List[Inline]): (name: Text) =>
-        val link: Inline = api.find(Designator(name)).lay(Inline.Code(pyrocosm.Language.Scala, List(pyrocosm.Token(name, pyrocosm.Token.Accent.Term)))):
+        val link: Inline = api.find(Designator(name)).lay(Inline.Snippet(pyrocosm.Language.Scala, List(pyrocosm.Token(name, pyrocosm.Token.Accent.Term)))):
           (e: Api.Entity) => Inline.Link(Inline.Destination.Local(e.url), Inline.text(name))
         List(Inline.Textual(t"; use "), link, Inline.Textual(t" instead"))
 

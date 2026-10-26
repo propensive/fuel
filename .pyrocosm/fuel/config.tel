@@ -13,6 +13,9 @@ source src/core
 overlay doc/api
 imports soundness
 
+# The output, as BinTEL: compiled again only where its inputs change.
+output dist/doc
+
 classpath out/fuel/launcher/assembly.dest/out.jar
 
 scalac-option -Zalias-captures

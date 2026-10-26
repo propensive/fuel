@@ -492,14 +492,129 @@ error oops
 
       . assert(_ == (1, true))
 
-    suite(m"Fragments"):
-      test(m"a document's blocks round-trip through their TEL wire form"):
+    suite(m"Incremental compilation"):
+      // A checker which counts the fragments it is asked to check.
+      class Counting(inner: Checker) extends Checker:
+        var checks: Int = 0
+
+        def check(code: Text, mode: Preamble.Mode, context: Optional[harlequin.Scala.Context]): SourceCode =
+          checks += 1
+          inner.check(code, mode, context)
+
+        def enter(name: Text, unit: Text): Boolean = inner.enter(name, unit)
+        def build(sources: Map[Text, Text], output: Text): List[Notice] = inner.build(sources, output)
+        def context: Optional[dotty.tools.dotc.core.Contexts.Context] = inner.context
+        def compiles: Boolean = inner.compiles
+
+      def document(b: Text, prose: Text = t""): Text =
+        t"# Fragments\n\n${prose}Some prose.\n\n```scala\nval a = 1\n```\n\nMore prose.\n\n```scala\n$b\n```\n\n```scala\nval c = 3\n```\n"
+
+      // The checks a second compile makes, after a first of `first`, and the two compiles'
+      // documents.
+      def twice(first: Text, second: Text, session: Boolean, path: Text): (Int, Doc, Doc) =
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          val cache: Cache = Cache.Transient()
+          val counting = Counting(checker)
+          val one: Doc = Doc.parse(path, first, counting, session, Unset, Linker.none, cache, t"base")
+          counting.checks = 0
+          val two: Doc = Doc.parse(path, second, counting, session, Unset, Linker.none, cache, t"base")
+          (counting.checks, one, two)
+
+      def starts(doc: Doc): List[Optional[Int]] = doc.blocks.bind:
+        case code: Block.Code => List(code.start)
+        case _                => Nil
+
+      test(m"an unchanged document is compiled from what was kept, to the same blocks"):
+        val (checks, one, two) = twice(document(t"val b = a + 1"), document(t"val b = a + 1"), true, t"doc/s1.md")
+        (checks, one.blocks == two.blocks, one.problems == two.problems)
+      . assert(_ == (0, true, true))
+
+      test(m"a change of prose compiles no fence, and the fences' lines move with them"):
+        val (checks, one, two) =
+          twice(document(t"val b = a + 1"), document(t"val b = a + 1", t"Two lines\nof prose.\n\n"), true, t"doc/s2.md")
+
+        (checks, starts(two) == starts(one).map(_.let(_ + 3)), Blocks.plain(two.blocks.at(Sec).lay(Nil) { case Block.Paragraph(c) => c; case _ => Nil }))
+      . assert(_ == (0, true, t"Two lines of prose."))
+
+      test(m"in a session, a changed fence is compiled with those after it, and not those before"):
+        twice(document(t"val b = a + 1"), document(t"val b = a + 2"), true, t"doc/s3.md")(0)
+      . assert(_ == 2)
+
+      test(m"outside a session, a changed fence is compiled alone"):
+        twice(document(t"val b = 2"), document(t"val b = 3"), false, t"doc/s4.md")(0)
+      . assert(_ == 1)
+
+      test(m"a document compiled through a cache has the blocks it has without one"):
+        val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
+        val text: Text = Text(java.nio.file.Files.readString(java.nio.file.Path.of(s"$here/doc/markdown.md")).nn)
+
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          val plain: Doc = Doc.parse(t"markdown.md", text, checker, true)
+          val kept: Doc = Doc.parse(t"markdown.md", text, checker, true, Unset, Linker.none, Cache.Transient(), t"base")
+          (plain.blocks == kept.blocks, plain.problems.size == kept.problems.size)
+      . assert(_ == (true, true))
+
+    suite(m"Output directory"):
+      val fragment: Output.Fragment =
+        Output.Fragment(List(Block.paragraph(t"code")), Nil, true, List(t"x"), Nil, t"val x = 1", 4)
+
+      val prose: Output.Prose = Output.Prose(List(Block.paragraph(t"prose"), Output.sentinel(0)), Nil)
+
+      def directory(): Text = Text(java.nio.file.Files.createTempDirectory("fuel-output").nn.toString)
+
+      def objects(output: Text): Int =
+        java.nio.file.Files.list(java.nio.file.Path.of(output.s, "objects")).nn.count.toInt
+
+      test(m"what a compile keeps, the next reads back"):
+        val output = directory()
+        val first = Store(output, false)
+        first.fragment(t"k1", fragment)
+        first.prose(t"k2", prose)
+        first.finish(t"1.0", t"classpath", t"environment")
+        val second = Store(output, false)
+        (second.fragment(t"k1") == fragment, second.prose(t"k2") == prose, second.hits.get)
+      . assert(_ == (true, true, 2))
+
+      test(m"a record the next compile does not use is deleted"):
+        val output = directory()
+        val first = Store(output, false)
+        first.fragment(t"k1", fragment)
+        first.prose(t"k2", prose)
+        first.finish(t"1.0", t"classpath", t"environment")
+        val second = Store(output, false)
+        second.fragment(t"k1")
+        second.finish(t"1.0", t"classpath", t"environment")
+        (objects(output), Store(output, false).prose(t"k2").absent)
+      . assert(_ == (1, true))
+
+      test(m"`--force` keeps nothing"):
+        val output = directory()
+        val first = Store(output, false)
+        first.fragment(t"k1", fragment)
+        first.finish(t"1.0", t"classpath", t"environment")
+        Store(output, true).fragment(t"k1").absent
+      . assert(_ == true)
+
+      test(m"the manifest names its inputs, and each document by its section"):
+        val output = directory()
+        val store = Store(output, false)
+        store.document(t"doc/modules", Doc(t"json.md", t"JSON", List(Block.paragraph(t"text"))))
+        store.finish(t"1.0", t"classpath", t"environment")
+
+        Store.manifest(output).let: (manifest: Output.Manifest) =>
+          (manifest.fuel, manifest.classpath, manifest.documents.map { (d: Output.Manifest.Document) => (d.section, d.path, d.title) })
+      . assert(_ == (t"1.0", t"classpath", List((t"doc/modules", t"json.md", t"JSON"))))
+
+    suite(m"Output"):
+      test(m"a compiled document's blocks round-trip through BinTEL as a fragment's output"):
         val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
 
-        Compilation.document(t"$here/doc/markdown.md").lay(false): (doc: Doc) =>
-          Fragments.read(Fragments.tel(doc.blocks)) == doc.blocks
+        Compilation.document(t"$here/doc/markdown.md").lay(t"unreadable"): (doc: Doc) =>
+          val fragment: Output.Fragment = Output.Fragment(doc.blocks, doc.problems, true, List(t"x"), List(t"import a.*"), t"val x = 1", 7)
+          val data: Data = Output.Fragment.encode(fragment)
+          Output.Fragment.decode(data).lay(t"undecodable") { (back: Output.Fragment) => if back == fragment then t"same" else t"different" }
 
-      . assert(_ == true)
+      . assert(_ == t"same")
 
     suite(m"Inspection"):
       // A project's own source, compiled in a session on the suite's classpath and saved, as

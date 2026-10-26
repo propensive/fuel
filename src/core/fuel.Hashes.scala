@@ -32,20 +32,49 @@
                                                                                                   */
 package fuel
 
-import soundness.{Language as _, Token as _, *}
+import java.nio.file as jnf
 
-import codepages.utf8Codepage
-import pyrocosm.Block
-import strategies.throwUnsafely
+import scala.jdk.CollectionConverters.*
 
-// A document's blocks in Pyrocosm's wire form, for another tool to show: a stream of TEL
-// documents, one block each (a TEL document is one record, and a source of several reads back
-// as a list of them), each encoded by the model's own codecs, so that what is read back is the
-// blocks Fuel rendered — highlighting, notes, numbering, animation and diagnostics included.
-// The documents are separated by `##` lines, as a TEL stream's are: a document's text ends
-// without a newline, often on a literal's closing delimiter, which the next document's first
-// keyword would otherwise join.
-object Fragments:
-  def tel(blocks: List[Block]): Text = blocks.map(_.in[Tel].show).join(t"", t"\n##\n", t"\n")
+import soundness.*
 
-  def read(text: Text): List[Block] = text.read[List[Tel]].map(_.as[Block])
+import alphabets.hexLowerCase
+import providers.soundnessProvider
+
+// The hashes the output is keyed by: Blake3, as TEL's own value hashes are, written as hex. A
+// key is the hash of the hashes and texts it depends on, each in its place, so that a change to
+// any of them changes it; a classpath's is the hash of each entry's bytes — a jar's, or a
+// directory's files, by their paths — in the classpath's order. In time a classpath will be
+// hashed by its API (a LIRA analysis of its TASTy), so that a change which leaves the API as it
+// was recompiles nothing; until that is available, its bytes stand for it.
+object Hashes:
+  // The parts as one text, each prefixed with its length, so that no two lists of parts make
+  // the same text.
+  def of(parts: Text*): Text =
+    val prefixed: Text = List(parts*).map { (part: Text) => t"${part.length.show}:$part" }.join(t"")
+    prefixed.digest[Blake3].serialize[Hex]
+
+  def of(data: Data): Text = data.digest[Blake3].serialize[Hex]
+
+  // A file's bytes, or a directory's files — each by its path relative to the directory and
+  // its bytes, in the order of their paths — or nothing for a path which is neither.
+  def path(entry: Text): Text =
+    val root: jnf.Path = jnf.Path.of(entry.s).nn
+
+    if jnf.Files.isRegularFile(root) then of(Array.unsafeFrozen(jnf.Files.readAllBytes(root).nn))
+    else if !jnf.Files.isDirectory(root) then of(t"absent", entry)
+    else
+      val stream = jnf.Files.walk(root).nn
+
+      val files: scala.List[jnf.Path] =
+        try stream.iterator.nn.asScala.filter(jnf.Files.isRegularFile(_)).toList.sortBy(_.toString)
+        finally stream.close()
+
+      val parts: scala.List[Text] =
+        files.flatMap: (file: jnf.Path) =>
+          val bytes: Data = Array.unsafeFrozen(jnf.Files.readAllBytes(file).nn)
+          scala.List(root.relativize(file).nn.toString.tt, of(bytes))
+
+      of(parts*)
+
+  def classpath(entries: List[Text]): Text = of(entries.map(path)*)
