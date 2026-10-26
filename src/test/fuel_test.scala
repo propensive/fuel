@@ -877,6 +877,59 @@ entry .nowhere   nothing of the sort
         (tokens.map(_.text).join(t""), tokens.seek(_.text == t"Doc").let(_.link))
       . assert(_ == (t"def parse(text: String): Doc", Inline.Destination.Local(t"/api/sample.Doc")))
 
+      val qualifiedSample: List[(Text, Optional[Text], Boolean)] =
+        List
+          ( (t"sample", t"/api/sample", false),
+            (t".", Unset, true),
+            (t"Doc", t"/api/sample.Doc", true) )
+
+      def described(tokens: List[Token]): List[(Text, Optional[Text], Boolean)] =
+        tokens.map: (token: Token) =>
+          val path: Optional[Text] = token.link match
+            case Inline.Destination.Local(path, _) => path
+            case _                                 => Unset
+
+          (token.text, path, token.chained)
+
+      test(m"a qualified designator in a signature links each segment, chained to the one before"):
+        val designator = stenography.Designator(t"sample.Doc")
+        described(Signatures.designator(designator, Tests.this.api0, Scope.document(Nil)))
+
+      . assert(_ == qualifiedSample)
+
+      test(m"a qualified reference in prose is a link for each segment"):
+        described(resolver(Scope.document(Nil)).tokens(t"sample.Doc"))
+
+      . assert(_ == qualifiedSample)
+
+      test(m"a leaf, a member of the page's own entity, and what does not resolve are one token"):
+        val doc: Api.Entity = Tests.this.api0(t"sample.Doc").or(Api.Entity(Unset, t"?"))
+        val imported: Resolver = resolver(Scope.document(List(t"sample")))
+        val own: Resolver = resolver(Scope.of(doc, Nil))
+
+        ( imported.tokens(t"Doc").size,
+          own.tokens(t"#title").size,
+          imported.tokens(t"nowhere.Nothing").map(_.link.present) )
+
+      . assert(_ == (1, 1, List(false)))
+
+      test(m"in code, a linked name and the linked member which follows it are chained"):
+        def linked(text: Text, path: Text): Token =
+          Token(text, Token.Accent.Term, Unset, Inline.Destination.Local(path))
+
+        val dot: Token = Token.plain(t".")
+        val space: Token = Token.plain(t" ")
+        val com: List[Token] = List(linked(t"com", t"/api/com"), dot)
+        val example: List[Token] = List(linked(t"example", t"/api/com.example"), dot)
+        val foo: List[Token] = List(linked(t"Foo", t"/api/com.example~Foo"), space)
+        val unrelated: Token = linked(t"b", t"/api/elsewhere.b")
+        val elsewhere: List[Token] = List(linked(t"a", t"/api/a"), dot, unrelated)
+        val tokens: List[Token] = com + example + foo + elsewhere
+
+        Linker.chain(tokens).map(_.chained)
+
+      . assert(_ == List(false, true, true, true, true, false, false, false, false))
+
       test(m"a page has its heading, signature and member rows anchored by name"):
         val api: Api = Tests.this.api0
         val doc: Api.Entity = api(t"sample.Doc").or(Api.Entity(Unset, t"?"))

@@ -82,9 +82,10 @@ object Blocks:
 
     first(Parser.parse(text).children)
 
-  // Inline code, whose one token links when the linker says it is a reference.
+  // Inline code, whose tokens link when the linker says it is a reference: a qualified name a
+  // link for each segment.
   private def snippet(code: Text, linker: Linker): Inline =
-    Inline.Snippet(Language.Plain, List(Token.plain(code).copy(link = linker.link(code))))
+    Inline.Snippet(Language.Plain, linker.tokens(code))
 
   // Inline code is a reference when the linker says so: then its one token links.
   private def prose(node: Prose, linker: Linker): Inline = node match
