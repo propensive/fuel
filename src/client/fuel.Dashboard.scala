@@ -65,7 +65,7 @@ object Dashboard:
 
       val running: pyrocosm.WebFrontend =
         scala.caps.unsafe.unsafeAssumePure:
-          pyrocosm.WebFrontend(port, fallback = Dashboard.fallback)
+          pyrocosm.WebFrontend(port)
 
       frontend = running
 
@@ -90,24 +90,6 @@ object Dashboard:
       finally serving.set(false)
 
     def stop(): Unit = frontend.let(_.stop())
-
-  // Beyond Pyrocosm's own paths, `/blocks/<section>/<document>`: a compiled document's blocks
-  // as TEL, as `fuel blocks` writes them, for a tool to fetch from the running dashboard; any
-  // other path is left to the frontend to answer 404. A method, so that it holds no capability.
-  def fallback(request: Http.Request): Optional[Http.Response] =
-    import codepages.utf8Codepage
-
-    val target: Text = request.target.cut(t"?").prim.or(t"/")
-
-    if !target.starts(t"/blocks/") then Unset else
-      val rest: Text = Text(java.net.URLDecoder.decode(target.skip(8).s, "UTF-8").nn)
-      val section: Text = rest.cut(t"/").prim.or(t"")
-      val path: Text = rest.skip(section.length + 1)
-
-      Server.corpus.let(_.doc(section, path)).let: (doc: Doc) =>
-        val text: Text = Fragments.tel(doc.blocks)
-        val header: Http.Header = Http.Header(t"content-type", t"text/plain; charset=utf-8")
-        Http.Ok(List(header), Http.Body.Fixed(text.in[Data]))
 
   // The URL of a document: its section and its path, each segment encoded.
   def docUrl(section: Text, path: Text): Text =

@@ -273,24 +273,18 @@ variables reach it too.
   range, so that other ways of naming one can be tried there alone. Each frame goes to
   `Animation.of` as a `Slide.Detail`, and Pyrocosm derives the transition into each slide. Not yet: `scalaio.tel` as fixtures (its decks need the
   presentation layer, M7).
-- **M4 Terminal and fragments** (`show` and `blocks` done; the MCP server deferred). `fuel show <file>` sets one document in the
+- **M4 Terminal and fragments** (`show` done; `blocks` removed; the MCP server deferred). `fuel
+  show <file>` sets one document in the
   terminal through `TerminalRenderer(justify = true)`: paragraphs justified and hyphenated at
   the terminal's width, code highlighted, an animated block as its slides in sequence under
   `step n of m` markers (the renderer's own addition, since a terminal cannot step), problems
   after — compiled as `compile` compiles, so the page shows what the dashboard would. An
-  interactive view through `TerminalFrontend` (navigation of headings) can follow. `fuel
-  blocks <file>` writes the document's blocks as TEL, which is the fragment form other tools
-  consume, and the dashboard's `fallback` serves the same at `/blocks/<document>`. An MCP
+  interactive view through `TerminalFrontend` (navigation of headings) can follow. An MCP
   server (synesthesia, as fume's) answering `documents`, `document`, `search` over the corpus.
-  `fuel blocks <file>` writes a document's blocks in Pyrocosm's wire form, and the dashboard
-  serves the same at `/blocks/<section>/<document>` (`text/plain`, 404 for an unknown one):
-  a TEL stream of one document per block, encoded by the model's own codecs and separated by
-  `##` lines, which `Fragments.read` reads back to equal blocks. The separator is not optional:
-  a document's text ends without a newline, often on a literal's closing delimiter, which the
-  next document's first keyword would otherwise join, so that the literal never closes. A
-  diagnostic's location names the document as its compile did — absolutely for `blocks` and
-  `show`, relative to its section for the dashboard's corpus — which a consumer should not
-  rely on until locations are settled across sections.
+  `fuel blocks <file>` once wrote a document's blocks as a stream of TEL documents, and the
+  dashboard served the same at `/blocks/<section>/<document>`; both are gone, since `fuel
+  compile` writes every document and API page as BinTEL into the configured `output`
+  directory (see *Output* below), which is how another tool reads what Fuel rendered.
 - **M5 API documentation** (done, first cut; search is not). The model (`Api`, in a new
   `fuel-api` module) is every package, type and term of the project *and its dependencies*,
   keyed by its fully-qualified name, a type and its companion one entity and one page at

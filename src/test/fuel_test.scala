@@ -492,14 +492,16 @@ error oops
 
       . assert(_ == (1, true))
 
-    suite(m"Fragments"):
-      test(m"a document's blocks round-trip through their TEL wire form"):
+    suite(m"Output"):
+      test(m"a compiled document's blocks round-trip through BinTEL as a fragment's output"):
         val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
 
-        Compilation.document(t"$here/doc/markdown.md").lay(false): (doc: Doc) =>
-          Fragments.read(Fragments.tel(doc.blocks)) == doc.blocks
+        Compilation.document(t"$here/doc/markdown.md").lay(t"unreadable"): (doc: Doc) =>
+          val fragment: Output.Fragment = Output.Fragment(doc.blocks, doc.problems, true, List(t"x"), List(t"import a.*"))
+          val data: Data = Output.Fragment.encode(fragment)
+          Output.Fragment.decode(data).lay(t"undecodable") { (back: Output.Fragment) => if back == fragment then t"same" else t"different" }
 
-      . assert(_ == true)
+      . assert(_ == t"same")
 
     suite(m"Inspection"):
       // A project's own source, compiled in a session on the suite's classpath and saved, as
