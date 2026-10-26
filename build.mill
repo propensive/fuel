@@ -137,9 +137,9 @@ object settings:
     "-language:experimental.strictEqualityPatternMatching",
     "-language:experimental.subCases",
     "-language:experimental.multiSpreads",
-    // Capture checking, as flair and pyrocosm; separation checking is left off, as in those,
+    // Capture checking, as flare and pyrocosm; separation checking is left off, as in those,
     // since the web module threads WebSocket handlers the separation checker rejects. A module
-    // that derives a stratiform codec (none yet) must switch both off, as flair's `records` does.
+    // that derives a stratiform codec (none yet) must switch both off, as flare's `records` does.
     "-Ycc-new",
     "-language:experimental.captureChecking")
 
