@@ -15,8 +15,8 @@ jobs:
     uses: propensive/.github/.github/workflows/scala-ci.yml@main
     with:
       compile:       fuel.core.compile fuel.client.compile
-      # The launcher resolves `fuel-core` as a published coordinate, so it must be in the local
-      # ivy repository before assembly.
+      # The launcher resolves `fuel-client` as a published coordinate, so it, and the `fuel-api`
+      # and `fuel-core` it depends on, must be in the local ivy repository before assembly.
       publish_local: fuel.__
       assembly:      fuel.launcher.assembly
       # The suite, assembled and run through its plain-`java` entry point (`fuel.runTests`,

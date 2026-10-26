@@ -529,7 +529,7 @@ object fuel extends Project:
 // snapshot` publishes an unreleased build for a dependent repository to pin.
 object release extends Module:
   def modules: Seq[PublishModule] =
-    Seq(fuel.core, fuel.client)
+    Seq(fuel.core, fuel.api, fuel.client)
 
   private def withDescriptors(source: os.Path, target: os.Path, entries: Seq[(String, os.Path)])
   :   Unit =

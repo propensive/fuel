@@ -1,10 +1,11 @@
-# Publish the library to the local ~/.ivy2 (the launcher resolves `fuel-core` from there; burdock
-# will NOT externalize a locally-published copy unless its bytes match a release asset).
+# Publish the libraries to the local ~/.ivy2 (the launcher resolves `fuel-client`, and through it
+# `fuel-api` and `fuel-core`, from there; burdock will NOT externalize a locally-published copy
+# unless its bytes match a release asset).
 publishLocal:
 	./mill fuel.__.publishLocal
 
 # Build the invocation-point `launcher` module as a plain (clean, no shell-preamble) assembly JAR.
-# `launcher` depends on fuel-core as a PUBLISHED coordinate resolved from ~/.ivy2/local, so the
+# `launcher` depends on fuel-client as a PUBLISHED coordinate resolved from ~/.ivy2/local, so the
 # library is published there FIRST, and `clean fuel.launcher` for the same reason: the coordinate
 # is fixed, so Mill's cached resolution would not notice the fresh publish.
 assembly: publishLocal
@@ -26,7 +27,8 @@ release:
 # Repackage the launcher assembly into a self-fetching launcher with Burdock: published
 # dependencies become on-demand `Burdock-Require` URLs, matched by SHA-256 against Maven Central
 # and, via the `--github` hints, the release assets of these repositories; unpublished ones are
-# inlined. fuel-core externalizes only once released. Set GITHUB_TOKEN to lift the API rate limit.
+# inlined. Fuel's own libraries externalize only once released. Set GITHUB_TOKEN to lift the API
+# rate limit.
 fuel.jar: assembly
 	cp out/fuel/launcher/assembly.dest/out.jar fuel.jar
 	java -cp fuel.jar soundness.repackage --github propensive/fuel,propensive/pyrocosm,propensive/soundness,propensive/proscala
