@@ -39,7 +39,7 @@ import dysasymptotics.linearSize
 import pyrocosm.{Block, Inline}
 
 // The TEL preamble a fenced block may begin with, before a line holding `##` alone, when its
-// info string marks it (` ```scala fuel `). Amok's schema, walked by hand (as flair reads its
+// info string marks it (` ```scala fuel `). Amok's schema, walked by hand (as flare reads its
 // configuration), so that no derived codec is needed:
 //
 //   context term                  # top (the default), term or type: how the fragment is wrapped

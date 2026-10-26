@@ -1,6 +1,6 @@
 # Fuel: design and roadmap
 
-Fuel is the documentation tool of the Pyrocosm family (Fever, Fury, Flame, Flair, Fume). It
+Fuel is the documentation tool of the Pyrocosm family (Fever, Fury, Flame, Flare, Fume). It
 takes Markdown with embedded code, and later API documentation written in TEL with embedded
 Markdown, and renders them — through Pyrocosm's one semantic model — to a live web page, a
 static site, the terminal, or as fragments another tool can embed. Embedded code is highlighted,
@@ -100,7 +100,7 @@ M7 ("Fluence pages as blocks with the API tree as navigation"); Fuel is that wor
   versions, which the frame animation is built on. Unchanged since Amok.
 - `stratiform`: `text.read[Tel].as[Preamble]` decodes a TEL preamble into a case class with
   no `derives` clause; derivation sites must sit in a module compiled without capture checking
-  (every Pyrocosm tool keeps one: fume's `relay`/`api`, flair's `records`).
+  (every Pyrocosm tool keeps one: fume's `relay`/`api`, flare's `records`).
 - `pyrocosm.Tool` (`pyrocosm-cli`): the daemon, standard subcommands, config cascade and
   `Tool.Web`; `WebFrontend(port, fallback)`; `TerminalFrontend`; `Block`, `Inline`, `Panel`,
   `Interface`, `Live`.
@@ -145,7 +145,7 @@ variables reach it too.
   capture-checked), `client` (`fuel-client`: the `Tool`, subcommands, dashboard), `launcher`
   (`fuel.fuel`), `test`; `Makefile`, `AGENTS.md`, `.github/readme.md`, `ci.yml`, `release.yml`,
   `etc/{refs,tools,release,shared,github-ref,xek.tsv,header.txt}`, `.dockerignore`,
-  `.pyrocosm/{fume,flair}/config.tel`, `mill`. Pins: soundness 0.72.0, pyrocosm 0.7.1. Port
+  `.pyrocosm/{fume,flare}/config.tel`, `mill`. Pins: soundness 0.72.0, pyrocosm 0.7.1. Port
   8060. `fuel about` works. Off-repo: add `propensive/fuel` to `pyrocosm/etc/downstream` and
   `github/settings/repos.tsv`; generate `etc/keys/release.pub` with `bin/release-key`.
 - **M1 Markdown with embedded code, compiled and viewed** (done, first cut). This document's
@@ -155,7 +155,7 @@ variables reach it too.
     position; explicitly typed lambdas, one per line, compile. Bisecting a crash needs
     `./mill clean fuel.client` before each attempt: Zinc's incremental state after a crash gives
     false negatives.
-  - `flair check` over the whole repository exits silently (status 0 or 2 with nothing printed)
+  - `flare check` over the whole repository exits silently (status 0 or 2 with nothing printed)
     while each file or directory checks fine on its own; `make check` is run per directory
     until that is understood.
   - `fuel show` (the terminal rendering) slipped to M4, as the plan allowed.
@@ -171,7 +171,7 @@ variables reach it too.
   `Erroneous` note, and `fuel compile` exits non-zero when a fragment that should compile does
   not. `fuel watch` recompiles on change (surveillance) and the dashboard follows.
   Found while building it:
-  - The preamble is walked by hand from `Tel` (`fields`, `primaryAtom`, `atomTexts`), as flair
+  - The preamble is walked by hand from `Tel` (`fields`, `primaryAtom`, `atomTexts`), as flare
     reads its configuration, so no unchecked `records` module was needed after all.
   - Fragments are typechecked through harlequin's `highlighting.sessionScala` in one
     `Scalac[3.9].on(classpath).session`: a highlight at typechecked depth is a compile, and
@@ -328,7 +328,7 @@ variables reach it too.
 
 - Blocks, not HTML; what the model lacks is added to Pyrocosm (principle 1).
 - The compile step lives in the daemon: `fuel compile` leaves a `Corpus` in memory that `fuel
-  serve`, `fuel show` and the dashboard read, as fume's runs and flair's findings do. Writing
+  serve`, `fuel show` and the dashboard read, as fume's runs and flare's findings do. Writing
   the corpus to `$XDG_STATE_HOME/fuel/` as TEL is deferred until something needs it to survive
   a `fuel quit`.
 - The code-block hook is a typeclass in `fuel-core`, not a Pyrocosm change, until M3 forces
@@ -336,7 +336,7 @@ variables reach it too.
   with `List[Block]` as the result.
 - One flat package, `fuel`; files named `fuel.Type.scala` and `fuel_topic.scala`; `import
   soundness.*` with `pyrocosm.Tool` imported by name; capture checking on, separation checking
-  off (as flame, flair, fever and pyrocosm; the web module threads handlers it rejects).
+  off (as flame, flare, fever and pyrocosm; the web module threads handlers it rejects).
 - Fluence (`~/work/fluence`) stays as it is, as the reference checkout; nothing is built from it.
 
 ### Open questions, to settle as they arrive
@@ -412,7 +412,7 @@ src/test/
    8060. `fuel compile` builds the corpus, stores it in `Server`, and prints one line per
    section: its name and document count. The classpath is read and validated to exist, and
    otherwise unused until M2.
-5. **`Dashboard` and `fuel serve`.** `Tool.Web` on the flair pattern: a `WebFrontend(port)`
+5. **`Dashboard` and `fuel serve`.** `Tool.Web` on the flare pattern: a `WebFrontend(port)`
    running one shared `Interface`. The navigation panel's `Block.Tree` has a root per section
    and a node per document, each with an `Action`; `handle(Event.Pressed(action))` sets the
    primary panel's `Live[List[Block]]` to that document's blocks. A compile while serving
