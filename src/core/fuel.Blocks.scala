@@ -62,7 +62,7 @@ object Blocks:
     case Inline.Strong(content)     => plain(content)
     case Inline.Toned(_, content)   => plain(content)
     case Inline.Link(_, content)    => plain(content)
-    case Inline.Code(_, tokens)     => tokens.map(_.text).join(t"")
+    case Inline.Snippet(_, tokens)     => tokens.map(_.text).join(t"")
     case _                          => t""
 
   private def all(nodes: List[Layout], embeddings: List[Embedding], linker: Linker): List[Block] = nodes match
@@ -86,7 +86,7 @@ object Blocks:
     case Prose.Textual(text)       => Inline.Textual(text)
     case Prose.Emphasis(children*) => Inline.Emphasis(phrasing(List.from(children), linker))
     case Prose.Strong(children*)   => Inline.Strong(phrasing(List.from(children), linker))
-    case Prose.Code(code)          => Inline.Code(Language.Plain, List(Token.plain(code).copy(link = linker.link(code))))
+    case Prose.Code(code)          => Inline.Snippet(Language.Plain, List(Token.plain(code).copy(link = linker.link(code))))
     case Prose.Softbreak           => Inline.Textual(t" ")
     case Prose.Linebreak           => Inline.Break()
     case Prose.HtmlInline(_)       => Inline.Textual(t"")
