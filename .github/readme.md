@@ -226,7 +226,7 @@ make run          # publish the libraries locally, assemble the launcher, run it
 make fuel         # the native executable, through Burdock and xek
 make test         # the suite, under the fume pinned in etc/tools
 make test-plain   # the suite, through its plain-java entry point
-make check        # flair, against Consequent Style
+make check        # flare, against Consequent Style
 ```
 
 Dependencies are pinned in `etc/refs` and installed by `make sync-deps`; see `AGENTS.md` and
