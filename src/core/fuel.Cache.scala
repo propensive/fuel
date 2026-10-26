@@ -34,15 +34,6 @@ package fuel
 
 import soundness.*
 
-// Where compiled output is kept between compiles, by the key of the inputs which produced it:
-// a fence's, and a document's prose. A key not kept is `Unset`, and its output is compiled and
-// kept; `fuel compile` keeps them in its output directory, and `--force` starts it empty.
-trait Cache:
-  def fragment(key: Text): Optional[Output.Fragment]
-  def fragment(key: Text, fragment: Output.Fragment): Unit
-  def prose(key: Text): Optional[Output.Prose]
-  def prose(key: Text, prose: Output.Prose): Unit
-
 object Cache:
   // A cache in memory, for the tests and for a compile which writes no output.
   class Transient() extends Cache:
@@ -56,3 +47,12 @@ object Cache:
     def fragment(key: Text, fragment: Output.Fragment): Unit = fragments.put(key, fragment)
     def prose(key: Text): Optional[Output.Prose] = Optional(proses.get(key))
     def prose(key: Text, prose: Output.Prose): Unit = proses.put(key, prose)
+
+// Where compiled output is kept between compiles, by the key of the inputs which produced it:
+// a fence's, and a document's prose. A key not kept is `Unset`, and its output is compiled and
+// kept; `fuel compile` keeps them in its output directory, and `--force` starts it empty.
+trait Cache:
+  def fragment(key: Text): Optional[Output.Fragment]
+  def fragment(key: Text, fragment: Output.Fragment): Unit
+  def prose(key: Text): Optional[Output.Prose]
+  def prose(key: Text, prose: Output.Prose): Unit

@@ -82,12 +82,16 @@ object Blocks:
 
     first(Parser.parse(text).children)
 
+  // Inline code, whose one token links when the linker says it is a reference.
+  private def snippet(code: Text, linker: Linker): Inline =
+    Inline.Snippet(Language.Plain, List(Token.plain(code).copy(link = linker.link(code))))
+
   // Inline code is a reference when the linker says so: then its one token links.
   private def prose(node: Prose, linker: Linker): Inline = node match
     case Prose.Textual(text)       => Inline.Textual(text)
     case Prose.Emphasis(children*) => Inline.Emphasis(phrasing(List.from(children), linker))
     case Prose.Strong(children*)   => Inline.Strong(phrasing(List.from(children), linker))
-    case Prose.Code(code)          => Inline.Snippet(Language.Plain, List(Token.plain(code).copy(link = linker.link(code))))
+    case Prose.Code(code)          => snippet(code, linker)
     case Prose.Softbreak           => Inline.Textual(t" ")
     case Prose.Linebreak           => Inline.Break()
     case Prose.HtmlInline(_)       => Inline.Textual(t"")
@@ -156,8 +160,8 @@ object Blocks:
       List(Block.Group(fill(content, outputs)))
 
     case Block.Listing(ordered, items) =>
-      val refilled: List[Block.Item] =
-        items.map { (item: Block.Item) => item.copy(content = fill(item.content, outputs)) }
+      val refilled: List[Block.Item] = items.map: (item: Block.Item) =>
+        item.copy(content = fill(item.content, outputs))
 
       List(Block.Listing(ordered, refilled))
 

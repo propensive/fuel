@@ -47,6 +47,19 @@ object Output:
     given throwing: [error <: Hazard] => Tactic[error] =
       scala.caps.unsafe.unsafeAssumePure[Tactic[error]](ThrowTactic[error, Any]())
 
+  // Each record's BinTEL is derived in its companion, once, where Pyrocosm's package-level
+  // codecs are in scope as the model's own derivations see them; `decode` is `Unset` for bytes
+  // which are not one.
+
+  object Fragment:
+    import derivation.throwing
+    import pyrocosm.given
+
+    def encode(fragment: Fragment): Data = fragment.bintel
+
+    def decode(data: Data): Optional[Fragment] =
+      try Bintel.read[Fragment](data) catch case _: Exception => Unset
+
   // One fence's output: its blocks (the code, and the diagnostics which follow it), the
   // problems it raised, and what it left to its session — whether it joined it, the names it
   // defines, and its top-level imports — so that a later fragment can be compiled after it
@@ -62,17 +75,56 @@ object Output:
       follow:   Text,
       line:     Int )
 
+  object Prose:
+    import derivation.throwing
+    import pyrocosm.given
+
+    def encode(prose: Prose): Data = prose.bintel
+
+    def decode(data: Data): Optional[Prose] =
+      try Bintel.read[Prose](data) catch case _: Exception => Unset
+
   // A document's prose: its blocks, each fence a sentinel to be filled from its fragment, and
   // the problems of its prose alone (references which named several entities).
   case class Prose(blocks: List[Block], problems: List[Block])
+
+  object Document:
+    import derivation.throwing
+    import pyrocosm.given
+
+    def encode(document: Document): Data = document.bintel
+
+    def decode(data: Data): Optional[Document] =
+      try Bintel.read[Document](data) catch case _: Exception => Unset
 
   // A document as it was compiled: its path within its section, its title, its blocks with
   // every fence filled, and its problems.
   case class Document(path: Text, title: Text, blocks: List[Block], problems: List[Block])
 
+  object Page:
+    import derivation.throwing
+    import pyrocosm.given
+
+    def encode(page: Page): Data = page.bintel
+
+    def decode(data: Data): Optional[Page] =
+      try Bintel.read[Page](data) catch case _: Exception => Unset
+
   // An API entity's page: the entity's key (`gossamer.Text#length`), its path beneath `/api/`
-  // (`gossamer.Text~length`) and its blocks.
-  case class Page(entity: Text, path: Text, blocks: List[Block])
+  // (`gossamer.Text~length`), its blocks, and the problems its examples and references raised.
+  case class Page(entity: Text, path: Text, blocks: List[Block], problems: List[Block])
+
+  object Manifest:
+    import derivation.throwing
+
+    case class Document(section: Text, path: Text, title: Text, record: Text)
+    case class Page(entity: Text, path: Text, key: Text, record: Text)
+    case class Entry(key: Text, record: Text)
+
+    def encode(manifest: Manifest): Data = manifest.bintel
+
+    def decode(data: Data): Optional[Manifest] =
+      try Bintel.read[Manifest](data) catch case _: Exception => Unset
 
   // The manifest, `index.fuel`: what produced the output — Fuel's version, the hash of the
   // classpath, and the hash of every input the whole output depends on — each document (by its
@@ -86,51 +138,6 @@ object Output:
       documents:   List[Manifest.Document],
       pages:       List[Manifest.Page],
       cache:       List[Manifest.Entry] )
-
-  object Manifest:
-    case class Document(section: Text, path: Text, title: Text, record: Text)
-    case class Page(entity: Text, path: Text, key: Text, record: Text)
-    case class Entry(key: Text, record: Text)
-
-  // Each record's BinTEL, derived here, once, where Pyrocosm's package-level codecs are in
-  // scope as the model's own derivations see them; `Unset` for bytes which are not one.
-  object Fragment:
-    import derivation.throwing
-    import pyrocosm.given
-
-    def encode(fragment: Fragment): Data = fragment.bintel
-    def decode(data: Data): Optional[Fragment] = try Bintel.read[Fragment](data) catch case _: Exception => Unset
-
-  object Prose:
-    import derivation.throwing
-    import pyrocosm.given
-
-    def encode(prose: Prose): Data = prose.bintel
-    def decode(data: Data): Optional[Prose] = try Bintel.read[Prose](data) catch case _: Exception => Unset
-
-  object Page:
-    import derivation.throwing
-    import pyrocosm.given
-
-    def encode(page: Page): Data = page.bintel
-    def decode(data: Data): Optional[Page] = try Bintel.read[Page](data) catch case _: Exception => Unset
-
-  object Document:
-    import derivation.throwing
-    import pyrocosm.given
-
-    def encode(document: Document): Data = document.bintel
-
-    def decode(data: Data): Optional[Document] =
-      try Bintel.read[Document](data) catch case _: Exception => Unset
-
-  object ManifestCodec:
-    import derivation.throwing
-
-    def encode(manifest: Manifest): Data = manifest.bintel
-
-    def decode(data: Data): Optional[Manifest] =
-      try Bintel.read[Manifest](data) catch case _: Exception => Unset
 
   // A fence's place in a document's prose, until its output fills it: a code block of no
   // lines, in a language of Fuel's own, numbered by the fence's index in the document.

@@ -49,8 +49,10 @@ object Relocation:
       code.copy(start = code.start.let(_ + delta))
 
     case diagnostic: Block.Diagnostic =>
-      val location: Optional[Block.Location] = diagnostic.location.let: (location: Block.Location) =>
-        if location.path == path then location.copy(line = location.line.let(_ + delta)) else location
+      val location: Optional[Block.Location] =
+        diagnostic.location.let: (location: Block.Location) =>
+          if location.path != path then location
+          else location.copy(line = location.line.let(_ + delta))
 
       diagnostic.copy
         ( location = location,
@@ -62,7 +64,10 @@ object Relocation:
     case Block.Quotation(content) => Block.Quotation(shift(content, path, delta))
 
     case Block.Listing(ordered, items) =>
-      Block.Listing(ordered, items.map { (item: Block.Item) => item.copy(content = shift(item.content, path, delta)) })
+      val shifted: List[Block.Item] = items.map: (item: Block.Item) =>
+        item.copy(content = shift(item.content, path, delta))
+
+      Block.Listing(ordered, shifted)
 
     case other =>
       other

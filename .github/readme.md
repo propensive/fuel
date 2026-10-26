@@ -16,6 +16,7 @@ the subcommands and configuration files every Pyrocosm tool shares are fuel's to
 
 ```sh
 fuel compile       # compile the configured directories of Markdown documents
+fuel compile --force  # the same, ignoring what the output directory keeps
 fuel serve         # serve the compiled documents at http://localhost:8060/ until Ctrl+C
 fuel show doc/x.md # one document, set in the terminal: justified, hyphenated, highlighted
 fuel install       # install tab-completions and the manpage
@@ -75,6 +76,42 @@ is highlighted. With `session` configured, every fence follows the ones before i
 tutorial reads as one REPL session; a fence which names a mode is checked but, to a checker
 which runs fences, not run; and a line ending `// does not compile` is compiled alone and must
 fail. [`doc/markdown.md`](../doc/markdown.md) shows each.
+
+## Output
+
+With an `output` directory configured, `fuel compile` writes everything it compiled there, as
+BinTEL under the schema derived from each record's type, and compiles again only what changed:
+
+```
+dist/doc/
+  index.fuel          # the manifest
+  objects/<hash>.fuel # every record, named by the Blake3 hash of its bytes
+```
+
+The manifest (`Output.Manifest`) records Fuel's version, the hash of the classpath (of its
+bytes, until a hash of its API is available), the hash of every input the whole output depends
+on, each document by its section (its `document` directory relative to the project root) and its
+path, each API page by its entity, and the cache: from the key of each input to the record which
+holds its output. Naming records by their content means names never collide, whatever a
+document or an entity is called, and a record already written is not written again; the manifest
+is written last, by a move, so a reader sees one whole manifest or the last one, and a record no
+longer named is deleted.
+
+A document is compiled in parts, each kept by a key of its own inputs:
+
+- its **prose**, with a sentinel where each fence is, keyed by that prose and by the imports its
+  fences make, which its references resolve through;
+- each **fence**, keyed by its info string and content, by everything the compile depends on (the
+  classpath, the project's sources, the compiler's options, the `imports` setting, the entities
+  the API has) and by the document's path; in a `session`, chained from the fence before it (and
+  the fixture), since a fragment sees what came before it — so changing a fence compiles it and
+  those after it in its document, and nothing before it; outside a session, a fence depends only
+  on what it `follows`.
+
+A fence's line is not part of its key: its output moves with it, so prose can change around it
+without compiling it again. Each API page is keyed the same way, by the entity and the members
+its page lists. `--force` compiles everything again. A compile prints how many records it kept
+and how many it compiled.
 
 ## API documentation
 
@@ -159,6 +196,9 @@ fixtures doc/fixtures
 source src/core
 overlay doc/api
 imports soundness
+
+# Write the compiled documents and API pages here, as BinTEL, compiling only what changed.
+output dist/doc
 
 # Serve the documents from the daemon's start, on this port (8060 by default).
 serve

@@ -309,6 +309,33 @@ variables reach it too.
   - Overloads are kept (one entity, every signature); an exported type is an `alias` whose
     page is its target's; a member which overrides is documented by what it overrides.
   - Not yet: `Criteria` search; a dependency's own overlays; `fuel watch`.
+- **Output** (done, first cut). `fuel compile` writes its output, when an `output` directory is
+  configured, as BinTEL records under the schema derived from each record's type (`Output`):
+  each fence's output with what it left to its session, each document's prose with a sentinel
+  per fence, each document as compiled, each API page; `objects/<blake3>.fuel`, content-addressed
+  so that names never collide (two `document` directories ending alike, `Foo` and `foo` on a
+  case-insensitive filesystem, symbolic names), and `index.fuel`, the manifest, written last. A
+  document's prose and each of its fences is compiled only when the Blake3 key of its inputs is
+  not kept (`Cache`, `Store`): a fence's key is chained from the one before it in a session,
+  since a fragment sees what came before it, and leaves out the fence's line, so its output is
+  shifted (`Relocation`) and prose can change around it. A kept fence's effect on the session
+  is replayed from what was kept, its unit entered into the warm session only when a later
+  fence must be compiled after it. Found while building it:
+  - Pyrocosm's model could not be written as BinTEL: stratiform names a derived definition by
+    its type's simple name, so `Inline.Code` and `Block.Code` collided, and types a sum-typed
+    member as a `Reference` to a select, which is E217 (propensive/soundness#2319). Pyrocosm
+    renamed `Inline.Code` and `Inline.Figure` to `Snippet` and `Numeral`, declared the schema of
+    every hand-coded type, and types its sums at a member position as the specification does
+    (propensive/pyrocosm#76).
+  - Records are derived where Pyrocosm's package-level codecs are in scope (`Output.Fragment`
+    and its siblings), not at each use, since a derivation at a call site outside that scope
+    cannot derive the model.
+  - The classpath is hashed by its bytes (a jar once per size and modification time, in the
+    daemon); a hash of its API, by a LIRA analysis of its TASTy, is to replace it, so that a
+    change which leaves the API as it was compiles nothing.
+  - Not yet: the project's own sources are compiled on every compile, since the warm session
+    needs their symbols; skipping that when they are unchanged means loading the saved classes
+    into the session instead.
 - **M6 Outputs and languages.** A static site: Pyrocosm's `HtmlRenderer` and `PyrocosmPage`
   written to files, one page per document, with the stylesheet and no socket (a Pyrocosm
   feature: `WebFrontend` has the pieces, a batch writer does not exist). Languages beyond Scala

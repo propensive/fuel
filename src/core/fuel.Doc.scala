@@ -57,9 +57,11 @@ object Doc:
         kept(path, text, checker, session, fixture, linker, cache, base)
 
       case _ =>
-        val scala: Embedding.ScalaCode = Embedding.ScalaCode(checker, path, session, fixture, linker)
-        val blocks: List[Block] = Blocks.of(Parser.parse(text), List(scala, Embedding.JavaCode), linker)
-        Doc(path, Blocks.title(blocks).or(filename(path)), blocks, scala.problems + ambiguous(path, linker))
+        val scala = Embedding.ScalaCode(checker, path, session, fixture, linker)
+        val embeddings: List[Embedding] = List(scala, Embedding.JavaCode)
+        val blocks: List[Block] = Blocks.of(Parser.parse(text), embeddings, linker)
+        val problems: List[Block] = scala.problems + ambiguous(path, linker)
+        Doc(path, Blocks.title(blocks).or(filename(path)), blocks, problems)
 
   // A reference which named several entities is a caution: it is shown unlinked.
   private def ambiguous(path: Text, linker: Linker): List[Block] =
@@ -85,8 +87,8 @@ object Doc:
     val markdown: Markdown of Layout = Parser.parse(text)
     val fences: List[Blocks.Fence] = Blocks.fences(markdown)
 
-    val imports: List[Text] =
-      fences.bind { (fence: Blocks.Fence) => fence.content.cut(t"\n").filter(_.trim.starts(t"import ")).map(_.trim) }
+    val imports: List[Text] = fences.bind: (fence: Blocks.Fence) =>
+      fence.content.cut(t"\n").filter(_.trim.starts(t"import ")).map(_.trim)
 
     val unlinked: List[Block] = Blocks.of(markdown, List(Blocks.sentinels()), Linker.none)
     val shape: Text = Hashes.of(Output.Prose.encode(Output.Prose(unlinked, Nil)))
@@ -99,11 +101,11 @@ object Doc:
       cache.prose(key, prose)
       prose
 
-    val scala: Embedding.ScalaCode = Embedding.ScalaCode(checker, path, session, fixture, linker, cache, base)
+    val scala = Embedding.ScalaCode(checker, path, session, fixture, linker, cache, base)
     val embeddings: List[Embedding] = List(scala, Embedding.JavaCode)
 
-    val outputs: List[List[Block]] =
-      fences.map { (fence: Blocks.Fence) => Blocks.fence(fence.info, fence.content, fence.line, embeddings) }
+    val outputs: List[List[Block]] = fences.map: (fence: Blocks.Fence) =>
+      Blocks.fence(fence.info, fence.content, fence.line, embeddings)
 
     val blocks: List[Block] = Blocks.fill(prose.blocks, outputs)
     Doc(path, Blocks.title(blocks).or(filename(path)), blocks, scala.problems + prose.problems)

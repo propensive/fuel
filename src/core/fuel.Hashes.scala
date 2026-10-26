@@ -51,7 +51,8 @@ object Hashes:
   // The parts as one text, each prefixed with its length, so that no two lists of parts make
   // the same text.
   def of(parts: Text*): Text =
-    List(parts*).map { (part: Text) => t"${part.length.show}:$part" }.join(t"").digest[Blake3].serialize[Hex]
+    val prefixed: Text = List(parts*).map { (part: Text) => t"${part.length.show}:$part" }.join(t"")
+    prefixed.digest[Blake3].serialize[Hex]
 
   def of(data: Data): Text = data.digest[Blake3].serialize[Hex]
 
@@ -71,7 +72,8 @@ object Hashes:
 
       val parts: scala.List[Text] =
         files.flatMap: (file: jnf.Path) =>
-          scala.List(root.relativize(file).nn.toString.tt, of(Array.unsafeFrozen(jnf.Files.readAllBytes(file).nn)))
+          val bytes: Data = Array.unsafeFrozen(jnf.Files.readAllBytes(file).nn)
+          scala.List(root.relativize(file).nn.toString.tt, of(bytes))
 
       of(parts*)
 

@@ -554,6 +554,57 @@ error oops
           (plain.blocks == kept.blocks, plain.problems.size == kept.problems.size)
       . assert(_ == (true, true))
 
+    suite(m"Output directory"):
+      val fragment: Output.Fragment =
+        Output.Fragment(List(Block.paragraph(t"code")), Nil, true, List(t"x"), Nil, t"val x = 1", 4)
+
+      val prose: Output.Prose = Output.Prose(List(Block.paragraph(t"prose"), Output.sentinel(0)), Nil)
+
+      def directory(): Text = Text(java.nio.file.Files.createTempDirectory("fuel-output").nn.toString)
+
+      def objects(output: Text): Int =
+        java.nio.file.Files.list(java.nio.file.Path.of(output.s, "objects")).nn.count.toInt
+
+      test(m"what a compile keeps, the next reads back"):
+        val output = directory()
+        val first = Store(output, false)
+        first.fragment(t"k1", fragment)
+        first.prose(t"k2", prose)
+        first.finish(t"1.0", t"classpath", t"environment")
+        val second = Store(output, false)
+        (second.fragment(t"k1") == fragment, second.prose(t"k2") == prose, second.hits.get)
+      . assert(_ == (true, true, 2))
+
+      test(m"a record the next compile does not use is deleted"):
+        val output = directory()
+        val first = Store(output, false)
+        first.fragment(t"k1", fragment)
+        first.prose(t"k2", prose)
+        first.finish(t"1.0", t"classpath", t"environment")
+        val second = Store(output, false)
+        second.fragment(t"k1")
+        second.finish(t"1.0", t"classpath", t"environment")
+        (objects(output), Store(output, false).prose(t"k2").absent)
+      . assert(_ == (1, true))
+
+      test(m"`--force` keeps nothing"):
+        val output = directory()
+        val first = Store(output, false)
+        first.fragment(t"k1", fragment)
+        first.finish(t"1.0", t"classpath", t"environment")
+        Store(output, true).fragment(t"k1").absent
+      . assert(_ == true)
+
+      test(m"the manifest names its inputs, and each document by its section"):
+        val output = directory()
+        val store = Store(output, false)
+        store.document(t"doc/modules", Doc(t"json.md", t"JSON", List(Block.paragraph(t"text"))))
+        store.finish(t"1.0", t"classpath", t"environment")
+
+        Store.manifest(output).let: (manifest: Output.Manifest) =>
+          (manifest.fuel, manifest.classpath, manifest.documents.map { (d: Output.Manifest.Document) => (d.section, d.path, d.title) })
+      . assert(_ == (t"1.0", t"classpath", List((t"doc/modules", t"json.md", t"JSON"))))
+
     suite(m"Output"):
       test(m"a compiled document's blocks round-trip through BinTEL as a fragment's output"):
         val here: Text = Text(java.lang.System.getProperty("user.dir").nn)

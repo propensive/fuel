@@ -120,7 +120,9 @@ object Compilation:
 
     safely(path.as[Path on Linux]).let { (file: Path on Linux) => safely(file.read[Text]) }.let:
       (text: Text) =>
-        Doc.parse(path, text, checker, regime.session, fixture, regime.linker(path), regime.cache, regime.base(path))
+        Doc.parse
+          ( path, text, checker, regime.session, fixture, regime.linker(path), regime.cache,
+            regime.base(path) )
 
   // A file that could not be read or parsed, as a diagnostic.
   def unreadable(path: Text): Block =
