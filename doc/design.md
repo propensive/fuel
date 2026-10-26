@@ -68,7 +68,7 @@ sound). Their disposition:
 | `cli/app.scala` (unbuilt) | `check`: collect fenced `scala`/`fluence` blocks, join, compile with anthology `Scalac`, map notices back to fragments; `Fragment(id, language, errors: Fail\|Ignore\|Highlight\|Show, follows)` | **Keep the design** (M2): `errors` policy and `follows` chaining are the right vocabulary. Compile through a warm `Scalac.Session`, and harlequin's `typecheckedScala` depth gives per-token types for free. |
 | `tool/Model.scala`, `Declaration.scala`, `Node.scala`, `Member.scala`, `Modifier.scala` | TASTy walker (`TastyInspector`), `Definition`/`Template` enums, `Model` of nodes with a `Lexicon` for fuzzy search, `overlay(flux)` merging TEL docs onto nodes | **Keep** (M5). `stenography.Typename` is now `Designator`; check `degustation.Inspection` as the newer walker pattern. |
 | `tool/Flux.scala`, `example/*.tel` | The API-docs overlay format: `domain`, `base`, nested `entry .term` / `entry #Type` with `info`, `detail` (Markdown), `until <version> <name>`, `hidden`, `refer` | **Keep** (M5). This *is* "API documentation written in TEL with embedded Markdown"; its loader was removed in commit `9db21a8` and `Model.overlay` is unwired. |
-| `tool/Criteria.scala` + tests | Search mini-language (`!pkg`, `:Type`, `.term`, `?given`, `~ext`, `+Ret`, `-Param`) | Keep (M5), as the dashboard's search field. Its 17 tests are the only tests Amok has. |
+| `tool/Criteria.scala` + tests | Search mini-language (`!pkg :Type .term ?given ~ext +Ret -Param`) | Keep (M5), as the dashboard's search field. Its 17 tests are the only tests Amok has. |
 | `tool/fluence.scala` (`syntaxIsRenderable`, `memberIsRenderable`), `JvmFolio.scala`, `Page.scala`, `Server.scala`, `Mountpoint.scala`, `Folio.scala` | HTML rendering of signatures, the `<details>` nav tree, iframe layout, import elision cookie, HTTP routing | Replace: signatures become `Inline.Code` of stenography syntax; the tree is `Block.Tree` in a `Navigation` panel; routing is `WebFrontend`. The *import elision* idea (names qualified only beyond Predef, scala, java.lang, parents and the reader's own imports) is worth keeping as a document-level setting. |
 | `tool/FluenceDoc.scala`, `runner/Fluence.scala`, `presentation.tel`, `scalaio.tel` | Presentations: a TEL header up to `##`, Markdown body split on `---`, served with long-poll reload, `navigate.js` | Out of scope until the Markdown layer is done; then a presentation is a `Markdown.sections` interface with one panel per slide (M7, if wanted). The two decks are the richest corpus of `frame` animations and make good M3 fixtures (`presentation.tel` uses the older `version` keyword). |
 | `res/fluence/*.css`, `*.js`, icons | Presentation | Drop. Pyrocosm owns the stylesheet and the one script. Entity icons (`ti-def.svg` and friends) may return as `hints.web.Icon`. |
@@ -144,7 +144,7 @@ variables reach it too.
   the fume template with `FUEL_RELEASE_VERSION`, modules `core` (published as `fuel-core`,
   capture-checked), `client` (`fuel-client`: the `Tool`, subcommands, dashboard), `launcher`
   (`fuel.fuel`), `test`; `Makefile`, `AGENTS.md`, `.github/readme.md`, `ci.yml`, `release.yml`,
-  `etc/{refs,tools,release,shared,github-ref,xek.tsv,header.txt}`, `.dockerignore`,
+  `etc/{refs,tools,release,shared,github-ref,xek.tsv,header.txt}`, `/.dockerignore`,
   `.pyrocosm/{fume,flare}/config.tel`, `mill`. Pins: soundness 0.72.0, pyrocosm 0.7.1. Port
   8060. `fuel about` works. Off-repo: add `propensive/fuel` to `pyrocosm/etc/downstream` and
   `github/settings/repos.tsv`; generate `etc/keys/release.pub` with `bin/release-key`.
@@ -309,6 +309,30 @@ variables reach it too.
   - Overloads are kept (one entity, every signature); an exported type is an `alias` whose
     page is its target's; a member which overrides is documented by what it overrides.
   - Not yet: `Criteria` search; a dependency's own overlays; `fuel watch`.
+  - **Links** (a second cut). A reference in prose may say its kind: `` `#Name` `` is a type
+    and `` `.name` `` a term, resolved as an unsigilled name is and shown without the sigil
+    in the accent of its kind; one nothing resolves is shown as written and is a failure
+    (a caution when there is no API to resolve against). A sigil is read only before a name
+    as code writes one, so `` `.pyrocosm/fuel/config.tel` `` is code. A name a fence defines
+    at its top level (`val foo`, `class Foo`; the session's regex, with the keyword) is in
+    the document's namespace from then on, latest first, ahead of the API: a reference to it
+    leads to the fence, whose `Block.Code` carries its `id` (the preamble's, else
+    `fragment-n`) as an anchor. Every link is recorded as it is made (`Linkage`, with its
+    paragraph's line, since phrasing has none; kept with the prose in the output) and checked once every document is converted
+    (`Links.check`): a relative link is rewritten to the document's page and must name a
+    document in the section and an anchor on it (headings are anchored by GitHub's slug,
+    numbered when repeated); `/api/…` must name an entity and a member; `/glossary#…` a
+    term; a URL is fetched only under `check-links`. A **glossary** is TEL files named by a
+    repeatable `glossary` setting (`define <term>` with `link` and a Markdown `definition`),
+    combined, a term defined twice a failure; `[term]` in prose becomes a CommonMark
+    reference link because the glossary's reference definitions are appended to the text
+    before it is parsed (so the author's own definition wins, labels match in any case, and
+    `[terms][term]` inflects), and is rendered as Pyrocosm's `Inline.Annotated` — the
+    content linked to the term's `link` or its entry on the `/glossary` page, the note its
+    definition's first paragraph. A fence left open would swallow the appended definitions,
+    so it is a failure. Pyrocosm gained `Inline.Annotated` and `Block.Code.id` for this.
+    Deferred: a reader's own imports (Amok's cookie) deciding how a signature qualifies a
+    name, which is `Scope.has` in `Signatures` and nowhere else.
 - **Output** (done, first cut). `fuel compile` writes its output, when an `output` directory is
   configured, as BinTEL records under the schema derived from each record's type (`Output`):
   each fence's output with what it left to its session, each document's prose with a sentinel

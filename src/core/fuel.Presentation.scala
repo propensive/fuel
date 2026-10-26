@@ -245,7 +245,7 @@ object Presentation:
       val fenced: List[Block] = scala.embedWith(info(language), preamble, t"", line)
 
       val code: List[Block] = fenced.filter:
-        case Block.Code(_, _, _, _, _) => true
+        case Block.Code(_, _, _, _, _, _) => true
         case _                         => false
 
       Block.Leaf(unnumbered(code))

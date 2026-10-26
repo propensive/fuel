@@ -39,7 +39,13 @@ typecheck fails the compile (exit status 4). Every problem — a fragment that d
 a preamble that is not TEL, a file that cannot be read — is a Pyrocosm diagnostic: `fuel
 compile` prints it as the terminal renders one (`path:line:col: error`, the message, and the
 lines concerned numbered from the file, with the place underlined), and in the served document
-it follows the fragment, whose lines are numbered from the file too. A fence marked
+it follows the fragment, whose lines are numbered from the file too. Every link is checked
+too, once every document is compiled: a link to another document (`guide/x.md`, `../x.md`,
+resolved against the document's directory within its section) or to a place on one
+(`#set-up`, a heading's slug as GitHub makes it, or a fence's `id`), to an API page
+(`/api/gossamer.Text#length`) or a glossary term (`/glossary#interface`) must have a target, or
+it is a failure at its line; a link to the web is fetched only when `check-links` is set. A
+fence marked
 ` ```scala fuel ` begins with a [TEL](https://soundness.dev/tel/) preamble, ended by a line
 holding `##`:
 
@@ -201,10 +207,41 @@ written, then under the page's own entity and those enclosing it, then under the
 the overlay (or, for a Markdown document, the `imports` setting and the imports its own fences
 make), then `scala`, `scala.Predef` and `java.lang` — a name which several entities answer to
 in the same scope is a caution and stays plain; and the typed tokens of a compiled fence, when
-the token is the name of what its type names. Amok's `` `#member` `` and `` `.member` `` name a
-member of the page's own entity. A qualified name — in a signature, in inline code, or in a
-fence — is a link for each segment, and pointing at one underlines the name up to it, as on
-Amok's pages: `com`, then `com.example`, then `com.example.Foo`.
+the token is the name of what its type names. A sigil says what is meant: `` `#Name` `` is a
+type (or a member of one), `` `.name` `` a term (or a member of one), and the sigil is not shown
+once it resolves — on an entity's page, Amok's `` `#member` `` and `` `.member` `` name a member
+of the page's own entity, which is the same rule in the page's own scope. A sigilled reference
+nothing resolves is a failure (a caution when no API is configured to resolve it against), and
+is read only before a name as code would write one, so `` `.pyrocosm/fuel/config.tel` `` is
+code. In a Markdown document, a name a fence defines at its top level — `val greeting`, `class
+Shape` — is in scope from then on, ahead of the API: `` `greeting` `` links to the fence which
+defined it last, by its `id` (`fragment-3` when the preamble gives none). A qualified name — in
+a signature, in inline code, or in a fence — is a link for each segment, and pointing at one
+underlines the name up to it, as on Amok's pages: `com`, then `com.example`, then
+`com.example.Foo`.
+
+## Glossary
+
+A `glossary` is a TEL file of terms (several may be configured, and are combined), each with a
+Markdown `definition` and, when a page explains it in full, a `link` to that page, on the site
+(`/doc/guide/interfaces.md`) or elsewhere:
+
+```
+tel 1.0
+
+define interface
+  link  /doc/guide/interfaces.md
+  definition
+      A shared boundary, connection, or point of interaction where two or more separate
+      systems, devices, or people meet and exchange information.
+```
+
+A term in brackets in prose — `[interface]`, in any case, or `[interfaces][interface]` for an
+inflected form — shows its definition when pointed at, and leads to its link, or to the term's
+entry on the glossary page at `/glossary`, which lists every term and is in the navigation. The
+brackets are CommonMark's own reference link, since the glossary's definitions are appended to
+each document before it is parsed, so an author's own `[interface]: url` wins; a term defined
+twice is a failure, as is a fence left open (which would swallow the definitions).
 
 ## Configuration files
 
@@ -239,6 +276,11 @@ source src/core
 overlay doc/api
 imports soundness
 
+# The glossary's terms, which a document names in brackets; and whether a link to the web is
+# fetched when the documents compile (a link within the site is always checked).
+glossary doc/glossary.tel
+check-links
+
 # Write the compiled documents and API pages here, as BinTEL, compiling only what changed.
 output dist/doc
 
@@ -253,9 +295,11 @@ and a `FUEL_`-prefixed environment variable, in that order of priority ahead of 
 ## Modules
 
 - `fuel-core` (`src/core`): `Doc`, `Corpus`, the `Blocks` conversion of Markdown to Pyrocosm
-  blocks, and the `Embedding` of fenced code, for another tool to embed.
+  blocks (recording every `Linkage` it makes), the `Glossary`, and the `Embedding` of fenced
+  code, for another tool to embed.
 - `fuel-api` (`src/api`): the `Api` model, read from compiled code by `Inspection`, documented
-  by `Overlay`s, with the `Resolver` of references, `Signatures` as tokens and `ApiPages`.
+  by `Overlay`s, with the `Resolver` of references, `Signatures` as tokens, `ApiPages`, and the
+  `Links` check.
 - `fuel-client` (`src/client`): the `Tool`, its subcommands and settings, the daemon's corpus
   and model, and the dashboard.
 - `launcher` (`src/launcher`): the entry point alone, built into the executable.

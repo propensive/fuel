@@ -92,9 +92,7 @@ object Dashboard:
     def stop(): Unit = frontend.let(_.stop())
 
   // The URL of a document: its section and its path, each segment encoded.
-  def docUrl(section: Text, path: Text): Text =
-    def encode(text: Text): Text = Text(java.net.URLEncoder.encode(text.s, "UTF-8").nn.replace("+", "%20").nn)
-    t"/doc/${encode(section)}/${path.cut(t"/").map(encode).join(t"/")}"
+  def docUrl(section: Text, path: Text): Text = Doc.url(section, path)
 
 // One tab's dashboard: the navigation of every section's documents and of the API, and the
 // page its URL names.
@@ -103,6 +101,7 @@ final class Dashboard():
   private enum Target:
     case Document(section: Text, path: Text)
     case Entity(key: Text)
+    case Glossary()
     case Missing(path: Text)
 
   @scala.caps.unsafe.untrackedCaptures
@@ -148,6 +147,7 @@ final class Dashboard():
       rest.prim.let { (section: Text) => Target.Document(decode(section), rest.skip(1).map(decode).join(t"/")) }
     else if path.starts(t"/api/") then
       Server.api.locate(path.skip(5)).lay(Target.Missing(path)) { (entity: Api.Entity) => Target.Entity(entity.key) }
+    else if path == t"/glossary" then Target.Glossary()
     else Target.Missing(path)
 
   private def first: Optional[Target] =
@@ -177,6 +177,7 @@ final class Dashboard():
       val current: Boolean = selected match
         case Target.Document(section, path) => Server.corpus.let(_.doc(section, path)).present
         case Target.Entity(key)             => Server.api(key).present
+        case Target.Glossary()              => true
         case Target.Missing(_)              => true
         case _                              => false
 
@@ -199,6 +200,9 @@ final class Dashboard():
       case Target.Entity(key) =>
         content() = Server.page(key).or(Server.api(key).let(Dashboard.render).or(Nil))
 
+      case Target.Glossary() =>
+        content() = Server.glossary
+
       case Target.Missing(path) =>
         content() = List(Block.Notice(Tone.Warning, Inline.text(t"Not found"), List(Block.paragraph(t"There is no page at $path."))))
 
@@ -219,6 +223,12 @@ final class Dashboard():
 
           Block.TreeNode(Inline.text(section.name), children, Unset, Unset, true)
 
+      // The glossary, after the sections, when there is one.
+      val glossary: List[Block.TreeNode] =
+        if Server.glossary.nil then Nil else
+          val tone: Optional[Tone] = if selected == Target.Glossary() then Tone.Accent else Unset
+          List(Block.TreeNode(Inline.text(t"Glossary"), Nil, tone, Unset, Unset, Inline.Destination.Local(t"/glossary")))
+
       val api: Api = Server.api
       val current: Optional[Text] = selected match
         case Target.Entity(key) => key
@@ -228,7 +238,7 @@ final class Dashboard():
         if api.entities.isEmpty then Nil
         else List(Block.Heading(3, Inline.text(t"API")), ApiPages.tree(api, current))
 
-      List(Block.Tree(documents)) + apiTree
+      List(Block.Tree(documents + glossary)) + apiTree
 
 
 

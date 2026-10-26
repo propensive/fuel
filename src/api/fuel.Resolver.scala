@@ -65,12 +65,49 @@ case class Scope(enclosing: List[Designator], imports: List[Designator]):
   // decides how a signature elides a qualifier.
   def has(designator: Designator): Boolean = all.has(designator)
 
-class Resolver(api: Api, scope0: Scope) extends Linker:
+// `page` is the URL of the page the references are on, which a name the page's own fragments
+// define leads to.
+class Resolver(api: Api, scope0: Scope, page: Optional[Text] = Unset) extends Linker:
   @scala.caps.unsafe.untrackedCaptures
   @volatile
   private var scope: Scope = scope0
 
+  // What the page's own fragments have defined, latest first: the name, its kind and the
+  // anchor of the fragment which defined it.
+  @scala.caps.unsafe.untrackedCaptures
+  @volatile
+  private var defined: List[(Text, Linker.Kind, Text)] = Nil
+
   private val ambiguous: juc.ConcurrentLinkedQueue[Text] = juc.ConcurrentLinkedQueue()
+
+  def define(anchor: Text, names: List[(Text, Linker.Kind)]): Unit =
+    val latest: List[(Text, Linker.Kind, Text)] =
+      names.reverse.map { (entry: (Text, Linker.Kind)) => (entry(0), entry(1), anchor) }
+
+    defined = latest + defined
+
+  // A name the page's own fragments defined: its first segment, of the kind a sigil says if
+  // one does, leads to the fragment which defined it last.
+  private def fenced(name: Text, kind: Optional[Linker.Kind]): Optional[Inline.Destination] =
+    page.let: (url: Text) =>
+      val leaf: Text = Text(name.s.takeWhile { c => c != '.' && c != '#' })
+
+      defined.seek { (entry: (Text, Linker.Kind, Text)) => entry(0) == leaf && kind.lay(true)(_ == entry(1)) }.let:
+        (entry: (Text, Linker.Kind, Text)) => Inline.Destination.Local(url, entry(2))
+
+  // Whether an entity is what a sigil says: for `#`, a type, or a member of a type; for `.`, a
+  // term, or a member of a term. A type and its companion, one entity, answer to either; a
+  // member of a package is not a member of a term, so a trait in a package is no term.
+  private def suits(entity: Api.Entity, kind: Linker.Kind): Boolean =
+    val ofType: Boolean = entity.parent match
+      case Designator.Type(_, _) => true
+      case _                     => false
+
+    kind match
+      case Linker.Kind.Type => ofType || entity.template.present || entity.definition.let(_.kind.isType).or(false)
+      case Linker.Kind.Term =>
+        val ofTerm: Boolean = entity.parent.let { (p: Designator) => api(Api.key(p)).let(!_.isPackage).or(false) }.or(false)
+        !ofType && (entity.definition.present || ofTerm)
 
   def ambiguities: List[Text] =
     List.from(scala.jdk.CollectionConverters.IteratorHasAsScala(ambiguous.iterator.nn).asScala.toList.distinct)
@@ -102,13 +139,18 @@ class Resolver(api: Api, scope0: Scope) extends Linker:
 
   // As written first, then under the enclosing entities (innermost first), then under the
   // imports, then the standard scope: the first tier which names anything decides, as a name
-  // in code resolves in its innermost scope, so an outer match is no ambiguity.
-  private def candidates(designator: Designator): List[Api.Entity] =
+  // in code resolves in its innermost scope, so an outer match is no ambiguity. A sigil keeps
+  // only the entities of its kind in every tier, which is how `#title` on `Doc`'s page finds
+  // `Doc#title` through the enclosing tier, and `#Doc` under an import finds the type.
+  private def candidates(designator: Designator, kind: Optional[Linker.Kind]): List[Api.Entity] =
+    def fit(entities: List[Api.Entity]): List[Api.Entity] =
+      kind.lay(entities) { (kind: Linker.Kind) => entities.filter(suits(_, kind)) }
+
     def tier(prefixes: List[Designator]): List[Api.Entity] =
-      prefixes.bind { (prefix: Designator) => entity(under(prefix, designator)).let(List(_)).or(Nil) }.distinct
+      fit(prefixes.bind { (prefix: Designator) => entity(under(prefix, designator)).let(List(_)).or(Nil) }.distinct)
 
     val tiers: List[List[Api.Entity]] =
-      List(entity(designator).let(List(_)).or(Nil), tier(scope.enclosing), tier(scope.imports), tier(Scope.standard))
+      List(fit(entity(designator).let(List(_)).or(Nil)), tier(scope.enclosing), tier(scope.imports), tier(Scope.standard))
 
     tiers.seek(!_.nil).or(Nil)
 
@@ -121,21 +163,30 @@ class Resolver(api: Api, scope0: Scope) extends Linker:
   // A qualified name which resolves, as a token for each segment and each separator, each
   // segment linked to what the name up to it resolves to in the same scope — so a prefix
   // written through an export links where the export leads — and each token after the first
-  // chained to the name before it. A member of the page's own entity (`#title`), or a
-  // reference which does not resolve, is one token.
+  // chained to the name before it. A sigil is dropped once the reference resolves, and the
+  // name's last segment takes the accent of its kind; a reference which does not resolve is
+  // one token, as written.
   override def tokens(reference: Text): List[Token] =
     val text: Text = reference.trim
+    val kind: Optional[Linker.Kind] = Linker.kind(text)
+    val name: Text = if kind.present then text.skip(1) else text
     val whole: Optional[Inline.Destination] = link(reference)
 
-    val qualified: Boolean = text.s.indexOf('.') > 0 || text.s.indexOf('#') > 0
+    val accent: Optional[Token.Accent] = kind.let:
+      case Linker.Kind.Type => Token.Accent.Typal
+      case Linker.Kind.Term => Token.Accent.Term
 
-    if whole.absent || text.starts(t".") || text.starts(t"#") || !qualified
-    then List(Token.plain(reference).copy(link = whole))
+    def accented(token: Token): Token = accent.lay(token) { (accent: Token.Accent) => token.copy(accent = accent) }
+
+    val qualified: Boolean = name.s.indexOf('.') > 0 || name.s.indexOf('#') > 0
+
+    if whole.absent then List(Token.plain(reference))
+    else if !qualified then List(accented(Token.plain(name).copy(link = whole)))
     else
       // The segments with the separators between them, in order: `a.b#C` is `a`, `.`, `b`,
       // `#`, `C`.
       def hashed(segment: Text): List[Text] = segment.cut(t"#").flatMap(List(t"#", _)).skip(1)
-      val parts: List[Text] = text.cut(t".").map(hashed).flatMap(List(t".") + _).skip(1)
+      val parts: List[Text] = name.cut(t".").map(hashed).flatMap(List(t".") + _).skip(1)
 
       def recur(parts: List[Text], written: Text, first: Boolean): List[Token] = parts match
         case part :: rest if part == t"." || part == t"#" =>
@@ -144,10 +195,11 @@ class Resolver(api: Api, scope0: Scope) extends Linker:
         case part :: rest =>
           val prefix: Text = written + part
 
-          val target: Optional[Inline.Destination] =
-            if rest.nil then whole else resolve(prefix, false)
+          val token: Token =
+            if rest.nil then accented(Token.plain(part).copy(link = whole, chained = !first))
+            else Token.plain(part).copy(link = resolve(prefix, false), chained = !first)
 
-          Token.plain(part).copy(link = target, chained = !first) :: recur(rest, prefix, false)
+          token :: recur(rest, prefix, false)
 
         case _ =>
           Nil
@@ -155,23 +207,20 @@ class Resolver(api: Api, scope0: Scope) extends Linker:
       recur(parts, t"", true)
 
   // A reference resolved, recording it as ambiguous when several entities answer it and
-  // `record` says so: a prefix of a name already resolved is not reported again.
+  // `record` says so: a prefix of a name already resolved is not reported again. A sigil
+  // (`#Name`, `.name`) says the kind; the name after it is then resolved as any other, first
+  // among what the page's own fragments defined, then through the API's tiers.
   private def resolve(reference: Text, record: Boolean): Optional[Inline.Destination] =
     val text: Text = reference.trim
+    val kind: Optional[Linker.Kind] = Linker.kind(text)
+    val name: Text = if kind.present then text.skip(1) else text
 
     def plausible: Boolean =
-      !text.s.isEmpty && !text.s.contains(" ") && !text.s.contains("(") && !text.s.contains("[") && !text.s.contains("\"")
-      && text.s.forall { c => c.isLetterOrDigit || c == '.' || c == '#' || c == '_' || c == '$' || c == '`' }
+      !name.s.isEmpty && !name.s.contains(" ") && !name.s.contains("(") && !name.s.contains("[") && !name.s.contains("\"")
+      && name.s.forall { c => c.isLetterOrDigit || c == '.' || c == '#' || c == '_' || c == '$' || c == '`' }
 
-    if !plausible then Unset
-    else if text.starts(t".") || text.starts(t"#") then
-      // A member of the page's own entity, by Amok's convention.
-      scope.enclosing.prim.let: (own: Designator) =>
-        val name: Text = text.skip(1)
-        val designator: Designator = if text.starts(t"#") then Designator.Type(own.companionType, name) else Designator.Term(own.companionObject, name)
-        entity(designator).let(destination)
-    else
-      candidates(Designator(text)) match
+    if !plausible then Unset else fenced(name, kind).or:
+      candidates(Designator(name), kind) match
         case one :: Nil => destination(one)
         case Nil        => Unset
         case many       =>

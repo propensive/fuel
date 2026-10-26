@@ -3,6 +3,15 @@
 A document is a CommonMark file. Fuel converts it, node for node, into Pyrocosm's block model,
 so what you write is what every renderer shows: headings, paragraphs, lists, quotations, rules
 and code, with *emphasis*, **strong emphasis**, `inline code` and [links](https://soundness.dev/).
+A link to another document is written as a path relative to this one — [the design](design.md),
+or [its roadmap](design.md#roadmap) — and a link to a heading on this page by its slug:
+[animation](#animation). Every link is checked when the documents compile.
+
+Inline code which names a type or a term of the API, such as `Doc` or `Blocks.of`, links to
+its page; a sigil says which is meant when it matters, as `#Doc` for the type or `.Doc.parse`
+for the term, and is not shown. A name a fence defines, such as `greeting` below, links to the
+fence which defines it. A term the [glossary] defines — a [fence], say, or a [preamble] — shows
+its definition when pointed at, and leads to where it is explained.
 
 ## Fenced code
 
@@ -121,6 +130,8 @@ val greeting: Text = t"Hello"
 greeting.upper
 val shouted: Int = greeting // does not compile
 ```
+
+So `greeting` is defined by the first of these fences, and `.greeting` says it is the term.
 
 ## What comes next
 

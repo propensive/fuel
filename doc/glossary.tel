@@ -1,0 +1,21 @@
+tel 1.0
+
+# The terms fuel's own documents name in brackets: each with a definition shown when the term
+# is pointed at, and a link to the page which explains it in full.
+
+define fence
+  link  /doc/doc/markdown.md#fenced-code
+  definition
+      A block of code in a Markdown document, between lines of three backticks, whose first
+      line names its language; Fuel highlights it, and compiles it when it is Scala.
+
+define preamble
+  link  /doc/doc/markdown.md#a-preamble
+  definition
+      The TEL at the start of a ` ```scala fuel ` fence, ended by a line holding `##`, which
+      says how the fence is compiled, marked and animated.
+
+define glossary
+  definition
+      The terms a documentation site explains in a sentence or two, defined in a TEL file and
+      shown when a bracketed term in prose is pointed at.
