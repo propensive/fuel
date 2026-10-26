@@ -492,6 +492,102 @@ error oops
 
       . assert(_ == (1, true))
 
+    suite(m"Presentations"):
+      val talk: Text = t"""title  Effects, gently
+
+slide
+  markdown
+      # Effects, gently
+      A *short* talk.
+
+slide
+  code scala
+      val x = 1
+
+slide
+  code scala
+      val x = 1
+      val y = x + 1
+
+slide
+  code scala
+      val x = 1
+      val y = x + 1
+      val z = y * 2
+
+slide
+  code java
+      int x = 1;
+
+slide
+  markdown
+      The end.
+"""
+
+      def read(text: Text): Optional[(Presentation, List[Block])] =
+        Presentation.read(t"talk.tel", text) match
+          case (presentation: Presentation, raised: List[Block] @unchecked) =>
+            (presentation, raised)
+
+          case _ =>
+            Unset
+
+      def leaves(text: Text): List[Block.Leaf] =
+        read(text).lay(Nil): (presentation: Presentation, _) =>
+          val scala = Embedding.ScalaCode(Checker.tokenized, t"talk.tel")
+
+          Presentation.deck(presentation, scala, Linker.none) match
+            case Block.Deck(leaves) => leaves
+            case _                  => Nil
+
+      test(m"a presentation is its title and its slides, each with its parts"):
+        read(talk).let: (presentation: Presentation, problems: List[Block]) =>
+          val lines: List[Int] = presentation.slides.map(_.line)
+          (presentation.title, presentation.slides.size, lines, problems.size)
+
+      . assert(_ == (t"Effects, gently", 6, List(3, 8, 12, 17, 23, 27), 0))
+
+      test(m"a run of code slides in one language is one animated block, its frames the slides"):
+        val all: List[Block.Leaf] = leaves(talk)
+
+        val animated: List[Int] = all.bind: (leaf: Block.Leaf) =>
+          leaf.content.bind:
+            case Block.Code(_, _, _, _, animation: Block.Animation) => List(animation.slides.size)
+            case _                                                  => Nil
+
+        (all.size, animated)
+
+      . assert(_ == (4, List(3)))
+
+      test(m"markdown on a slide is blocks, and code on a slide is not numbered"):
+        val all: List[Block.Leaf] = leaves(talk)
+
+        val first: Optional[Text] = all.prim.let(_.content.prim).let:
+          case Block.Heading(1, content, _) => Blocks.plain(content)
+          case _                            => Unset
+
+        val numbered: List[Optional[Int]] = all.bind(_.content).bind:
+          case code: Block.Code => List(code.start)
+          case _                => Nil
+
+        (first, numbered.all(_.absent))
+
+      . assert(_ == (t"Effects, gently", true))
+
+      test(m"a part a slide does not understand, and an empty slide, are reported at their line"):
+        read(t"slide\n  picture cat.png\n\nslide\n").lay(Nil) { (_, problems) => problems }.map:
+          case Block.Diagnostic(_, location, _, _, _) => location.let(_.line)
+          case _                                      => Unset
+
+      . assert(_ == List(1, 1, 4))
+
+      test(m"a presentation which is not TEL is a diagnostic"):
+        Presentation.read(t"talk.tel", t"slide\n      too deep\n  markdown\n") match
+          case diagnostic: Block.Diagnostic => true
+          case _                            => false
+
+      . assert(_ == true)
+
     suite(m"Incremental compilation"):
       // A checker which counts the fragments it is asked to check.
       class Counting(inner: Checker) extends Checker:

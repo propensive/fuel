@@ -19,6 +19,7 @@ fuel compile       # compile the configured directories of Markdown documents
 fuel compile --force  # the same, ignoring what the output directory keeps
 fuel serve         # serve the compiled documents at http://localhost:8060/ until Ctrl+C
 fuel show doc/x.md # one document, set in the terminal: justified, hyphenated, highlighted
+fuel present doc/slides.tel  # a presentation's slides in a browser until Ctrl+C
 fuel install       # install tab-completions and the manpage
 fuel about         # fuel's version, and the daemon serving it
 fuel --version     # the version alone
@@ -76,6 +77,37 @@ is highlighted. With `session` configured, every fence follows the ones before i
 tutorial reads as one REPL session; a fence which names a mode is checked but, to a checker
 which runs fences, not run; and a line ending `// does not compile` is compiled alone and must
 fail. [`doc/markdown.md`](../doc/markdown.md) shows each.
+
+## Presentations
+
+`fuel present <file>` shows a presentation in a browser, at `http://localhost:8061/` (or the
+`present-port`), until Ctrl+C. A presentation is a TEL document of `slide`s, each holding
+Markdown or a block of code ([`doc/slides.tel`](../doc/slides.tel) is an example):
+
+```
+title  Effects, gently
+
+slide
+  markdown
+      # Effects, gently
+      A *short* talk.
+
+slide
+  code scala
+      val x = 1
+
+slide
+  code scala
+      val x = 1
+      val y = x + 1
+```
+
+Consecutive slides which each hold one block of code in the same language are one animated
+block, its frames those slides: stepping from one to the next moves what stays, fades what
+arrives and departs, as a fence's `frame`s do. The arrow, page and space keys step through the
+slides, an animation's frames first. Code is compiled as `fuel show` compiles a document, against
+the configured classpath where there is one, and what it reports is printed before the slides are
+served.
 
 ## Output
 
