@@ -63,6 +63,7 @@ object ui:
   val Compile = Subcommand("compile", "compile the configured directories of Markdown documents")
   val Serve   = Subcommand("serve", "serve the compiled documents on the web until Ctrl+C")
   val Show    = Subcommand("show", "render one document in the terminal")
+  val Present = Subcommand("present", "show a presentation's slides in a browser until Ctrl+C")
 
   // Each is read from the cascade every Pyrocosm tool shares: the flag, the `fuel.*` property,
   // the `FUEL_*` variable, the repository's `.pyrocosm/fuel/config.tel` and the user's. A
@@ -97,6 +98,9 @@ object ui:
     Setting[Text](t"output", t"a directory `fuel compile` writes its output into, as BinTEL, compiling only what changed")
 
   val Force = Flag[Unit]("force", false, List('f'), "compile everything again, ignoring what the output directory keeps")
+
+  val PresentPort =
+    Setting[Text](t"presentPort", t"the port `fuel present` serves on (8061 by default)")
 
 // There is no `Boolean is Decodable in Text` given in distillate, so `Setting[Boolean]` reads
 // decode here: `true`, `yes` and `on` — case-insensitively — are true, and anything else false.
@@ -191,6 +195,55 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
         Out.println(t"fuel: the server has stopped")
         Exit.Ok
 
+    // `fuel present <file>`: a presentation's slides in a browser, until Ctrl+C.
+    case ui.Present() :: rest =>
+      val config: Workspace.Config = Workspace.load(directory)
+      val operand: Optional[Text] = rest.map(_()).filter(!_.starts(t"-")).prim
+
+      val port: Int = ui.PresentPort() match
+        case text: Text => safely(text.as[Int]).or(Presenter.port)
+        case _          => Presenter.port
+
+      execute:
+        given Stdio = summon[Invocation].stdio
+        given Environment = caps.unsafe.unsafeAssumePure(summon[Invocation].environment)
+        val stdio: Stdio = summon[Stdio]
+
+        operand match
+          case Unset =>
+            Out.println(t"fuel: usage: fuel present <file>")
+            UsageError
+
+          case operand: Text =>
+            val prepared = Presenter.prepare(config, absolute(directory, operand), width)
+
+            prepared.lay[Exit | UsageError.type | NoDocument.type](NoDocument): (title, deck) =>
+              val aborted: juc.atomic.AtomicBoolean = juc.atomic.AtomicBoolean(false)
+
+              trap:
+                case Signal(Interrupt.Int, _, _, _) =>
+                  aborted.set(true)
+                  SignalResponse.Accept
+
+              val frontend: pyrocosm.WebFrontend = Presenter.frontend(port)
+              async(frontend.run(Presenter.interface(title, deck))((_: pyrocosm.Event) => ()))
+              val url: Text = t"http://localhost:${port.toString.tt}/"
+              Out.println(t"fuel: presenting $title at $url (Ctrl+C to stop)")
+
+              // On a terminal the launcher forwards Ctrl+C as a byte rather than a signal.
+              def loop(): Unit =
+                if tty then
+                  while stdio.in.available() > 0 do if stdio.in.read() == 3 then aborted.set(true)
+
+                if !aborted.get then
+                  snooze(0.25*Second)
+                  loop()
+
+              loop()
+              frontend.stop()
+              Out.println(t"fuel: the presentation has stopped")
+              Exit.Ok
+
     // `fuel compile`: read the settings here, where completion mode registers them, and
     // compile within the execution.
     // `fuel show <file>`: one document, compiled as `compile` would, set in the terminal.
@@ -210,6 +263,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
         Out.println(t"")
         Out.println(t"  compile    compile the configured directories of Markdown documents")
         Out.println(t"  show       render one document in the terminal")
+        Out.println(t"  present    show a presentation's slides in a browser until Ctrl+C")
         Out.println(t"  serve      serve the compiled documents on the web until Ctrl+C")
         Out.println(t"  about      show this tool's name, version and daemon")
         Out.println(t"  install    install shell tab-completions and the manpage")

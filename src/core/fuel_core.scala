@@ -316,6 +316,33 @@ object Embedding:
               problems0 = Preamble.diagnostic(error, path, text, fence + 1) :: problems0
               Preamble.empty
 
+        embedded(info, header, preamble, code, content, fence, start, before)
+
+    // A fragment whose preamble is read already — a slide's code, whose preamble is the
+    // slide's own TEL — compiled as a fence with that preamble would be, at `line`.
+    def embedWith(info: List[Text], preamble: Preamble, code: Text, line: Int): List[Block] =
+      prepare()
+      val before: List[Block] = problems0
+      val trimmedCode: Text = trimmed(code)
+      count += 1
+      linker.learn(imported(trimmedCode))
+      embedded(info, Unset, preamble, trimmedCode, code, line, line, before)
+
+    // A fragment, its preamble read: `header` is the preamble's text, when it was a fence's,
+    // which places a frame without code at its line; `content` is what the fence held, which
+    // keys what is kept of it; `start` is the line its code begins on; and `before` the
+    // problems before it, from which what it raises is told.
+    private def embedded
+      ( info:     List[Text],
+        header:   Optional[Text],
+        preamble: Preamble,
+        code:     Text,
+        content:  Text,
+        fence:    Int,
+        start:    Int,
+        before:   List[Block] )
+    :   List[Block] =
+
         if preamble.restart then history = Nil
         features = features + preamble.features.filter { (feature: Text) => !features.has(feature) }
 

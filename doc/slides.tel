@@ -1,0 +1,39 @@
+tel 1.0
+
+# An example presentation, which `fuel present doc/slides.tel` shows in a browser: a slide holds
+# Markdown or a block of code, and consecutive slides of code in one language are animated from
+# one to the next. A slide's code may say what a fence's preamble says — marks, `context`,
+# `errors`, frames — with the code itself beneath `code`, and a `label` for its frame.
+title  Fuel, in three slides of code
+
+slide
+  markdown
+      # Fuel, in three slides of code
+
+      Each code slide below is a frame of one animation: step with the arrow keys, and press
+      `f` for full screen.
+
+slide
+  code scala
+      val greeting: Text = t"Hello"
+
+slide
+  code scala
+    label  a new value, from the first
+    highlight shouted  derived
+    code
+        val greeting: Text = t"Hello"
+        val shouted: Text = greeting.upper
+
+slide
+  code scala
+    label  and its size
+    highlight size
+    code
+        val greeting: Text = t"Hello"
+        val shouted: Text = greeting.upper
+        val size: Int = shouted.length
+
+slide
+  markdown
+      That's all.

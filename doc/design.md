@@ -342,8 +342,13 @@ variables reach it too.
   and Java: TEL schemas as a hierarchy (records, fields, scalars — the first non-JVM API),
   Java through harlequin as now, other fences highlighted by a pluggable tokenizer or shown
   plain. Pyrocosm's `Language` is open, so nothing in the model changes.
-- **M7 Presentations** (optional): Amok's `format presentation` decks as a one-panel interface
-  stepping through `Markdown#sections`, with the animations of M3. Only if wanted.
+- **M7 Presentations** (first cut). `fuel present <file>` shows a TEL document of `slide`s, each
+  holding Markdown or a block of code, as a Pyrocosm `Block.Deck` (propensive/pyrocosm#80) in a
+  browser: one slide at a time, stepped by the keys. Consecutive slides of code in one language
+  are one animated block, made by the embedding a fence with `frame`s goes through, so the
+  animation is M3's; the deck steps through its frames before moving on. Not yet: a schedule to
+  autoplay slides and animations to, the customisation a slide's children will carry (labels,
+  marks, holds), and reloading a presentation as its file changes.
 
 ### Decisions
 
