@@ -581,6 +581,50 @@ slide
 
       . assert(_ == List(1, 1, 4))
 
+      def codes(text: Text): List[Block.Code] =
+        leaves(text).bind(_.content).bind:
+          case code: Block.Code => List(code)
+          case _                => Nil
+
+      test(m"a slide's code may say what a fence's preamble says, its code beneath `code`"):
+        val slide: Text =
+          t"slide\n  code scala\n    highlight y  a new name\n    code\n" +
+            t"        val x = 1\n        val y = x + 1\n"
+
+        codes(slide).bind(_.notes).map: (note: Block.Note) =>
+          (note.style, Blocks.plain(note.caption), note.line)
+
+      . assert(_ == List((Block.Note.Style.Highlight, t"a new name", 1)))
+
+      test(m"a slide's code with frames of its own is an animation alone, not joined to others"):
+        def frame(code: Text): Text = t"    frame\n      code\n$code"
+        val second: Text = t"          val a = 1\n          val b = 2\n"
+        val first: Text = t"          val a = 1\n"
+        val framed: Text = t"slide\n  code scala\n" + frame(first) + frame(second)
+        val plain: Text = t"slide\n  code scala\n      val c = 3\n"
+
+        codes(framed + plain).map(_.animation.let(_.slides.size))
+
+      . assert(_ == List(2, Unset))
+
+      test(m"each slide of a run is a frame, with the slide's label"):
+        def step(label: Text, code: Text): Text =
+          t"slide\n  code scala\n    label  $label\n    code\n        $code\n"
+
+        val run: Text = step(t"first", t"val x = 1") + step(t"second", t"val y = 2")
+
+        def labels(animation: Block.Animation): List[Text] =
+          animation.slides.map(_.label).map(Blocks.plain)
+
+        codes(run).bind(_.animation.let(labels).or(Nil))
+
+      . assert(_ == List(t"first", t"second"))
+
+      test(m"a presentation is shown on a stage"):
+        Presenter.interface(t"Talk", Block.Deck(Nil)).hints.has[pyrocosm.hints.web.Stage.type]
+
+      . assert(_ == true)
+
       test(m"a presentation which is not TEL is a diagnostic"):
         Presentation.read(t"talk.tel", t"slide\n      too deep\n  markdown\n") match
           case diagnostic: Block.Diagnostic => true

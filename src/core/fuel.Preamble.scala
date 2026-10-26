@@ -128,8 +128,12 @@ object Preamble:
 
     raw.copy(location = location, excerpt = excerpt)
 
-  private def read(text: Text): Preamble raises Tel.Error =
-    val tel: Tel = headed(text).read[Tel]
+  private def read(text: Text): Preamble raises Tel.Error = of(headed(text).read[Tel])
+
+  // A preamble read from a TEL node whose children are its keywords: the document above a
+  // fence's `##`, or anything else which says what a fragment's preamble says — a slide's code.
+  // A keyword the preamble does not know is left for the node's owner to read.
+  def of(tel: Tel): Preamble =
     locally:
       def atoms(keyword: Text): List[Text] =
         tel.fields(keyword).to[List].map(_.primaryAtom).filter(_ != t"")

@@ -35,7 +35,7 @@ package fuel
 import soundness.*
 
 import palettes.solarizedDarkGaugePalette
-import pyrocosm.{Block, Inline, Interface, Live, Panel, TerminalRenderer}
+import pyrocosm.{Block, Hints, Inline, Interface, Live, Panel, TerminalRenderer}
 import tableStyles.thickTableStyle
 import textMetrics.uniformMetric
 
@@ -95,7 +95,8 @@ object Presenter:
     val priority: Panel.Priority = Panel.Priority.Essential
     val panel: Panel = Panel(Panel.Id(t"slides"), Panel.Role.Primary, Unset, content, priority)
 
-    Interface(Inline.text(title), List(panel))
+    // On a stage: the deck alone, filling the window and scaled to it.
+    Interface(Inline.text(title), List(panel), hints = Hints(pyrocosm.hints.web.Stage))
 
   // A frontend serving the interface on the port, which `run` serves until `stop`. Vouched
   // pure, as the dashboard's is: it outlives the invocation which starts it.
