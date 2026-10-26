@@ -6,6 +6,13 @@ tel 1.0
 # needs: the fork's repairs, and the proscenium predef with Soundness imported.
 document doc
 
+# The project's own sources, whose API is documented by the overlays in doc/api, compiled in
+# the session against the classpath, which is the dependencies: here the launcher assembly,
+# which carries them all (and fuel's own classes, which the sources' copies shadow).
+source src/core
+overlay doc/api
+imports soundness
+
 classpath out/fuel/launcher/assembly.dest/out.jar
 
 scalac-option -Zalias-captures

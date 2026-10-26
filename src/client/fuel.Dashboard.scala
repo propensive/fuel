@@ -36,11 +36,15 @@ import java.util.concurrent as juc
 
 import soundness.*
 
+import dysasymptotics.{linearAccess, linearSize}
+
 import pyrocosm.{Action, Block, Event, Hints, Inline, Interface, Live, Panel, Tone, Tool, hints}
 
-// The documents as the web front-end `Tool` serves from the daemon: launched once, for as long
-// as the daemon lives, when a config says `serve` (on its `port`, or 8060), and stopped by
-// `fuel quit`. `fuel serve` remains the interactive way to serve it, from a terminal.
+// The documents and the API as the web front-end `Tool` serves from the daemon: launched once,
+// for as long as the daemon lives, when a config says `serve` (on its `port`, or 8060), and
+// stopped by `fuel quit`. `fuel serve` remains the interactive way to serve it, from a
+// terminal. Every tab has a session of its own, since every page has a URL of its own:
+// `/doc/<section>/<path>` for a document, `/api/<entity>` for an entity.
 object Dashboard:
   val web: Tool.Web = new Tool.Web:
     def port: Int = 8060
@@ -51,13 +55,13 @@ object Dashboard:
     @volatile
     private var frontend: Optional[pyrocosm.WebFrontend] = Unset
 
-    // Serves until `stop`. A ticker drives the dashboard a few times a second for as long as
-    // the front-end runs: it is what notices a new compile.
+    // Serves until `stop`. A ticker drives every live dashboard a few times a second for as
+    // long as the front-end runs: it is what notices a new compile.
     def serve(port: Int)(using Monitor, Probate): Unit =
       import webserverErrorPages.minimalErrorPage
 
-      val dashboard = Dashboard()
       val serving: juc.atomic.AtomicBoolean = juc.atomic.AtomicBoolean(true)
+      val live: juc.ConcurrentHashMap[Dashboard, Boolean] = juc.ConcurrentHashMap()
 
       val running: pyrocosm.WebFrontend =
         scala.caps.unsafe.unsafeAssumePure:
@@ -68,10 +72,21 @@ object Dashboard:
       try
         async:
           while serving.get do
-            dashboard.tick()
+            live.keySet.nn.forEach { dashboard => dashboard.nn.tick() }
             snooze(0.25*Second)
 
-        running.run(dashboard.interface)(dashboard.handle)
+        running.serve: () =>
+          val dashboard = Dashboard()
+          live.put(dashboard, true)
+
+          // The handler lives as long as the session; vouched pure, as the frontend's are.
+          val handle: Event -> Unit = scala.caps.unsafe.unsafeAssumePure: (event: Event) =>
+            event match
+              case Event.Closed => live.remove(dashboard)
+              case _            => ()
+            dashboard.handle(event)
+
+          (dashboard.interface, handle)
       finally serving.set(false)
 
     def stop(): Unit = frontend.let(_.stop())
@@ -94,12 +109,19 @@ object Dashboard:
         val header: Http.Header = Http.Header(t"content-type", t"text/plain; charset=utf-8")
         Http.Ok(List(header), Http.Body.Fixed(text.in[Data]))
 
-// The dashboard: every section's documents to choose from, and the chosen document's blocks.
-final class Dashboard():
-  // A document in a section, as the navigation offers it.
-  private case class Target(section: Text, path: Text)
+  // The URL of a document: its section and its path, each segment encoded.
+  def docUrl(section: Text, path: Text): Text =
+    def encode(text: Text): Text = Text(java.net.URLEncoder.encode(text.s, "UTF-8").nn.replace("+", "%20").nn)
+    t"/doc/${encode(section)}/${path.cut(t"/").map(encode).join(t"/")}"
 
-  private val docActions: juc.ConcurrentHashMap[Target, Action] = juc.ConcurrentHashMap()
+// One tab's dashboard: the navigation of every section's documents and of the API, and the
+// page its URL names.
+final class Dashboard():
+  // What a tab is looking at: a document, by its section and path, or an entity, by its key.
+  private enum Target:
+    case Document(section: Text, path: Text)
+    case Entity(key: Text)
+    case Missing(path: Text)
 
   @scala.caps.unsafe.untrackedCaptures
   @volatile
@@ -134,46 +156,49 @@ final class Dashboard():
                 content,
                 Panel.Priority.Essential ) ) )
 
-  private def docAction(target: Target): Action =
-    docActions.computeIfAbsent(target, _ => Action(t"${target.section}/${target.path}")).nn
+  // The target a path names: the first document for `/`, a document, an entity, or nothing.
+  private def target(path: Text): Optional[Target] =
+    def decode(text: Text): Text = Text(java.net.URLDecoder.decode(text.s, "UTF-8").nn)
 
-  private def keyOf(action: Action): Optional[Target] =
-    val entries = docActions.entrySet.nn.iterator.nn
+    if path == t"/" || path == t"" then first
+    else if path.starts(t"/doc/") then
+      val rest: List[Text] = path.skip(5).cut(t"/")
+      rest.prim.let { (section: Text) => Target.Document(decode(section), rest.skip(1).map(decode).join(t"/")) }
+    else if path.starts(t"/api/") then
+      Server.api.locate(path.skip(5)).lay(Target.Missing(path)) { (entity: Api.Entity) => Target.Entity(entity.key) }
+    else Target.Missing(path)
 
-    def recur(): Optional[Target] =
-      if !entries.hasNext then Unset else
-        val entry = entries.next.nn
-        if entry.getValue == action then entry.getKey.nn else recur()
-
-    recur()
+  private def first: Optional[Target] =
+    Server.corpus.let: (corpus: Corpus) =>
+      corpus.sections.seek(!_.docs.nil).let: (section: Corpus.Section) =>
+        section.docs.prim.let { (doc: Doc) => Target.Document(section.name, doc.path) }
 
   def handle(event: Event): Unit = event match
-    case Event.Pressed(action) =>
-      keyOf(action).let: (target: Target) =>
-        selected = target
-        show()
-        refresh()
+    case Event.Located(path) =>
+      selected = target(path)
+      show()
+      refresh()
 
     case _ =>
       ()
 
   // The serving loop's beat: a new compile replaces the navigation and re-shows the selected
-  // document (or the first, where none is selected or the selected one is gone).
+  // page (or the first document, where none is selected or the selected one is gone).
   def tick(): Unit =
     val edition: Long = Server.edition
 
     if edition != shown then
       shown = edition
 
-      Server.corpus.let: (corpus: Corpus) =>
-        def exists(target: Target): Boolean = corpus.doc(target.section, target.path).present
-        val current: Boolean = selected.lay(false)(exists)
+      // A page which is gone gives way to the first document; one which was never there stays
+      // as it is, saying so.
+      val current: Boolean = selected match
+        case Target.Document(section, path) => Server.corpus.let(_.doc(section, path)).present
+        case Target.Entity(key)             => Server.api(key).present
+        case Target.Missing(_)              => true
+        case _                              => false
 
-        if !current then
-          selected =
-            corpus.sections.seek(!_.docs.nil).let: (section: Corpus.Section) =>
-              section.docs.prim.let: (doc: Doc) => Target(section.name, doc.path)
-
+      if !current then selected = first
       show()
       refresh()
 
@@ -185,25 +210,53 @@ final class Dashboard():
       navigation() = navigation0
 
   private def show(): Unit =
-    selected.let: (target: Target) =>
-      Server.corpus.let(_.doc(target.section, target.path)).let: (doc: Doc) =>
-        content() = doc.blocks
+    selected.let:
+      case Target.Document(section, path) =>
+        Server.corpus.let(_.doc(section, path)).let { (doc: Doc) => content() = doc.blocks + doc.problems }
 
-  private def marked(chosen: Boolean, label: Text): List[Inline] =
-    if chosen then List(Inline.Toned(Tone.Accent, List(Inline.Emphasis(Inline.text(label)))))
-    else Inline.text(label)
+      case Target.Entity(key) =>
+        content() = Server.page(key).or(Server.api(key).let(Dashboard.render).or(Nil))
 
-  // Every section's documents, by title, the selected one marked.
+      case Target.Missing(path) =>
+        content() = List(Block.Notice(Tone.Warning, Inline.text(t"Not found"), List(Block.paragraph(t"There is no page at $path."))))
+
+  // The navigation: each section's documents, by title, then the API, the current page
+  // marked.
   private def navigationBlocks(): List[Block] =
     val empty: List[Block] =
       List(Block.paragraph(t"No documents yet: run fuel compile in a project."))
 
     Server.corpus.lay(empty): (corpus: Corpus) =>
-      corpus.sections.bind[List[Block], Block, List[Block]]: (section: Corpus.Section) =>
-        val items: List[Block.Item] =
-          section.docs.map: (doc: Doc) =>
-            val target = Target(section.name, doc.path)
-            val label: List[Inline] = marked(selected == target, doc.title)
-            Block.Item(List(Block.Paragraph(label)), docAction(target))
+      val documents: List[Block.TreeNode] =
+        corpus.sections.map: (section: Corpus.Section) =>
+          val children: List[Block.TreeNode] =
+            section.docs.map: (doc: Doc) =>
+              val current: Boolean = selected == Target.Document(section.name, doc.path)
+              val tone: Optional[Tone] = if current then Tone.Accent else Unset
+              Block.TreeNode(Inline.text(doc.title), Nil, tone, Unset, Unset, Inline.Destination.Local(Dashboard.docUrl(section.name, doc.path)))
 
-        List(Block.Heading(3, Inline.text(section.name)), Block.Listing(false, items))
+          Block.TreeNode(Inline.text(section.name), children, Unset, Unset, true)
+
+      val api: Api = Server.api
+      val current: Optional[Text] = selected match
+        case Target.Entity(key) => key
+        case _                  => Unset
+
+      val apiTree: List[Block] =
+        if api.entities.isEmpty then Nil
+        else List(Block.Heading(3, Inline.text(t"API")), ApiPages.tree(api, current))
+
+      List(Block.Tree(documents)) + apiTree
+
+
+
+// A page rendered when asked for — a dependency's, or one the compile did not render — with
+// its examples highlighted alone, on the compiler's thread.
+extension (dashboard: Dashboard.type)
+  private def render(entity: Api.Entity): List[Block] =
+    Checking.exclusive:
+      val api: Api = Server.api
+      val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Server.imports))
+      val resolver: Resolver = Resolver(api, scope)
+      val scala: Embedding.ScalaCode = Embedding.ScalaCode(Checker.tokenized, entity.key, false, Unset, resolver)
+      ApiPages.page(api, entity, resolver, scope, List(scala, Embedding.JavaCode))

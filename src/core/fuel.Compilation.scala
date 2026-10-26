@@ -42,10 +42,12 @@ object Compilation:
   // How a corpus's fragments are compiled: as one session per document, each fragment
   // following the ones before it, and with the document's fixture (`<fixtures>/<name>.scala`)
   // first.
+  // `linker` gives each document, by its path, the linker its references resolve through.
   case class Regime
     ( session:  Boolean                = false,
       fixtures: Optional[Text]         = Unset,
-      progress: (Text, Int) => Unit    = (_, _) => () )
+      progress: (Text, Int) => Unit    = (_, _) => (),
+      linker:   Text => Linker         = (_: Text) => Linker.none )
 
   // A section's name is its directory's last segment.
   def name(root: Text): Text = root.cut(t"/").filter(_ != t"").reverse.prim.or(root)
@@ -82,7 +84,7 @@ object Compilation:
 
         text match
           case text: Text =>
-            val doc: Doc = Doc.parse(relative(path), text, checker, regime.session, fixture(path))
+            val doc: Doc = Doc.parse(relative(path), text, checker, regime.session, fixture(path), regime.linker(relative(path)))
             regime.progress(relative(path), doc.problems.size)
             recur(tail, docs + List(doc), skipped)
 
@@ -109,7 +111,7 @@ object Compilation:
           (text: Text) => (file, text)
 
     safely(path.as[Path on Linux]).let { (file: Path on Linux) => safely(file.read[Text]) }.let:
-      (text: Text) => Doc.parse(path, text, checker, regime.session, fixture)
+      (text: Text) => Doc.parse(path, text, checker, regime.session, fixture, regime.linker(path))
 
   // A file that could not be read or parsed, as a diagnostic.
   def unreadable(path: Text): Block =

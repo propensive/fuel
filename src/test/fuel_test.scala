@@ -35,7 +35,8 @@ package fuel
 // Excluded from the umbrella: `Compilation`, anthology's, which would outrank fuel's own.
 import soundness.{Compilation as _, Language as _, Token as _, *}
 
-import dysasymptotics.linearSize
+import dysasymptotics.{linearAccess, linearSize}
+import scala.jdk.CollectionConverters.*
 import pyrocosm.{Block, Inline, Language, TerminalRenderer, Token, Tone}
 import systems.javaBaseSystem
 
@@ -56,6 +57,10 @@ make run
   // The suite's own classpath, from its classloader (so it is the same under fume, which runs
   // the suite in-process, as under plain java), carrying the Scala library the fragments need.
   val classpath: LocalClasspath = LocalClasspath.of(Classloader[Tests.type])
+
+  // The sample's model, from the Inspection suite, for the Overlays suite to document.
+  @scala.caps.unsafe.untrackedCaptures
+  var api0: Api = Api.empty
 
   def run(): Unit =
     suite(m"Markdown to blocks"):
@@ -495,6 +500,280 @@ error oops
           Fragments.read(Fragments.tel(doc.blocks)) == doc.blocks
 
       . assert(_ == true)
+
+    suite(m"Inspection"):
+      // A project's own source, compiled in a session on the suite's classpath and saved, as
+      // `fuel compile` compiles the configured sources; then walked, with the saved output as
+      // the project's own and the classpath as its dependencies.
+      val sample: Text = t"""package sample
+
+trait Shape[+A]:
+  def area: Double
+
+case class Doc(title: String, size: Int = 0) extends Shape[Int]:
+  def area: Double = 0.0
+  def shout: String = title.toUpperCase
+  private def secret: Int = 1
+
+object Doc:
+  def parse(text: String): Doc = Doc(text)
+  def parse(text: String, size: Int): Doc = Doc(text, size)
+
+object Util:
+  extension (text: String) def twice: String = text + text
+  type Pair[A] = (A, A)
+  given Ordering[Doc] = Ordering.by(_.title)
+  val limit: Int = 10
+"""
+
+      val output: Text = Text(java.nio.file.Files.createTempDirectory("fuel-api").nn.toString)
+      val entries: List[Text] = classpath().cut(t":").filter(_ != t"")
+
+      lazy val notices: List[Notice] =
+        Checking.session(classpath, Nil) { (checker: Checker) => checker.build(Map(t"Sample.scala" -> sample), output) }
+
+      lazy val api: Api | Throwable =
+        notices
+        Inspection.walk(List(output), Nil, entries)
+
+      api0 = api match
+        case api: Api => api
+        case _        => Api.empty
+
+      def entity(key: Text): Optional[Api.Entity] = api match
+        case api: Api => api(key)
+        case _        => Unset
+
+      test(m"the sources compile, and their TASTy is saved"):
+        (notices.filter(_.importance == Importance.Error).size, Inspection.tastyIn(output).size > 0)
+      . assert(_ == (0, true))
+
+      test(m"the inspection yields a model"):
+        api match
+          case api: Api         => t"${api.entities.size.toString} entities"
+          case error: Throwable => t"${error.toString}: ${java.lang.String.join("; ", error.getStackTrace.nn.take(6).map(_.toString)*).nn}"
+      . assert(_.ends(t"entities"))
+
+      test(m"a case class and its companion are one entity, with a template and a definition"):
+        entity(t"sample.Doc").let { (doc: Api.Entity) => (doc.own, doc.template.let(_.kind), doc.definition.let(_.kind)) }
+      . assert(_ == (true, Api.Kind.CaseClass, Api.Kind.Object))
+
+      test(m"a field is a member of the type, and a companion method of the term"):
+        (entity(t"sample.Doc#title").let(_.definition.let(_.kind)), entity(t"sample.Doc.parse").let(_.definition.let(_.kind)))
+      . assert(_ == (Api.Kind.Val, Api.Kind.Def))
+
+      test(m"an entity's page is at its path, with `~` after a type and `.` after a term"):
+        (entity(t"sample.Doc#title").let(_.url), entity(t"sample.Doc.parse").let(_.url))
+      . assert(_ == (t"/api/sample.Doc~title", t"/api/sample.Doc.parse"))
+
+      test(m"a path leads back to its entity"):
+        api match
+          case api: Api => api.locate(t"sample.Doc~title").let(_.key)
+          case _        => Unset
+      . assert(_ == t"sample.Doc#title")
+
+      test(m"a package is an entity whose members are its types and terms, declared once"):
+        entity(t"sample").let { (p: Api.Entity) => (p.members.has(t"sample.Doc"), p.overloads.size) }
+      . assert(_ == (true, 0))
+
+      test(m"a private member is not walked"):
+        entity(t"sample.Doc#secret").present
+      . assert(_ == false)
+
+      test(m"a method's signature has its clauses and its result, and its overloads are kept"):
+        entity(t"sample.Doc.parse").let { (e: Api.Entity) => (e.definition.let(_.clauses.size), e.definition.let(_.result.let(_.qualified)), e.overloads.size) }
+      . assert(_ == (1, t"sample.Doc", 1))
+
+      test(m"a class's parents are its declared ones"):
+        entity(t"sample.Doc").let(_.template.let(_.parents.map(_.qualified)))
+      . assert(_ == List(t"sample.Shape[scala.Int]"))
+
+      test(m"an extension keeps the clause it extends apart from its own"):
+        entity(t"sample.Util.twice").let(_.definition.let { (d: Api.Declaration) => (d.kind, d.group.size, d.clauses.size) })
+      . assert(_ == (Api.Kind.Extension, 1, 0))
+
+      test(m"a type alias has its parameters and its right-hand side"):
+        entity(t"sample.Util.Pair").let(_.template.let { (d: Api.Declaration) => (d.kind, d.clauses.size, d.result.let(_.qualified)) })
+      . assert(_ == (Api.Kind.Type, 1, t"(A, A)"))
+
+      test(m"a given and a val are declarations of their kinds"):
+        (entity(t"sample.Util.given_Ordering_Doc").let(_.definition.let(_.kind)), entity(t"sample.Util.limit").let(_.definition.let(_.kind)))
+      . assert(_ == (Api.Kind.Given, Api.Kind.Val))
+
+      test(m"a dependency jar is walked through the session's symbol table"):
+        val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
+        val jar: Text = t"$here/out/fuel/launcher/assembly.dest/out.jar"
+
+        val result: Api | Throwable =
+          Checking.session(classpath, Nil): (checker: Checker) =>
+            checker.context.lay[Api | Throwable](Api.empty) { (context: dotty.tools.dotc.core.Contexts.Context) => Inspection.classpath(List(jar), context) }
+
+
+        result match
+          case api: Api         => (api.entities.size > 1000, api(t"scala.Option").let(_.own), api(t"scala.Option").let(_.template.let(_.kind)), api(t"scala.Option#map").present, api(t"scala.Option#map").let(_.definition.let(_.result.let(_.qualified))))
+          case error: Throwable => error.toString
+      . assert(_ == (true, false, Api.Kind.Class, true, t"scala.Option[B]"))
+
+      test(m"every type of a dependency renders through stenography, none from its parts and none as `?`"):
+        (Inspection.fallbacks.get, Inspection.unrendered.get, Inspection.rendered.get > 10000)
+      . assert(_ == (0, 0, true))
+
+      test(m"a dependency jar is walked before a build, in a session on that jar under the project's options"):
+        val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
+        val jar: Text = t"$here/out/fuel/launcher/assembly.dest/out.jar"
+        val out: Text = Text(java.nio.file.Files.createTempDirectory("fuel-probe").nn.toString)
+
+        val config: Text = Text(java.nio.file.Files.readString(java.nio.file.Path.of(s"$here/.pyrocosm/fuel/config.tel")).nn)
+        val options: List[Text] = config.cut(t"\n").filter(_.starts(t"scalac-option ")).map(_.skip(14).trim)
+        val sizes: (Int, Int) =
+          Checking.session(List(jar), options): (checker: Checker) =>
+            val before: Int = checker.context.lay(0) { (c: dotty.tools.dotc.core.Contexts.Context) => Inspection.classpath(List(jar), c) match { case api: Api => api.entities.size; case _ => -1 } }
+            checker.build(Map(t"Probe.scala" -> sample), out)
+            val after: Int = checker.context.lay(0) { (c: dotty.tools.dotc.core.Contexts.Context) => Inspection.classpath(List(jar), c) match { case api: Api => api.entities.size; case _ => -1 } }
+            (before, after)
+
+        // After a compile under these options the walk reads next to nothing, which is why
+        // the compile step walks the dependencies first.
+        (sizes(0) > 10000, sizes(1) < sizes(0))
+      . assert(_ == (true, true))
+
+      test(m"a symbolic name is encoded in its path, and decoded from it"):
+        Api.unpath(Api.path(stenography.Designator(t"a.B"), t"+:")).name
+      . assert(_ == t"+:")
+
+    suite(m"Overlays"):
+      val overlay: Text = t"""base sample
+import scala
+
+info  a sample package
+detail
+    All about _sample_.
+
+entry .Doc   a document
+  detail
+      A `Doc` has a *title*.
+  import scala.util
+  entry #title   its title
+  entry #shout   its title, loudly
+  entry #area    nothing much
+  entry .parse   parses a document
+  entry #whisper  its title, quietly
+    until 0.2.0  sample.Doc#shout
+
+entry .Util   utilities
+  hidden
+entry .Shape   a shape
+entry .nowhere   nothing of the sort
+"""
+
+      lazy val read: Overlay | Block.Diagnostic = Overlay.read(t"doc/api/sample.tel", overlay)
+
+      def api: Api = Tests.this.api0
+
+      lazy val merged: Optional[(Api, List[Block])] = read match
+        case overlay: Overlay => Overlay.merge(api, List(overlay))
+        case _                => Unset
+
+      def problems(tone: Tone): List[Text] =
+        merged.lay(Nil: List[Block]) { (m: (Api, List[Block])) => m(1) }.bind:
+          case Block.Diagnostic(tone0, location, message, _, _) if tone0 == tone =>
+            List(t"${location.let(_.path).or(t"?")}:${location.let(_.line).or(0).toString}: ${Blocks.plain(message.bind { case Block.Paragraph(c) => c; case _ => Nil })}")
+          case _ => Nil
+
+      test(m"an overlay is read: its base, its package's info and detail, and its imports"):
+        read match
+          case overlay: Overlay => (overlay.base, overlay.doc.info, overlay.doc.detail.let(_.trim), overlay.doc.imports)
+          case other            => other
+      . assert(_ == (t"sample", t"a sample package", t"All about _sample_.", List(t"scala")))
+
+      test(m"an entry has its name, kind, info (inline), detail (source), line and inherited imports"):
+        read match
+          case overlay: Overlay =>
+            overlay.entries.prim.let { (e: Overlay.Entry) => (e.name, e.isType, e.doc.info, e.doc.detail.let(_.trim), e.line, e.doc.imports, e.entries.size) }
+          case other => other
+      . assert(_ == (t"Doc", false, t"a document", t"A `Doc` has a *title*.", 8, List(t"scala", t"scala.util"), 5))
+
+      test(m"a leaf entry's detail is its source atom"):
+        read match
+          case overlay: Overlay => overlay.entries.at(Sec).let(_.entries.prim.let(_.doc.detail))
+          case other            => other
+      . assert(_ == Unset)
+
+      test(m"an entry's children are placed by their parent's kind"):
+        merged.let(_(0)(t"sample.Doc#title").let(_.doc.let(_.info)))
+      . assert(_ == t"its title")
+
+      test(m"an entry for a member nothing declares is a failure at its line"):
+        problems(Tone.Failure)
+      . assert(_ == List(t"doc/api/sample.tel:22: `.nowhere` is documented here, but no such member of `sample` is declared."))
+
+      test(m"an entry marked `until` need not exist, and has a page which is removed"):
+        merged.let(_(0)(t"sample.Doc#whisper").let { (e: Api.Entity) => (e.removed, e.doc.let(_.until.let(_.replacement))) })
+      . assert(_ == (true, t"sample.Doc#shout"))
+
+      test(m"an undocumented public member is a caution where it is declared; a hidden entity's members are not"):
+        problems(Tone.Warning)
+      . assert(_ == List
+          ( t"Sample.scala:6: `sample.Doc#size` is not documented: add `entry #size` under `sample.Doc` in doc/api/sample.tel.",
+            t"Sample.scala:4: `sample.Shape#area` is not documented: add `entry #area` under `sample.Shape` in doc/api/sample.tel." ))
+
+    suite(m"Resolution"):
+      def resolver(scope: Scope): Resolver = Resolver(Tests.this.api0, scope)
+      def linked(scope: Scope, reference: Text): Optional[Text] = resolver(scope).link(reference) match
+        case Inline.Destination.Local(path, _) => path
+        case _                                 => Unset
+
+      test(m"a qualified name resolves as written"):
+        linked(Scope.document(Nil), t"sample.Doc")
+      . assert(_ == t"/api/sample.Doc")
+
+      test(m"a leaf resolves through an import"):
+        linked(Scope.document(List(t"sample")), t"Doc")
+      . assert(_ == t"/api/sample.Doc")
+
+      test(m"a leaf does not resolve without a scope"):
+        linked(Scope.document(Nil), t"Doc")
+      . assert(_ == Unset)
+
+      test(m"a member resolves through its enclosing entity, and by Amok's `.`/`#` forms"):
+        val doc: Api.Entity = Tests.this.api0(t"sample.Doc").or(Api.Entity(Unset, t"?"))
+        val scope: Scope = Scope.of(doc, Nil)
+        (linked(scope, t"parse"), linked(scope, t"#title"), linked(scope, t".parse"), linked(scope, t"Doc#shout"))
+      . assert(_ == (t"/api/sample.Doc.parse", t"/api/sample.Doc~title", t"/api/sample.Doc.parse", t"/api/sample.Doc~shout"))
+
+      test(m"a fragment's imports are learned"):
+        val r: Resolver = resolver(Scope.document(Nil))
+        r.learn(List(t"import sample.*"))
+        r.link(t"Util") match
+          case Inline.Destination.Local(path, _) => path
+          case _                                 => Unset
+      . assert(_ == t"/api/sample.Util")
+
+      test(m"a typed token links only when it is the name its type names"):
+        val r: Resolver = resolver(Scope.document(Nil))
+        val doc: stenography.Syntax = stenography.Syntax.Simple(stenography.Designator(t"sample.Doc"))
+        (r.link(t"Doc", doc).present, r.link(t"x", doc).present)
+      . assert(_ == (true, false))
+
+      test(m"a signature is tokens, its designators linked and elided by the scope"):
+        val api: Api = Tests.this.api0
+        val parse: Api.Declaration = api(t"sample.Doc.parse").let(_.definition).or(Api.Declaration(Api.Kind.Def))
+        val tokens = Signatures.declaration(t"parse", parse, api, Scope.document(List(t"sample")))
+        (tokens.map(_.text).join(t""), tokens.seek(_.text == t"Doc").let(_.link))
+      . assert(_ == (t"def parse(text: String): Doc", Inline.Destination.Local(t"/api/sample.Doc")))
+
+      test(m"a page has its heading, signature and member rows anchored by name"):
+        val api: Api = Tests.this.api0
+        val doc: Api.Entity = api(t"sample.Doc").or(Api.Entity(Unset, t"?"))
+        val page = ApiPages.page(api, doc, resolver(Scope.of(doc, Nil)), Scope.of(doc, Nil), Nil)
+        val rows: List[Text] = page.bind { case Block.Table(_, rows, _) => rows.bind { (r: Block.Row) => r.id.let(List(_)).or(Nil) }; case _ => Nil }
+        (page.prim, rows.has(t"title"), rows.has(t"parse"))
+      . assert(_ == (Block.Paragraph(List(Inline.Link(Inline.Destination.Local(t"/api/sample"), Inline.text(t"sample")), Inline.Toned(Tone.Muted, Inline.text(t".")))), true, true))
+
+      test(m"the tree links each node to its page, open along the way to the current one"):
+        val tree = ApiPages.tree(Tests.this.api0, t"sample.Doc")
+        tree.roots.prim.let { (n: Block.TreeNode) => (n.destination, n.open, n.children.map(_.label).map(Blocks.plain)) }
+      . assert(_ == (Inline.Destination.Local(t"/api/sample"), true, List(t"Doc", t"Shape", t"Util")))
 
     suite(m"Sections"):
       test(m"a section is named by its directory's last segment"):

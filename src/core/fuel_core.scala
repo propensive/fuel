@@ -59,8 +59,12 @@ object Embedding:
     ( checker: Checker,
       path:    Text,
       session: Boolean                = false,
-      fixture: Optional[(Text, Text)] = Unset )
+      fixture: Optional[(Text, Text)] = Unset,
+      linker:  Linker                 = Linker.none )
   extends Embedding:
+
+    // A fragment's lines as the model's, each typed token linked to what it names.
+    private def linked(source: SourceCode): List[Block.Line] = Linker.lines(linker, source)
 
     // What a fragment left to the session: its object, with the names it defines (so that a
     // later definition of the same name excludes it from the import) and its own top-level
@@ -241,6 +245,7 @@ object Embedding:
 
         val code: Text = trimmed(code0)
         count += 1
+        linker.learn(imported(code))
 
         // The file's line, counted from one, on which the code begins: after the fence and
         // the preamble with its `##`.
@@ -295,7 +300,7 @@ object Embedding:
         if !frames.nil then animated(frames, preamble, language, framed, mode, checked, id, start)
         else if language == t"scala" then embedPlain(code, preamble, framed, mode, checked, id, start)
         else List(Block.Code(Language(language), highlight(language, code, Framing(t"", t"", 0, Unset), mode, false) match
-          case source: SourceCode => modelLines(source)
+          case source: SourceCode => linked(source)
           case _                  => lines(code), notes(code, preamble.marks), start))
 
     // One fragment highlighted in a language: Scala through the checker (in its framing, as
@@ -367,7 +372,7 @@ object Embedding:
                   if diagnostic.importance == harlequin.Diagnostic.Importance.Error then
                     report(Block.Location(path, start), t"Frame $number: ${diagnostic.message}")
 
-              framing.own(modelLines(source), code.cut(t"\n").size)
+              framing.own(linked(source), code.cut(t"\n").size)
 
             case _ =>
               lines(code)
@@ -458,7 +463,7 @@ object Embedding:
 
       highlight(t"scala", restored, framing, mode, true) match
         case source: SourceCode =>
-          val line: Block.Line = framing.own(modelLines(source), count).skip(index).prim.or(Block.Line(List(Token.plain(text))))
+          val line: Block.Line = framing.own(linked(source), count).skip(index).prim.or(Block.Line(List(Token.plain(text))))
           val error: Optional[harlequin.Diagnostic] = source.diagnostics.seek(_.importance == harlequin.Diagnostic.Importance.Error)
 
           error.lay(block.copy(lines = replaced(line))): (diagnostic: harlequin.Diagnostic) =>
@@ -490,7 +495,7 @@ object Embedding:
     :   (Block.Code, List[Block], Boolean) =
 
       // The lines of this fragment alone, out of the unit's.
-      val lines: List[Block.Line] = framing.own(modelLines(source), code.cut(t"\n").size)
+      val lines: List[Block.Line] = framing.own(linked(source), code.cut(t"\n").size)
 
       // Each diagnostic as a note on the fragment, and as a diagnostic of its own after it,
       // located in the file, with the lines around it.

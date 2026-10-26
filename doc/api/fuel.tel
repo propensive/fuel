@@ -1,0 +1,132 @@
+tel 1.0
+
+base fuel
+import soundness
+
+info   the documentation tool of the Soundness ecosystem, as a library
+detail
+    _Fuel_ compiles a project's Markdown documentation, with the code embedded in it checked
+    and animated, and its API, into Pyrocosm's semantic model. `fuel-core` is the document
+    model and the conversion of Markdown to blocks; another tool embeds it to show a `Doc` as
+    Fuel would.
+
+entry .Doc   one Markdown document, compiled: its path, its title, its blocks and its problems
+  detail
+      A document is parsed and converted by `Doc.parse`, with its Scala fragments checked by a
+      `Checker`, and its references linked by a `Linker`.
+  entry .parse      parses and converts one document
+  entry .filename   the last segment of a path, without a `.md` extension
+  entry #path       the document's path, relative to the directory it was found under
+  entry #title      the first heading, else the filename
+  entry #blocks     the document as blocks
+  entry #problems   the fragments which did not do as their preambles said, each a diagnostic
+
+entry .Corpus   every compiled document, in sections
+  entry .Section   one `document` directory: its name, its root, its documents and the files it could not read
+    entry #name
+    entry #root
+    entry #docs
+    entry #skipped
+  entry #sections   the sections, in the order configured
+  entry #size       how many documents there are
+  entry #section    a section by its name
+  entry #doc        a document by its section and path
+  entry #problems   every diagnostic of every document
+
+entry .Blocks   a Markdown document as Pyrocosm blocks, node for node
+  entry .of       the blocks of a parsed document, its fences dispatched to the embeddings
+  entry .title    the first heading's text
+  entry .plain    the text of a run of phrasing, unstyled
+  entry .inline   a run of Markdown phrasing as inlines
+
+entry .Linker   where a reference in a document leads: the hook by which prose and code link to the pages which document what they name
+  entry #link     a reference as written in prose, or a token by its text and type
+  entry #learn    the imports a fragment makes, which extend the scope
+  entry #ambiguities   the references which named several entities
+  entry .none     links nothing
+  entry .token    a highlighted token as the model's, linked
+  entry .lines    a fragment's lines as the model's, each token linked
+
+entry .Checker   how a Scala fragment is highlighted: tokenized, or in a warm compiler session
+  entry #check    a fragment highlighted as far as its mode asks
+  entry #enter    a unit compiled into the session, in scope for every later check
+  entry #build    a project's own sources compiled and saved
+  entry #compiles whether this checker compiles at all
+  entry #context  the session's own context, good only on the compiler's thread
+  entry .tokenized   the checker which highlights alone
+
+entry .Checking   the one warm session per compile, on the compiler's thread
+  entry .exclusive   runs a body on the compiler's thread
+  entry .session     a session on a classpath, with options
+
+entry .Compilation   the compile step: every `*.md` beneath a document directory, read, parsed and converted
+  entry .Regime   how a corpus's fragments are compiled
+    entry #session    as one session per document, each fragment following the ones before it
+    entry #fixtures   the directory of `<document>.scala` fixtures, compiled first
+    entry #progress   told of each document as it is done, with its problems
+    entry #linker     the linker each document's references resolve through, by its path
+  entry .name        a section's name: its directory's last segment
+  entry .section     one directory of documents, compiled
+  entry .document    one document, compiled, or nothing if it cannot be read
+  entry .corpus      every configured directory, compiled
+  entry .unreadable  a file which could not be read, as a diagnostic
+
+entry .Embedding   how a fenced block of code becomes blocks: the first embedding to answer a fence wins
+  entry #embed       the blocks of a fence, by its info string and content, or nothing if it is not this embedding's
+  entry .ScalaCode   a Scala fence, highlighted by the checker, with its preamble honoured; one per document
+    entry #embed     the blocks of a Scala (or `fuel`) fence
+    entry #problems  the fragments which did not do as their preambles said
+  entry .JavaCode    a Java fence, highlighted by harlequin alone
+    entry .embed     the blocks of a Java fence
+  entry .plain       a fence of any other language, shown plain under its own name
+  entry .lines       the lines of a text, as unhighlighted tokens
+  entry .trimmed     a fence's content without its trailing newline
+  entry .standard    the embeddings every document is converted with
+
+entry .Fragments   a document's blocks as TEL, one document per block, which another tool reads
+  entry .tel    the blocks written as TEL
+  entry .read   the blocks read back from TEL
+
+entry .Notes   the placing of a note on a fragment by its offsets
+  entry .of     a note from a range of a text, across lines or as a caret
+
+entry .Preamble   the TEL preamble a ` ```scala fuel ` fence begins with: Amok's schema, walked by hand
+  entry #context       how the fragment is wrapped: top, term or type
+  entry #scalaContext  the wrapping as harlequin names it
+  entry #id            a name other fragments may follow
+  entry #follows       the fragments whose text precedes this one when it compiles
+  entry #errors        what a diagnostic means: fail, show or ignore
+  entry #mode          how far the compiler goes: parse, typecheck or compile
+  entry #language      what the fragment is highlighted as
+  entry #marks         the highlights, errors, cautions and parameters marked on the fragment
+  entry #frames        the frames of an animation
+  entry #autoplay      whether the animation plays when shown
+  entry #loop          whether it starts again at its end
+  entry #restart       whether a fresh session begins at this fence
+  entry #features      the language features turned on from this fence
+  entry .Errors   what a diagnostic means: `Fail` (the default), `Show` (errors are expected) or `Ignore`
+  entry .Mode     how far the compiler goes: `Parse`, `Typecheck` or `Compile`
+  entry .Mark     a range of the fragment marked with a style and a caption
+    entry #selection  the range, as named
+    entry #style      highlight, error, caution or parameter
+    entry #caption    the caption, as Markdown phrasing
+  entry .Frame    one frame of an animation: its code, its label, its hold, its time, its language and its marks
+    entry #code
+    entry #label
+    entry #hold
+    entry #at
+    entry #language
+    entry #marks
+  entry .empty      the preamble of a fence which has none
+  entry .split      a fence's content as its preamble and its code, at the `##` line
+  entry .parse      a preamble from its text, or the TEL error
+  entry .diagnostic a preamble's TEL error as a diagnostic at its place in the file
+
+entry .Selection   a range of a fragment, named by its first and last characters or literally, refined by line and occurrence
+  entry #start       the text the range begins with
+  entry #end         the text it ends with, or nothing when it is literal
+  entry #line        the line to look on
+  entry #occurrence  which occurrence, when the range occurs more than once
+  entry #findIn      the range's offsets in a text, or nothing
+  entry .parse       a selection from its text
+  entry .read        a selection from a mark's atoms
