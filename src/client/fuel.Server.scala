@@ -61,19 +61,32 @@ object Server:
   @volatile
   private var imports0: List[Text] = Nil
 
+  @scala.caps.unsafe.untrackedCaptures
+  @volatile
+  private var glossary0: List[Block] = Nil
+
   private val edition0: juc.atomic.AtomicLong = juc.atomic.AtomicLong(0L)
   private val jars: juc.ConcurrentHashMap[(Text, Long), Api] = juc.ConcurrentHashMap()
 
-  def publish(corpus: Corpus, api: Api = Api.empty, pages: scala.collection.immutable.Map[Text, List[Block]] = scala.collection.immutable.Map(), imports: List[Text] = Nil): Unit =
+  def publish
+    ( corpus:   Corpus,
+      api:      Api                                              = Api.empty,
+      pages:    scala.collection.immutable.Map[Text, List[Block]] = scala.collection.immutable.Map(),
+      imports:  List[Text]                                       = Nil,
+      glossary: List[Block]                                      = Nil )
+  :   Unit =
+
     corpus0 = corpus
     api0 = api
     pages0 = pages
     imports0 = imports
+    glossary0 = glossary
     edition0.incrementAndGet()
 
   def corpus: Optional[Corpus] = corpus0
   def api: Api = api0
   def imports: List[Text] = imports0
+  def glossary: List[Block] = glossary0
   def edition: Long = edition0.get
 
   def page(key: Text): Optional[List[Block]] = pages0.get(key) match

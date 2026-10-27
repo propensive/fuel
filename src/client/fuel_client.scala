@@ -102,6 +102,12 @@ object ui:
   val PresentPort =
     Setting[Text](t"presentPort", t"the port `fuel present` serves on (8061 by default)")
 
+  val Glossary =
+    Setting[Text](t"glossary", t"a TEL file of `define`d terms, which a document names in brackets")
+
+  val CheckLinks =
+    Setting[Boolean](t"checkLinks", t"fetch every link to the web, and fail on one which does not answer")
+
 // There is no `Boolean is Decodable in Text` given in distillate, so `Setting[Boolean]` reads
 // decode here: `true`, `yes` and `on` — case-insensitively — are true, and anything else false.
 given (Boolean is Decodable in Text) = (value: Text) =>
@@ -308,6 +314,9 @@ private def compile(config: Workspace.Config, force: Boolean)(using Stdio, Envir
     // The hash of the classpath: of its bytes, until the hash of its API is available.
     val classpath: Text = Hashes.of(config.classpath.map(Server.hash)*)
 
+    // The glossary first, since every document's prose may name its terms.
+    val (glossary, glossaryProblems) = glossaries(config)
+
     // The key of everything a document or a page depends on beyond its own text: Fuel's
     // version, the classpath, the project's sources, the compiler's options, whether documents
     // are sessions and fragments checked, the imports references resolve through, and which
@@ -318,9 +327,9 @@ private def compile(config: Workspace.Config, force: Boolean)(using Stdio, Envir
       Hashes.of
         ( t"fuel ${Fuel.version}", classpath, sources, config.options.join(t"\n"),
           if config.session then t"session" else t"single", if checked then t"checked" else t"tokenized",
-          config.imports.join(t"\n"), entities )
+          config.imports.join(t"\n"), entities, glossary.definitions )
 
-    def regime(environment: Text, linker: Text -> Linker): Compilation.Regime =
+    def regime(environment: Text, linker: (Text, Text) -> Linker): Compilation.Regime =
       // Each document is reported as it is done, since a corpus can take a long while.
       Compilation.Regime
         ( config.session,
@@ -329,7 +338,8 @@ private def compile(config: Workspace.Config, force: Boolean)(using Stdio, Envir
             Out.println(t"fuel: $path: ${problems.show} ${if problems == 1 then t"problem" else t"problems"}"),
           linker,
           store,
-          (path: Text) => Hashes.of(environment, path) )
+          (path: Text) => Hashes.of(environment, path),
+          glossary )
 
     // The API first, since the documents link to it: the sources compiled and saved, their
     // output and the dependencies walked, the overlays merged, and the pages of the project's
@@ -344,7 +354,8 @@ private def compile(config: Workspace.Config, force: Boolean)(using Stdio, Envir
           val key: Text = environment(sources, api)
           val (pages, pageProblems) = rendered(api, checker, store, key)
           apiProblems = problems + pageProblems
-          val linker: Text -> Linker = (_: Text) => Resolver(api, Scope.document(config.imports))
+          val linker: (Text, Text) -> Linker =
+            (section: Text, path: Text) => Resolver(api, Scope.document(config.imports), Doc.url(section, path))
 
           (Compilation.corpus(config.documents, checker, regime(key, linker)), api, pages, key)
         catch case error: Throwable =>
@@ -355,13 +366,20 @@ private def compile(config: Workspace.Config, force: Boolean)(using Stdio, Envir
 
     val corpus: Corpus =
       outcome.let(_(0)).or:
-        try Compilation.corpus(config.documents, Checker.tokenized, regime(unchecked, (_: Text) => Linker.none))
+        try Compilation.corpus(config.documents, Checker.tokenized, regime(unchecked, (_: Text, _: Text) => Linker.none))
         catch case error: Throwable =>
           failures = failed(t"The documents could not be highlighted", error) :: failures
           Corpus(Nil)
 
     val api: Api = outcome.let(_(1)).or(Api.empty)
-    Server.publish(corpus, api, outcome.let(_(2)).or(sci.Map()), config.imports)
+
+    // Every link, now that every target is known.
+    val links: List[Block] = Links.check(corpus, api, glossary, config.checkLinks)
+
+    val glossaryPage: List[Block] =
+      if glossary.terms.nil then Nil else glossary.page(Resolver(api, Scope.document(config.imports), t"/glossary"))
+
+    Server.publish(corpus, api, outcome.let(_(2)).or(sci.Map()), config.imports, glossaryPage)
 
     corpus.sections.each: (section: Corpus.Section) =>
       Out.println(t"${section.name}: ${section.docs.size.show} documents from ${section.root}")
@@ -390,7 +408,7 @@ private def compile(config: Workspace.Config, force: Boolean)(using Stdio, Envir
       if unrendered > 0 then Out.println(t"api: ${unrendered.show} of ${rendered.show} types could not be rendered, and are shown as `?`")
 
     // Every diagnostic, rendered as the terminal renders them: at its place, with its excerpt.
-    val problems: List[Block] = failures.reverse + apiProblems + corpus.problems
+    val problems: List[Block] = failures.reverse + glossaryProblems + apiProblems + corpus.problems + links
     val renderer = TerminalRenderer()
     renderer.blocks(problems, width).each: (line: Teletype) => Out.println(line)
 
@@ -398,6 +416,25 @@ private def compile(config: Workspace.Config, force: Boolean)(using Stdio, Envir
     then Out.println(t"fuel: no classpath is configured, so no fragment was compiled")
 
     if problems.nil then Exit.Ok else CompileFailed
+
+// The glossaries the configuration names, read and combined, with the problems: a file which
+// cannot be read or is not TEL, and what `Glossary.merge` finds.
+private def glossaries(config: Workspace.Config): (Glossary, List[Block]) =
+  @scala.caps.unsafe.untrackedCaptures
+  var problems: List[Block] = Nil
+
+  val read: List[Glossary] = config.glossaries.bind: (file: Text) =>
+    try Glossary.read(file, Text(java.nio.file.Files.readString(java.nio.file.Path.of(file.s)).nn)) match
+      case glossary: Glossary           => List(glossary)
+      case diagnostic: Block.Diagnostic =>
+        problems = diagnostic :: problems
+        Nil
+    catch case error: Throwable =>
+      problems = Compilation.unreadable(file) :: problems
+      Nil
+
+  val (glossary, merging) = Glossary.merge(read)
+  (glossary, problems.reverse + merging)
 
 // The API model of a project, in the session: its sources compiled and saved beneath the
 // cache (`$XDG_CACHE_HOME/fuel/<project>/classes`, or `~/.cache/fuel/…`), the output and each
@@ -614,7 +651,7 @@ private def absolute(directory: Text, operand: Text): Text =
 private def compiled(config: Workspace.Config, path: Text): Optional[Doc] =
   def exists(entry: Text): Boolean = java.nio.file.Files.exists(java.nio.file.Path.of(entry.s))
   val checked: Boolean = !config.classpath.nil && config.classpath.all(exists(_))
-  val regime: Compilation.Regime = Compilation.Regime(config.session, config.fixtures)
+  val regime: Compilation.Regime = Compilation.Regime(config.session, config.fixtures, glossary = glossaries(config)(0))
 
   if checked then
     try Checking.session(config.classpath, config.options): (checker: Checker) =>

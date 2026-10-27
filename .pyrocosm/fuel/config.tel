@@ -5,6 +5,7 @@ tel 1.0
 # which carries the fork's standard library and Soundness, with the options Soundness code
 # needs: the fork's repairs, and the proscenium predef with Soundness imported.
 document doc
+session
 
 # The project's own sources, whose API is documented by the overlays in doc/api, compiled in
 # the session against the classpath, which is the dependencies: here the launcher assembly,
@@ -12,6 +13,10 @@ document doc
 source src/core
 overlay doc/api
 imports soundness
+imports fuel
+
+# The glossary whose terms the documents name in brackets.
+glossary doc/glossary.tel
 
 # The output, as BinTEL: compiled again only where its inputs change.
 output dist/doc

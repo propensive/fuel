@@ -54,6 +54,12 @@ trait Linker:
   // The imports a fragment makes at its top level (`import a.b.*`), which extend the scope.
   def learn(imports: List[Text]): Unit
 
+  // The names a fragment defines at its top level, each a type or a term, by the anchor the
+  // fragment has on its page: what a later reference in the same document resolves to before
+  // anything else, as a REPL's own definitions shadow a library's; the latest definition of a
+  // name wins.
+  def define(anchor: Text, names: List[(Text, Linker.Kind)]): Unit
+
   // The references which named several entities, and so were not linked.
   def ambiguities: List[Text]
 
@@ -64,11 +70,28 @@ trait Linker:
     List(Token.plain(reference).copy(link = link(reference)))
 
 object Linker:
+  // What a reference means, when it says: a type (written `#Name`, or a member of a type) or
+  // a term (written `.name`, or a member of a term).
+  enum Kind:
+    case Type, Term
+
+  // The kind a reference's first character says, if it says one: `#` names a type and `.` a
+  // term, each followed by a name as code would write it (`Foo`, `Foo.bar`, `Foo#Bar`), so
+  // that a path (`.pyrocosm/fuel/config.tel`) or a selector is code as written, not a
+  // reference.
+  def kind(reference: Text): Optional[Kind] =
+    val named: Boolean = reference.length > 1 && reference.s.substring(1).nn.matches("[A-Za-z_][\\w$]*(?:[.#][A-Za-z_][\\w$]*)*")
+    if !named then Unset
+    else if reference.starts(t"#") then Kind.Type
+    else if reference.starts(t".") then Kind.Term
+    else Unset
+
   // Links nothing: what a document without an API is converted with.
   object none extends Linker:
     def link(reference: Text): Optional[Inline.Destination] = Unset
     def link(name: Text, tpe: Syntax): Optional[Inline.Destination] = Unset
     def learn(imports: List[Text]): Unit = ()
+    def define(anchor: Text, names: List[(Text, Linker.Kind)]): Unit = ()
     def ambiguities: List[Text] = Nil
 
   // A highlighted token as the model's, with the link its type gives it.

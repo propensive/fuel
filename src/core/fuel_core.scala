@@ -158,13 +158,7 @@ object Embedding:
     // The names a fragment defines at its top level, by their declarations, so that a later
     // fragment defining one of them again hides the earlier from its import — as a REPL
     // lets a name be redefined — rather than leaving the two ambiguous.
-    private val declaration: java.util.regex.Pattern =
-      java.util.regex.Pattern.compile("""^(?:(?:final|lazy|private|protected|inline|transparent|opaque|infix|open|case|abstract|sealed|override|implicit)\s+)*(?:val|var|def|object|class|trait|type|enum|given)\s+(?:\[[^\]]*\]\s*)?([A-Za-z_][\w$]*|`[^`]+`)""").nn
-
-    private def defined(code: Text): List[Text] =
-      code.cut(t"\n").bind: (line: Text) =>
-        val matcher = declaration.matcher(line.s).nn
-        if matcher.find() then List(matcher.group(1).nn.tt) else Nil
+    private def defined(code: Text): List[Text] = Embedding.definitions(code).map(_(0))
 
     // The top-level imports of a fragment, which its object would not carry.
     private def imported(code: Text): List[Text] = code.cut(t"\n").filter(_.starts(t"import "))
@@ -381,9 +375,12 @@ object Embedding:
         def compile(): List[Block] =
           if !frames.nil then animated(frames, preamble, language, framed, mode, checked, id, start)
           else if language == t"scala" then embedPlain(code, preamble, framed, mode, checked, id, start)
-          else List(Block.Code(Language(language), highlight(language, code, Framing(t"", t"", 0, Unset), mode, false) match
-            case source: SourceCode => linked(source)
-            case _                  => lines(code), notes(code, preamble.marks), start))
+          else
+            val shown: List[Block.Line] = highlight(language, code, Framing(t"", t"", 0, Unset), mode, false) match
+              case source: SourceCode => linked(source)
+              case _                  => lines(code)
+
+            List(Block.Code(Language(language), shown, notes(code, preamble.marks), start, Unset, id))
 
         // The fence's key: in a session, chained from the fence before it; outside one, with
         // the text of what it follows. Its line is not part of it, since its output moves.
@@ -500,6 +497,7 @@ object Embedding:
         frames.reverse.seek { (frame: Preamble.Frame) => frame.language.or(language) == t"scala" }.let(_.code).or(t"")
 
       fragments = (id, followed) :: fragments
+      linker.define(id, Embedding.definitions(followed))
       join(followed, framing, false, preamble, mode)
 
       val frameLines: List[List[Block.Line]] = built.map(_(0))
@@ -508,7 +506,7 @@ object Embedding:
       val animation: Block.Animation =
         Block.Animation.of(frameLines, details).copy(autoplay = preamble.autoplay, loop = preamble.loop)
 
-      List(Block.Code(Language(language), frameLines.prim.or(Nil), details.prim.lay(Nil)(_.notes), start, animation))
+      List(Block.Code(Language(language), frameLines.prim.or(Nil), details.prim.lay(Nil)(_.notes), start, animation, id))
 
     private def embedPlain
       ( code:     Text,
@@ -532,14 +530,15 @@ object Embedding:
         val attempt: Optional[SourceCode | Throwable] = highlight(t"scala", positive, framing, mode, checked)
 
         fragments = (id, positive) :: fragments
+        linker.define(id, Embedding.definitions(positive))
 
         attempt match
           case error: Throwable =>
             report(Block.Location(path, start), t"The fragment could not be highlighted: ${error.toString.tt}")
-            List(Block.Code(Language.Scala, lines(code), Nil, start))
+            List(Block.Code(Language.Scala, lines(code), Nil, start, Unset, id))
 
           case source: SourceCode =>
-            val (block, reports, failed) = embedSource(source, positive, framing, checked, preamble, start)
+            val (block, reports, failed) = embedSource(source, positive, framing, checked, preamble, start, id)
             join(positive, framing, failed, preamble, mode)
 
             val restored: Block.Code = marked.fold(block): (block: Block.Code, index: Int) =>
@@ -548,7 +547,7 @@ object Embedding:
             restored :: reports
 
           case _ =>
-            List(Block.Code(Language.Scala, lines(code), Nil, start))
+            List(Block.Code(Language.Scala, lines(code), Nil, start, Unset, id))
 
     // One line marked as not compiling, compiled in its place: it must fail, and its first
     // error is a note on it, in the block whose line is now taken from that run, so that its
@@ -600,7 +599,8 @@ object Embedding:
         framing:  Framing,
         checked:  Boolean,
         preamble: Preamble,
-        start:    Int )
+        start:    Int,
+        id:       Text )
     :   (Block.Code, List[Block], Boolean) =
 
       // The lines of this fragment alone, out of the unit's.
@@ -647,7 +647,7 @@ object Embedding:
         case _ =>
           ()
 
-      val block: Block.Code = Block.Code(Language.Scala, lines, reported.map(_(0)) + notes(code, preamble.marks), start)
+      val block: Block.Code = Block.Code(Language.Scala, lines, reported.map(_(0)) + notes(code, preamble.marks), start, Unset, id)
       (block, reported.map(_(1)), !errors.nil)
 
   object JavaCode extends Embedding:
@@ -655,6 +655,47 @@ object Embedding:
       if info.prim == t"java"
       then List(Block.Code(Language.Java, modelLines(harlequin.Java.highlight(trimmed(content))), Nil, fence + 2))
       else Unset
+
+  // The top-level definitions of a fragment, by their declarations — what a later fragment
+  // defining one of them again hides from its import, and what a reference in prose names —
+  // each a type (a class, trait, enum or type) or a term.
+  private val declaration: java.util.regex.Pattern =
+    java.util.regex.Pattern.compile("""^(?:(?:final|lazy|private|protected|inline|transparent|opaque|infix|open|case|abstract|sealed|override|implicit)\s+)*(val|var|def|object|class|trait|type|enum|given)\s+(?:\[[^\]]*\]\s*)?([A-Za-z_][\w$]*|`[^`]+`)""").nn
+
+  def definitions(code: Text): List[(Text, Linker.Kind)] =
+    code.cut(t"\n").bind: (line: Text) =>
+      val matcher = declaration.matcher(line.s).nn
+      if !matcher.find() then Nil else
+        val kind: Linker.Kind = matcher.group(1).nn match
+          case "class" | "trait" | "type" | "enum" => Linker.Kind.Type
+          case _                                   => Linker.Kind.Term
+
+        List((matcher.group(2).nn.tt, kind))
+
+  // What a Scala (or `fuel`) fence, the `count`th in its document, will have on the page before
+  // it is compiled: its anchor — the preamble's `id`, else its number — and the definitions of
+  // its code (the last Scala frame's, of an animation), which a document's prose is linked
+  // against before its fences are compiled.
+  def scan(info: List[Text], content: Text, count: Int): Optional[(Text, List[(Text, Linker.Kind)])] =
+    if info.prim != t"scala" && !info.has(t"fuel") then Unset else
+      val (header, code0) = if info.has(t"fuel") then Preamble.split(content) else (Unset, content)
+      val code: Text = trimmed(code0)
+
+      val preamble: Preamble = header.lay(Preamble.empty): (text: Text) =>
+        Preamble.parse(text) match
+          case preamble: Preamble => preamble
+          case _                  => Preamble.empty
+
+      val id: Text = preamble.id.or(t"fragment-${count.show}")
+      val language: Text = preamble.language.or(info.prim.or(t"scala"))
+
+      val source: Text =
+        if preamble.frames.nil then code
+        else
+          val frames: List[Preamble.Frame] = if code.trim == t"" then preamble.frames else preamble.frames + List(Preamble.Frame(code))
+          frames.reverse.seek { (frame: Preamble.Frame) => frame.language.or(language) == t"scala" }.let(_.code).or(Unset).or(t"")
+
+      (id, if language == t"scala" || !preamble.frames.nil then definitions(source) else Nil)
 
   def standard(checker: Checker, path: Text): List[Embedding] =
     List(ScalaCode(checker, path), JavaCode)

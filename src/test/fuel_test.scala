@@ -81,14 +81,14 @@ make run
 
       test(m"a scala fence is highlighted into several tokens"):
         Doc.parse(t"doc/intro.md", intro).blocks match
-          case _ :: _ :: Block.Code(Language.Scala, line :: _, _, _, _) :: _ => line.tokens.size > 1
+          case _ :: _ :: Block.Code(Language.Scala, line :: _, _, _, _, _) :: _ => line.tokens.size > 1
           case _                                                             => false
 
       . assert(_ == true)
 
       test(m"a fence in an unknown language is plain, under that language"):
         Doc.parse(t"doc/intro.md", intro).blocks match
-          case _ :: _ :: _ :: Block.Code(language, lines, _, _, _) :: _ =>
+          case _ :: _ :: _ :: Block.Code(language, lines, _, _, _, _) :: _ =>
             (language.name, lines.size)
 
           case _ =>
@@ -175,7 +175,7 @@ error oops
         val text: Text = t"# Title\n\n```scala fuel\nid one\n##\nval x = 1\n```\n"
 
         Doc.parse(t"doc/n.md", text).blocks match
-          case _ :: Block.Code(_, _, _, start, _) :: _ => start
+          case _ :: Block.Code(_, _, _, start, _, _) :: _ => start
           case _                                       => Unset
 
       . assert(_ == 6)
@@ -219,7 +219,7 @@ error oops
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           Doc.parse(t"doc/check.md", fence, checker).blocks match
-            case Block.Code(_, _, note :: _, _, _) :: Block.Diagnostic(_, _, _, _, _) :: _ =>
+            case Block.Code(_, _, note :: _, _, _, _) :: Block.Diagnostic(_, _, _, _, _) :: _ =>
               (note.line, note.style)
 
             case _ =>
@@ -291,7 +291,7 @@ error oops
             (Unset, false)
 
         val frames = doc.blocks match
-          case _ :: Block.Code(_, _, _, _, animation) :: _ => animation.let(_.slides.size)
+          case _ :: Block.Code(_, _, _, _, animation, _) :: _ => animation.let(_.slides.size)
           case _                                           => Unset
 
         (problem, frames)
@@ -304,7 +304,7 @@ error oops
             t"  highlight y  the new one\n  code\n      val y: Int = 2\n##\n```\n"
 
         Doc.parse(t"doc/anim.md", text).blocks match
-          case Block.Code(_, _, notes, _, animation) :: Nil =>
+          case Block.Code(_, _, notes, _, animation, _) :: Nil =>
             animation.let: (animation: Block.Animation) =>
               val second: Block.Slide = animation.slides.skip(1).prim.or(Block.Slide(-1))
               (notes.size, animation.slides.map(_.notes.size), Blocks.plain(second.label), second.hold, second.at)
@@ -322,7 +322,7 @@ error oops
           val doc = Doc.parse(t"doc/anim.md", text, checker)
 
           doc.blocks match
-            case Block.Code(_, _, _, _, animation) :: Nil =>
+            case Block.Code(_, _, _, _, animation, _) :: Nil =>
               animation.let: (animation: Block.Animation) =>
                 (doc.problems.size, animation.slides.skip(1).prim.let(_.language), animation.lines(1).prim.let(_.size > 1))
 
@@ -333,7 +333,7 @@ error oops
 
       test(m"a java fence with a preamble is read by the preamble embedding"):
         Doc.parse(t"doc/j.md", t"```java fuel\nid j\n##\nint x = 1;\n```\n").blocks match
-          case Block.Code(language, line :: _, _, _, _) :: Nil => (language, line.tokens.size > 1)
+          case Block.Code(language, line :: _, _, _, _, _) :: Nil => (language, line.tokens.size > 1)
           case _                                               => Unset
 
       . assert(_ == (Language.Java, true))
@@ -351,7 +351,7 @@ error oops
 
       test(m"an animated fence becomes one block whose lines are the first frame"):
         Doc.parse(t"doc/anim.md", animatedFence).blocks match
-          case Block.Code(_, lines, _, _, animation) :: Nil =>
+          case Block.Code(_, lines, _, _, animation, _) :: Nil =>
             (lines.size, animation.let(_.slides.size), animation.let(_.lines(1).size))
 
           case _ =>
@@ -361,7 +361,7 @@ error oops
 
       test(m"a surviving token keeps its atom across frames"):
         Doc.parse(t"doc/anim.md", animatedFence).blocks match
-          case Block.Code(_, _, _, _, animation) :: Nil =>
+          case Block.Code(_, _, _, _, animation, _) :: Nil =>
             animation.let: (animation: Block.Animation) =>
               val first: List[Text] = animation.placements.filter(_.slide == 0).map(_.atom)
               val second: List[Text] = animation.placements.filter(_.slide == 1).map(_.atom)
@@ -452,7 +452,7 @@ error oops
         val text: Text = t"```scala\nval n: Int = 1\nval m: Int = \"x\" // does not compile\n```\n"
 
         val note: Optional[(Int, Block.Note.Style)] = blocks(text) match
-          case Block.Code(_, _, note :: _, _, _) :: _ => (note.line, note.style)
+          case Block.Code(_, _, note :: _, _, _, _) :: _ => (note.line, note.style)
           case _                                      => Unset
 
         (problems(text).size, note)
@@ -552,7 +552,7 @@ slide
 
         val animated: List[Int] = all.bind: (leaf: Block.Leaf) =>
           leaf.content.bind:
-            case Block.Code(_, _, _, _, animation: Block.Animation) => List(animation.slides.size)
+            case Block.Code(_, _, _, _, animation: Block.Animation, _) => List(animation.slides.size)
             case _                                                  => Nil
 
         (all.size, animated)
@@ -695,6 +695,19 @@ slide
       . assert(_ == (true, true))
 
     suite(m"Output directory"):
+      test(m"a prose with linkages and anchors round-trips as BinTEL"):
+        val linkages: List[Linkage] =
+          List
+            ( Linkage(3, Linkage.Target.Document(t"doc", t"a.md", t"top")),
+              Linkage(4, Linkage.Target.Site(t"/api/x", Unset)),
+              Linkage(5, Linkage.Target.Anchor(t"set-up")),
+              Linkage(6, Linkage.Target.Url(t"https://example.com/")),
+              Linkage(7, Linkage.Target.Sigil(t"#Nope")) )
+
+        val linked: Output.Prose = Output.Prose(List(Block.paragraph(t"x")), Nil, linkages, List(t"top"))
+        Output.Prose.decode(Output.Prose.encode(linked)) == linked
+      . assert(_ == true)
+
       val fragment: Output.Fragment =
         Output.Fragment(List(Block.paragraph(t"code")), Nil, true, List(t"x"), Nil, t"val x = 1", 4)
 
@@ -1082,6 +1095,198 @@ entry .nowhere   nothing of the sort
         val tree = ApiPages.tree(Tests.this.api0, t"sample.Doc")
         tree.roots.prim.let { (n: Block.TreeNode) => (n.destination, n.open, n.children.map(_.label).map(Blocks.plain)) }
       . assert(_ == (Inline.Destination.Local(t"/api/sample"), true, List(t"Doc", t"Shape", t"Util")))
+
+    suite(m"References"):
+      def resolver(page: Optional[Text] = Unset): Resolver = Resolver(Tests.this.api0, Scope.document(List(t"sample")), page)
+
+      def doc(text: Text, linker: Linker = resolver(t"/doc/doc/a.md")): Doc =
+        Doc.parse(t"a.md", text, Checker.tokenized, false, Unset, linker, section = t"doc")
+
+      // The first inline code of the first paragraph: its text, accent and link.
+      def token(doc: Doc): Optional[(Text, pyrocosm.Token.Accent, Optional[Inline.Destination])] =
+        def snippet(inlines: List[Inline]): Optional[pyrocosm.Token] = inlines match
+          case Inline.Snippet(_, token :: _) :: _ => token
+          case _ :: tail                          => snippet(tail)
+          case _                                  => Unset
+
+        doc.blocks.seek { (block: Block) => block match { case Block.Paragraph(_) => true; case _ => false } } match
+          case Block.Paragraph(inlines) => snippet(inlines).let { (t: pyrocosm.Token) => (t.text, t.accent, t.link) }
+          case _                        => Unset
+
+      def symbols(doc: Doc): List[Text] = doc.references.bind: (reference: Linkage) =>
+        reference.target match
+          case Linkage.Target.Sigil(text) => List(text)
+          case _                             => Nil
+
+      test(m"`#Name` names the type, shown without its sigil in the type's accent"):
+        token(doc(t"See `#Doc`.\n"))
+      . assert(_ == (t"Doc", pyrocosm.Token.Accent.Typal, Inline.Destination.Local(t"/api/sample.Doc")))
+
+      test(m"`.name` names the term, through its path, each segment linked and the last in its kind's accent"):
+        doc(t"See `.Util.limit`.\n").blocks match
+          case Block.Paragraph(_ :: Inline.Snippet(_, tokens) :: _) :: _ =>
+            (tokens.map(_.text).join(t""), tokens.map(_.link), tokens.reverse.prim.let(_.accent))
+          case _ =>
+            Unset
+      . assert(_ == (t"Util.limit", List(Inline.Destination.Local(t"/api/sample.Util"), Unset, Inline.Destination.Local(t"/api/sample.Util.limit")), pyrocosm.Token.Accent.Term))
+
+      test(m"a sigil which nothing of its kind answers is shown as written, unlinked, and recorded"):
+        val shape: Doc = doc(t"See `.Shape` and `#Util`.\n")
+        (token(shape).let(_(0)), token(shape).let(_(2)), symbols(shape))
+      . assert(_ == (t".Shape", Unset, List(t".Shape", t"#Util")))
+
+      test(m"a path or a selector after a dot is code as written, not a reference"):
+        val paths: Doc = doc(t"See `.pyrocosm/fuel/config.tel`, `.sN:checked`, `..` and `.`.\n")
+        (token(paths).let(_(0)), paths.references)
+      . assert(_ == (t".pyrocosm/fuel/config.tel", Nil))
+
+      test(m"inline code without a sigil which resolves to nothing stays plain, and is no reference"):
+        val plain: Doc = doc(t"See `nothing`.\n")
+        (token(plain).let(_(0)), token(plain).let(_(2)), plain.references)
+      . assert(_ == (t"nothing", Unset, Nil))
+
+      test(m"a name a fence defined links to the fence, by its id"):
+        val text: Text = t"```scala fuel\nid setup\n##\nval base: Int = 1\n```\n\nSee `base`.\n"
+        val d: Doc = doc(text)
+        val id: Optional[Text] = d.blocks match
+          case Block.Code(_, _, _, _, _, id) :: _ => id
+          case _                                  => Unset
+        (token(d).let(_(2)), id, d.anchors)
+      . assert(_ == (Inline.Destination.Local(t"/doc/doc/a.md", t"setup"), t"setup", List(t"setup")))
+
+      test(m"a fence without an id is anchored by its number"):
+        token(doc(t"```scala\nval base: Int = 1\n```\n\nSee `base`.\n")).let(_(2))
+      . assert(_ == Inline.Destination.Local(t"/doc/doc/a.md", t"fragment-1"))
+
+      test(m"a fence's definition shadows an entity of the same name, and the latest definition wins"):
+        val text: Text = t"```scala\nval Doc: Int = 1\n```\n```scala\nval Doc: Int = 2\n```\n\nSee `Doc`.\n"
+        token(doc(text)).let(_(2))
+      . assert(_ == Inline.Destination.Local(t"/doc/doc/a.md", t"fragment-2"))
+
+      test(m"a sigil picks a fence's definition by its kind"):
+        val text: Text = t"```scala\nval x: Int = 1\nclass Y\n```\n\nSee `#x`, `.x`, `#Y` and `.Y`.\n"
+        symbols(doc(text))
+      . assert(_ == List(t"#x", t".Y"))
+
+      test(m"without a page a fence's definition links nowhere, and the API answers instead"):
+        token(doc(t"```scala\nval Doc: Int = 1\n```\n\nSee `Doc`.\n", resolver())).let(_(2))
+      . assert(_ == Inline.Destination.Local(t"/api/sample.Doc"))
+
+    suite(m"Anchors and links"):
+      def doc(path: Text, text: Text, section: Text = t"doc"): Doc =
+        Doc.parse(path, text, Checker.tokenized, false, Unset, Linker.none, section = section)
+
+      def links(doc: Doc): List[Inline.Destination] =
+        def inlines(content: List[Inline]): List[Inline.Destination] = content.bind:
+          case Inline.Link(destination, inner) => destination :: inlines(inner)
+          case Inline.Annotated(inner, _)      => inlines(inner)
+          case _                               => Nil
+
+        doc.blocks.bind:
+          case Block.Paragraph(content) => inlines(content)
+          case _                        => Nil
+
+      def ids(doc: Doc): List[Text] = doc.blocks.bind:
+        case Block.Heading(_, _, id) => id.let(List(_)).or(Nil)
+        case _                       => Nil
+
+      def lines(problems: List[Block]): List[Optional[Int]] = problems.map:
+        case Block.Diagnostic(_, location, _, _, _) => location.let(_.line)
+        case _                                      => Unset
+
+      test(m"a heading is anchored by its slug, numbered when repeated"):
+        val d: Doc = doc(t"a.md", t"# Getting started\n\n## Set-up & run\n\n## Set-up & run\n")
+        (ids(d), d.anchors)
+      . assert(_ == (List(t"getting-started", t"set-up--run", t"set-up--run-1"), List(t"getting-started", t"set-up--run", t"set-up--run-1")))
+
+      test(m"a `#fragment` link leads to this page, and must name an anchor on it"):
+        val d: Doc = doc(t"a.md", t"## Set-up\n\n[here](#set-up)\n\n[there](#nope)\n")
+        val corpus: Corpus = Corpus(List(Corpus.Section(t"doc", t"/r", List(d))))
+        (links(d), lines(Links.check(corpus, Api.empty, Glossary.none)))
+      . assert(_ == (List(Inline.Destination.Local(t"/doc/doc/a.md", t"set-up"), Inline.Destination.Local(t"/doc/doc/a.md", t"nope")), List(5)))
+
+      test(m"a relative link is resolved against the document's directory, within its section"):
+        val a: Doc = doc(t"a.md", t"[b](guide/b.md)\n")
+        val b: Doc = doc(t"guide/b.md", t"[up](../x.md)\n\n[out](../../x.md)\n")
+        val x: Doc = doc(t"x.md", t"# X\n")
+        val corpus: Corpus = Corpus(List(Corpus.Section(t"doc", t"/r", List(a, b, x))))
+        (links(a), links(b), lines(Links.check(corpus, Api.empty, Glossary.none)))
+      . assert(_ == (List(Inline.Destination.Local(t"/doc/doc/guide/b.md")), List(Inline.Destination.Local(t"/doc/doc/x.md"), Inline.Destination.External(t"../../x.md")), List(3)))
+
+      test(m"a site link must name an entity, a member of it, or a glossary term"):
+        val text: Text = t"[a](/api/sample.Doc#parse)\n\n[b](/api/sample.Nope)\n\n[c](/api/sample.Doc#nope)\n\n[d](/glossary#monad)\n"
+        val d: Doc = doc(t"a.md", text)
+        val corpus: Corpus = Corpus(List(Corpus.Section(t"doc", t"/r", List(d))))
+        val glossary: Glossary = Glossary(List(Glossary.Term(t"monad", t"x", Unset, t"g.tel", 1)))
+        (lines(Links.check(corpus, Tests.this.api0, glossary)), lines(Links.check(corpus, Tests.this.api0, Glossary.none)))
+      . assert(_ == (List(3, 5), List(3, 5, 7)))
+
+      test(m"a URL is recorded, and not fetched unless asked"):
+        val d: Doc = doc(t"a.md", t"[s](https://example.com/)\n")
+        val corpus: Corpus = Corpus(List(Corpus.Section(t"doc", t"/r", List(d))))
+        (links(d), d.references.size, Links.check(corpus, Api.empty, Glossary.none).size)
+      . assert(_ == (List(Inline.Destination.External(t"https://example.com/")), 1, 0))
+
+      test(m"a document's URL encodes each segment"):
+        Doc.url(t"doc modules", t"a b/c.md")
+      . assert(_ == t"/doc/doc%20modules/a%20b/c.md")
+
+    suite(m"Glossary"):
+      val tel: Text = t"""define monad
+  link https://example.com/monads
+  definition
+      A *monad* is a monoid in the category of endofunctors.
+
+define type class
+  definition  A set of operations over a type, given apart from it.
+"""
+
+      val glossary: Glossary = Glossary.read(t"doc/glossary.tel", tel) match
+        case glossary: Glossary => glossary
+        case _                  => Glossary.none
+
+      def doc(text: Text, glossary: Glossary = glossary): Doc =
+        Doc.parse(t"a.md", text, Checker.tokenized, false, Unset, Linker.none, section = t"doc", glossary = glossary)
+
+      // The first paragraph's second inline, after the text which leads to the term.
+      def term(doc: Doc): Optional[Inline] = doc.blocks match
+        case Block.Paragraph(_ :: inline :: _) :: _ => inline
+        case _                                      => Unset
+
+      test(m"a glossary's terms are read, with their lines, links, slugs and definitions"):
+        glossary.terms.map { (term: Glossary.Term) => (term.name, term.slug, term.line, term.link, term.definition.trim) }
+      . assert(_ == List
+          ( (t"monad", t"monad", 1, t"https://example.com/monads", t"A *monad* is a monoid in the category of endofunctors."),
+            (t"type class", t"type-class", 6, Unset, t"A set of operations over a type, given apart from it.") ))
+
+      test(m"a term defined twice, or which cannot be a label, is a failure"):
+        val again: Glossary = Glossary(List(Glossary.Term(t"Monad", t"y", Unset, t"other.tel", 4), Glossary.Term(t"a[b]", t"z", Unset, t"other.tel", 9)))
+        val (merged, problems) = Glossary.merge(List(glossary, again))
+        (merged.terms.size, problems.map { case Block.Diagnostic(tone, location, _, _, _) => (tone, location.let(_.line)); case _ => Unset })
+      . assert(_ == (2, List((Tone.Failure, 4), (Tone.Failure, 9))))
+
+      test(m"a bracketed term is annotated with its definition and leads to its link, in any case"):
+        (term(doc(t"A [monad] here.\n")), term(doc(t"A [Type Class] here.\n")))
+      . assert(_ == (
+          Inline.Annotated(List(Inline.Link(Inline.Destination.External(t"https://example.com/monads"), Inline.text(t"monad"))), List(Inline.Textual(t"A "), Inline.Emphasis(Inline.text(t"monad")), Inline.Textual(t" is a monoid in the category of endofunctors."))),
+          Inline.Annotated(List(Inline.Link(Inline.Destination.Local(t"/glossary", t"type-class"), Inline.text(t"Type Class"))), Inline.text(t"A set of operations over a type, given apart from it.")) ))
+
+      test(m"the author's own reference definition wins, and brackets around no term stay text"):
+        val plain: Doc = doc(t"A [nothing] here.\n")
+        val text: Optional[Text] = plain.blocks match
+          case Block.Paragraph(content) :: _ => Blocks.plain(content)
+          case _                             => Unset
+        (term(doc(t"A [monad] here.\n\n[monad]: https://mine/\n")), text, plain.references)
+      . assert(_ == (Inline.Link(Inline.Destination.External(t"https://mine/"), Inline.text(t"monad")), t"A [nothing] here.", Nil))
+
+      test(m"the glossary page anchors each term by its slug"):
+        glossary.page(Linker.none).bind { case Block.Heading(2, _, id) => id.let(List(_)).or(Nil); case _ => Nil }
+      . assert(_ == List(t"monad", t"type-class"))
+
+      test(m"a fence left open is a failure at its line, and the document is read as written"):
+        val d: Doc = doc(t"Text.\n\n```scala\nval x = 1\n")
+        (d.problems.map { case Block.Diagnostic(tone, location, _, _, _) => (tone, location.let(_.line)); case _ => Unset }, d.blocks.size)
+      . assert(_ == (List((Tone.Failure, 3)), 2))
 
     suite(m"Sections"):
       test(m"a section is named by its directory's last segment"):

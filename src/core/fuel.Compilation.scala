@@ -42,17 +42,18 @@ object Compilation:
   // How a corpus's fragments are compiled: as one session per document, each fragment
   // following the ones before it, and with the document's fixture (`<fixtures>/<name>.scala`)
   // first.
-  // `linker` gives each document, by its path, the linker its references resolve through;
-  // with a `cache`, a document's prose and each of its fences is compiled only when the key of
-  // its inputs is not kept, `base` giving the key of everything a document depends on beyond
-  // its own text, by its path.
+  // `linker` gives each document, by its section and its path, the linker its references
+  // resolve through; with a `cache`, a document's prose and each of its fences is compiled only
+  // when the key of its inputs is not kept, `base` giving the key of everything a document
+  // depends on beyond its own text, by its path; `glossary` has the terms its prose may name.
   case class Regime
-    ( session:  Boolean                = false,
-      fixtures: Optional[Text]         = Unset,
-      progress: (Text, Int) => Unit    = (_, _) => (),
-      linker:   Text => Linker         = (_: Text) => Linker.none,
-      cache:    Optional[Cache]        = Unset,
-      base:     Text => Text           = (_: Text) => t"" )
+    ( session:  Boolean                  = false,
+      fixtures: Optional[Text]           = Unset,
+      progress: (Text, Int) => Unit      = (_, _) => (),
+      linker:   (Text, Text) => Linker   = (_: Text, _: Text) => Linker.none,
+      cache:    Optional[Cache]          = Unset,
+      base:     Text => Text             = (_: Text) => t"",
+      glossary: Glossary                 = Glossary.none )
 
   // A section's name is its directory's last segment.
   def name(root: Text): Text = root.cut(t"/").filter(_ != t"").reverse.prim.or(root)
@@ -92,7 +93,8 @@ object Compilation:
             val doc: Doc =
               Doc.parse
                 ( relative(path), text, checker, regime.session, fixture(path),
-                  regime.linker(relative(path)), regime.cache, regime.base(relative(path)) )
+                  regime.linker(name(root), relative(path)), regime.cache, regime.base(relative(path)),
+                  name(root), regime.glossary )
             regime.progress(relative(path), doc.problems.size)
             recur(tail, docs + List(doc), skipped)
 
@@ -105,7 +107,8 @@ object Compilation:
     recur(files, Nil, Nil)
 
   // One document, by its path, compiled as a section's would be, with its fixture if the
-  // regime names a directory holding one; `Unset` if the file cannot be read.
+  // regime names a directory holding one, in a section named by its directory; `Unset` if the
+  // file cannot be read.
   def document(path: Text, checker: Checker = Checker.tokenized, regime: Regime = Regime()): Optional[Doc] =
     import filesystemBackends.javaBaseFilesystem
     import charsets.utf8Charset
@@ -118,11 +121,14 @@ object Compilation:
         safely(file.as[Path on Linux]).let { (file: Path on Linux) => safely(file.read[Text]) }.let:
           (text: Text) => (file, text)
 
+    val directory: Text = Text(path.s.substring(0, path.s.lastIndexOf('/').max(0)).nn)
+    val section: Text = name(directory)
+
     safely(path.as[Path on Linux]).let { (file: Path on Linux) => safely(file.read[Text]) }.let:
       (text: Text) =>
         Doc.parse
-          ( path, text, checker, regime.session, fixture, regime.linker(path), regime.cache,
-            regime.base(path) )
+          ( path, text, checker, regime.session, fixture, regime.linker(section, path), regime.cache,
+            regime.base(path), section, regime.glossary )
 
   // A file that could not be read or parsed, as a diagnostic.
   def unreadable(path: Text): Block =

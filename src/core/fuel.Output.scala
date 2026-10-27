@@ -84,9 +84,14 @@ object Output:
     def decode(data: Data): Optional[Prose] =
       try Bintel.read[Prose](data) catch case _: Exception => Unset
 
-  // A document's prose: its blocks, each fence a sentinel to be filled from its fragment, and
-  // the problems of its prose alone (references which named several entities).
-  case class Prose(blocks: List[Block], problems: List[Block])
+  // A document's prose: its blocks, each fence a sentinel to be filled from its fragment, the
+  // problems of its prose alone (references which named several entities), the links it makes
+  // and the anchors on it, for the check which runs once every document is compiled.
+  case class Prose
+    ( blocks:     List[Block],
+      problems:   List[Block],
+      references: List[Linkage] = Nil,
+      anchors:    List[Text]      = Nil )
 
   object Document:
     import derivation.throwing

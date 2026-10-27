@@ -51,7 +51,9 @@ object Workspace:
       sources:   List[Text]     = Nil,
       overlays:  List[Text]     = Nil,
       imports:   List[Text]     = Nil,
-      output:    Optional[Text] = Unset )
+      output:    Optional[Text] = Unset,
+      glossaries: List[Text]    = Nil,
+      checkLinks: Boolean       = false )
 
   def load(directory: Text)(using Cli, Interpreter, Configurator): Config =
     // The file's directory is `.pyrocosm/fuel`, so the root is three levels up.
@@ -79,4 +81,5 @@ object Workspace:
 
     Config
       ( root, entries(ui.Classpath()), entries(ui.Document()), options, ui.Session().or(false), fixtures,
-        entries(ui.Source()), entries(ui.Overlay()), imports, output )
+        entries(ui.Source()), entries(ui.Overlay()), imports, output, entries(ui.Glossary()),
+        ui.CheckLinks().or(false) )

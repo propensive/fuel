@@ -16,10 +16,13 @@ entry .Doc   one Markdown document, compiled: its path, its title, its blocks an
       `Checker`, and its references linked by a `Linker`.
   entry .parse      parses and converts one document
   entry .filename   the last segment of a path, without a `.md` extension
+  entry .url        the URL of a document on the site, by its section and its path
   entry #path       the document's path, relative to the directory it was found under
   entry #title      the first heading, else the filename
   entry #blocks     the document as blocks
   entry #problems   the fragments which did not do as their preambles said, each a diagnostic
+  entry #references the links the document makes, for the check which runs once every document is compiled
+  entry #anchors    the anchors on the document, which such a link may name
 
 entry .Corpus   every compiled document, in sections
   entry .Section   one `document` directory: its name, its root, its documents and the files it could not read
@@ -38,10 +41,70 @@ entry .Blocks   a Markdown document as Pyrocosm blocks, node for node
   entry .title    the first heading's text
   entry .plain    the text of a run of phrasing, unstyled
   entry .inline   a run of Markdown phrasing as inlines
+  entry .slug     a heading's anchor from its text, as GitHub makes one
+  entry .Page     where a document is on the site: its section and its path within it
+    entry #section
+    entry #path
+    entry #url       the document's URL
+    entry #resolve   a relative link against the document's directory, as a path within the section
+  entry .Context  what one conversion gathers besides its blocks: the links it makes and the anchors it gives
+    entry #linker      the linker the references resolve through
+    entry #page        where the document is, if its section is known
+    entry #glossary    the terms its prose may name
+    entry #refer       records a link, by the line it is on
+    entry #anchor      a slug as an anchor of the page, numbered when repeated
+    entry #anchored    notes an anchor a fence chose for itself
+    entry #references  the links recorded
+    entry #anchors     the anchors given
+
+entry .Linkage   a link a document makes, by the line it is on, for the check
+  entry #line
+  entry #target
+  entry .Target   where a link leads
+    entry .Document   another document, by its path in its section, and a place on it
+      entry #section
+      entry #path
+      entry #fragment
+    entry .Site       a page of the site, by its root-absolute path, and a place on it
+      entry #path
+      entry #fragment
+    entry .Anchor     a place on this page
+      entry #fragment
+    entry .Url   a URL, with a scheme
+      entry #url
+    entry .Sigil     a sigilled reference nothing resolved
+      entry #reference
+    entry .telSchematic   the schema BinTEL writes a target under, in the member form
+
+entry .TargetSchema   the derived schema of a link's target, wrapped by `atMember`
+  entry .derived
+entry .atMember       a derived sum's schematic, typed at a member position as TEL types a sum there
+entry .membered       definitions with each member typed as a reference to a select retyped as the member form
+entry .selectMember   a sum's type at a member position: a struct holding a select reference
+
+entry .Glossary   terms defined in TEL files, each with a definition and perhaps a link, which prose names in brackets
+  entry #terms
+  entry #apply        a term by its slug
+  entry #definitions  the link reference definitions appended to a document before it is parsed
+  entry #page         the glossary page: each term under a heading anchored by its slug
+  entry .Term   one term: its name, its Markdown definition, its link, and where it was defined
+    entry #name
+    entry #definition
+    entry #link
+    entry #file
+    entry #line
+    entry #slug   the term's anchor, and the key a document's `[term]` leads to
+  entry .none     no terms
+  entry .scheme   the scheme of the reference definitions the glossary adds, `glossary:`
+  entry .read     a glossary from a file's text, or the diagnostic which says why it could not be
+  entry .merge    every glossary as one, with a failure for a term defined twice
 
 entry .Linker   where a reference in a document leads: the hook by which prose and code link to the pages which document what they name
   entry #link     a reference as written in prose, or a token by its text and type
   entry #learn    the imports a fragment makes, which extend the scope
+  entry #define   the names a fragment defines at its top level, each a type or a term, by the fragment's anchor
+  entry .Kind     what a reference means when it says: a type (`#Name`) or a term (`.name`)
+  entry .kind     the kind a reference's first character says, if it says one
   entry #ambiguities   the references which named several entities
   entry .none     links nothing
   entry .token    a highlighted token as the model's, linked
@@ -64,7 +127,8 @@ entry .Compilation   the compile step: every `*.md` beneath a document directory
     entry #session    as one session per document, each fragment following the ones before it
     entry #fixtures   the directory of `<document>.scala` fixtures, compiled first
     entry #progress   told of each document as it is done, with its problems
-    entry #linker     the linker each document's references resolve through, by its path
+    entry #linker     the linker each document's references resolve through, by its section and path
+    entry #glossary   the terms a document's prose may name
   entry .name        a section's name: its directory's last segment
   entry .section     one directory of documents, compiled
   entry .document    one document, compiled, or nothing if it cannot be read
@@ -82,10 +146,8 @@ entry .Embedding   how a fenced block of code becomes blocks: the first embeddin
   entry .lines       the lines of a text, as unhighlighted tokens
   entry .trimmed     a fence's content without its trailing newline
   entry .standard    the embeddings every document is converted with
-
-entry .Fragments   a document's blocks as TEL, one document per block, which another tool reads
-  entry .tel    the blocks written as TEL
-  entry .read   the blocks read back from TEL
+  entry .definitions the top-level definitions of a fragment, each a type or a term
+  entry .scan        a Scala fence's anchor and definitions, before it is compiled
 
 entry .Notes   the placing of a note on a fragment by its offsets
   entry .of     a note from a range of a text, across lines or as a caret
