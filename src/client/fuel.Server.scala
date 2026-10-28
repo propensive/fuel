@@ -104,6 +104,6 @@ object Server:
       hashes.computeIfAbsent((entry, java.nio.file.Files.size(path), modified), _ => Hashes.path(entry)).nn
 
   // A jar's model, walked once per version of the jar.
-  def jar(path: Text)(walk: => Api): Api =
+  def jar(path: Text, shadowed: List[Text] = Nil)(walk: => Api): Api =
     val modified: Long = java.nio.file.Files.getLastModifiedTime(java.nio.file.Path.of(path.s)).nn.toMillis
-    jars.computeIfAbsent((path, modified), _ => walk).nn
+    jars.computeIfAbsent((t"$path ${shadowed.join(t",")}", modified), _ => walk).nn

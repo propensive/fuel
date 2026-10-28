@@ -129,7 +129,10 @@ object Inspection:
   // class the jar's `.tasty` entries name is loaded as the compiler loads any classpath
   // symbol — its signatures, never a body — which is what makes it robust where unpickling
   // whole trees is not; a class which cannot be loaded is left out.
-  def classpath(jars: List[Text], context: dotty.tools.dotc.core.Contexts.Context): Api | Throwable =
+  // The `shadowed` packages are the project's own, whose copies in a jar (a launcher assembly
+  // carrying the project itself) are left to the project's sources: loading them into the
+  // session ahead of the compile leaves it writing nothing.
+  def classpath(jars: List[Text], context: dotty.tools.dotc.core.Contexts.Context, shadowed: List[Text] = Nil): Api | Throwable =
     Checking.exclusive:
       try
         // A context of the session's with a cache of quotes, which rendering a type through
@@ -152,7 +155,9 @@ object Inspection:
             // carrier holds a package's top-level members.
             names.foreach: name =>
               val full: String = name.substring(0, name.length - 6).nn.replace('/', '.').nn
-              walker.load(full.tt)
+              val pkg: Text = Text(full.substring(0, full.lastIndexOf('.').max(0)).nn)
+              val isShadowed: Boolean = shadowed.exists { (p: Text) => pkg == p || pkg.starts(t"$p.") }
+              if !isShadowed then walker.load(full.tt)
           finally zip.close()
 
         val entities: sci.Map[Text, Api.Entity] =
@@ -282,29 +287,30 @@ object Inspection:
       case ByNameType(result)       => this.result(result)
       case other                    => other
 
-    private def parents(symbol: Symbol): List[Syntax] =
-      // The parents every class or case class has without saying so.
-      val ignored: sci.Set[String] =
-        sci.Set("Any", "AnyRef", "Object", "Matchable", "Product", "Serializable", "AnyVal")
+    // The parents every class or case class has without saying so, which are no bases either.
+    private val ignored: sci.Set[String] =
+      sci.Set("Any", "AnyRef", "Object", "Matchable", "Product", "Equals", "Serializable", "AnyVal")
 
+    // A class's declared parents, the ones every class has left out: from the tree where there
+    // is one (the project's own code); else from the class's info, which a symbol loaded from
+    // the classpath has without a tree.
+    private def parentTypes(symbol: Symbol): scala.List[TypeRepr] =
       def typeOf(tree: Tree): Option[TypeRepr] = tree match
         case tree: TypeTree => Some(tree.tpe)
         case term: Term     => Some(term.tpe)
         case _              => None
 
-      def keep(types: scala.List[TypeRepr]): List[Syntax] =
-        List.from(types.filter { tpe => !ignored.contains(tpe.typeSymbol.name) }.map { tpe => syntax(tpe) })
+      def keep(types: scala.List[TypeRepr]): scala.List[TypeRepr] =
+        types.filter { tpe => !ignored.contains(tpe.typeSymbol.name) }
 
-      // From the tree where there is one (the project's own code); else from the class's
-      // info, which a symbol loaded from the classpath has without a tree.
-      val fromTree: List[Syntax] =
+      val fromTree: scala.List[TypeRepr] =
         try
           symbol.tree match
             case ClassDef(_, _, parentTrees, _, _) => keep(parentTrees.flatMap(typeOf))
-            case _                                 => Nil
-        catch case _: Throwable => Nil
+            case _                                 => scala.Nil
+        catch case _: Throwable => scala.Nil
 
-      if !fromTree.nil then fromTree else
+      if fromTree.nonEmpty then fromTree else
         try
           import dotty.tools.dotc.core.Symbols.toDenot
           given dotty.tools.dotc.core.Contexts.Context = quotes.asInstanceOf[scala.quoted.runtime.impl.QuotesImpl].ctx
@@ -313,8 +319,129 @@ object Inspection:
           dsym.info match
             case info: dotty.tools.dotc.core.Types.ClassInfo =>
               keep(info.declaredParents.map(_.asInstanceOf[TypeRepr]))
-            case _ => Nil
-        catch case _: Throwable => Nil
+            case _ => scala.Nil
+        catch case _: Throwable => scala.Nil
+
+    private def parents(symbol: Symbol): List[Syntax] = List.from(parentTypes(symbol).map(syntax))
+
+    // The keys of every class a class extends, nearest first, the universal ones left out.
+    private def bases(symbol: Symbol): List[Text] =
+      try
+        val all: scala.List[Symbol] = symbol.typeRef.baseClasses.filter { base => base != symbol && !ignored.contains(base.name) }
+        List.from(all.flatMap { base => designator(base).let { (d: Designator) => scala.List(Api.key(d)) }.or(scala.Nil) })
+      catch case _: Throwable => Nil
+
+    // A type's shape (`Api.Shape`), as matching reads it: a class, an alias or an opaque type
+    // named by its entity's key with its arguments (an alias is not seen through here, since a
+    // symbol met through the session's symbol table does not say whether it is opaque; its
+    // declaration records what it stands for, and `Applicables` expands it), a type parameter
+    // with its upper bound (none when it is `Any`), a wildcard as its bound, and anything else
+    // `Other`. The modularity form `T is Typeclass` is the refinement `Typeclass { type Self =
+    // T }`, which is read as `Typeclass[T]`; an alias of one (`is`, prepositional's `by`) is
+    // seen through to it, and any other refinement is its parent.
+    private def shape(repr: TypeRepr): Api.Shape =
+      def bound(upper: TypeRepr): Optional[Api.Shape] = if isAny(upper) then Unset else shape(upper)
+      def named(symbol: Symbol): Api.Shape = designator(symbol).lay(Api.Shape.Other) { (d: Designator) => Api.Shape.Named(Api.key(d)) }
+
+      try repr match
+        case ByNameType(inner)       => shape(inner)
+        case AnnotatedType(inner, _) => shape(inner)
+        case TypeBounds(_, upper)    => shape(upper)
+
+        // A singleton type (an export forwarder's, `x.type`) is the type of its value.
+        case term: TermRef if !term.termSymbol.flags.is(Flags.Module) => shape(term.widen)
+
+        case Refinement(parent, name, info) =>
+          if name != "Self" then shape(parent) else shape(parent) match
+            case Api.Shape.Named(key, args) => Api.Shape.Named(key, shape(info) :: args)
+            case other                      => other
+
+        case AppliedType(base, args) =>
+          repr.dealias match
+            case refined: Refinement => shape(refined)
+            case _ => shape(base) match
+              case Api.Shape.Named(key, _) => Api.Shape.Named(key, List.from(args.map(shape)))
+              case other                   => other
+
+        case ParamRef(binder, index) => binder match
+          case PolyType(names, bounds, _) =>
+            val upper: Optional[Api.Shape] = bounds(index) match
+              case TypeBounds(_, upper) => bound(upper)
+
+            Api.Shape.Param(names(index).tt, upper)
+
+          case _ => Api.Shape.Other
+
+        case _ =>
+          val symbol: Symbol = repr.typeSymbol
+          val dealiased: TypeRepr = repr.dealias
+
+          if symbol.isNoSymbol then Api.Shape.Other
+          else if symbol.isTypeParam || symbol.flags.is(Flags.Param) then
+            val upper: Optional[Api.Shape] = symbol.info match
+              case TypeBounds(_, upper) => bound(upper)
+              case _                    => Unset
+
+            Api.Shape.Param(symbol.name.tt, upper)
+          else if symbol.isClassDef || symbol.isTypeDef then
+            // An alias of a refinement (`type Showable2 = Showable { type Self = Int }`).
+            dealiased match
+              case refined: Refinement if symbol.isAliasType => shape(refined)
+              case _                                         => named(symbol)
+          else Api.Shape.Other
+      catch case _: Throwable => Api.Shape.Other
+
+    // A given object's `Self` member, where it has one: `given text: Text is Textual:` is an
+    // object extending `Textual` whose member `Self` is `Text`.
+    private def objectSelf(module: Symbol): Optional[TypeRepr] =
+      try module.declarations.find { d => d.isTypeDef && d.name == "Self" }.map(_.info).getOrElse(Unset)
+      catch case _: Throwable => Unset
+
+    // What a given object provides: its first parent, with the type it is for as its first
+    // argument where the parent does not say.
+    private def objectProvides(module: Symbol): Optional[Api.Shape] =
+      parentTypes(module).headOption.map(shape).getOrElse(Unset) match
+        case Api.Shape.Named(key, args) =>
+          val self: Optional[Api.Shape] = objectSelf(module).let(shape)
+          val selfIsArg: Boolean = args.stdlib.headOption.exists { a => self.let(_ == a).or(false) }
+          self.lay(Api.Shape.Named(key, args)) { (s: Api.Shape) => if selfIsArg then Api.Shape.Named(key, args) else Api.Shape.Named(key, s :: args) }
+
+        case other => other
+
+    // A given object's type as it was written: `Self is Parent` where it has a `Self`, else
+    // its first parent.
+    private def objectType(module: Symbol): Optional[Syntax] =
+      parentTypes(module).headOption.map(syntax).getOrElse(Unset).let: (parent: Syntax) =>
+        objectSelf(module).let { (self: TypeRepr) => Syntax.Infix(syntax(self), t"is", parent) }.or(parent)
+
+    private def isContextual(param: Symbol): Boolean = param.isTerm && (param.flags.is(Flags.Given) || param.flags.is(Flags.Implicit))
+
+    // What an extension extends — the one parameter of its first plain term clause — and what
+    // it, or a given, requires: the type of each `using` parameter, a context bound being one.
+    private def matching(symbol: Symbol, isExtension: Boolean): (Optional[Api.Shape], List[Api.Shape]) =
+      val all: scala.List[scala.List[Symbol]] = symbol.paramSymss
+
+      val receiver: Optional[Api.Shape] =
+        if !isExtension then Unset
+        else all.find(_.headOption.exists { p => p.isTerm && !isContextual(p) }).flatMap(_.headOption) match
+          case Some(param) => shape(param.info.widenByName)
+          case None        => Unset
+
+      val declared: List[Api.Shape] = List.from(all.flatMap(_.filter(isContextual).map { p => shape(p.info.widenByName) }))
+
+      // An extension declared in a class or trait (`trait Functor[F[_]]: extension …`) is
+      // reached through an instance of it: it requires one, of the class applied to its type
+      // parameters.
+      val owner: Symbol = symbol.owner
+      val enclosing: List[Api.Shape] =
+        if !isExtension || !owner.isClassDef || owner.flags.is(Flags.Module) || owner.flags.is(Flags.Package) then Nil
+        else designator(owner).lay(Nil: List[Api.Shape]): (d: Designator) =>
+          val params: scala.List[Api.Shape] =
+            owner.primaryConstructor.paramSymss.flatten.filter(_.isType).map { p => Api.Shape.Param(p.name.tt) }
+
+          List(Api.Shape.Named(Api.key(d), List.from(params)))
+
+      (receiver, enclosing + declared)
 
     private def templateKind(symbol: Symbol): Api.Kind =
       val flags = symbol.flags
@@ -333,12 +460,12 @@ object Inspection:
       def make(clauses: scala.List[scala.List[Symbol]]): List[Syntax] = List.from(clauses.flatMap { params => clause(params).let(scala.List(_)).or(scala.Nil) })
       (make(group), make(rest))
 
-    private def record(parent: Optional[Designator], name: Text, own: Boolean, declaration: Optional[Api.Declaration], isType: Boolean, where: Optional[Api.Location]): Unit =
+    private def record(parent: Optional[Designator], name: Text, own: Boolean, declaration: Optional[Api.Declaration], isType: Boolean, where: Optional[Api.Location], bases: List[Text] = Nil): Unit =
       val key: Text = Api.key(parent, name)
 
       collected.compute(key, (_, existing) => Optional(existing) match
         case Unset =>
-          if isType then Api.Entity(parent, name, own, Unset, declaration, location = where)
+          if isType then Api.Entity(parent, name, own, Unset, declaration, location = where, bases = bases)
           else Api.Entity(parent, name, own, declaration, Unset, location = where)
 
         case entity: Api.Entity =>
@@ -357,7 +484,13 @@ object Inspection:
               else entity.copy(own = entity.own || own, definition = declaration, location = where.or(entity.location))
             // A package is met once per member loaded beneath it; it is declared once.
             else if declaration.kind == Api.Kind.Package && entity.definition.present then entity.copy(own = entity.own || own)
-            else if isType then entity.copy(own = entity.own || own, template = entity.template.or(declaration), location = entity.location.or(where))
+            // A given with a body (`given foo: Show[Doc] with …`) is a value and an object of
+            // one name: the given is the declaration, the object no overload of it.
+            else if declaration.kind == Api.Kind.Given && entity.definition.let(_.kind == Api.Kind.Object).or(false) then
+              entity.copy(own = entity.own || own, definition = declaration, location = entity.location.or(where))
+            else if declaration.kind == Api.Kind.Object && entity.definition.let(_.kind == Api.Kind.Given).or(false) then
+              entity.copy(own = entity.own || own)
+            else if isType then entity.copy(own = entity.own || own, template = entity.template.or(declaration), location = entity.location.or(where), bases = if entity.bases.nil then bases else entity.bases)
             else if entity.definition.absent then entity.copy(own = entity.own || own, definition = declaration, location = entity.location.or(where))
             else entity.copy(own = entity.own || own, overloads = entity.overloads + List(declaration)))
 
@@ -417,7 +550,24 @@ object Inspection:
             case other =>
               (Nil, typeResult(other, flags))
 
-          record(parent, name, own, Api.Declaration(Api.Kind.Type, modifiers(symbol), params, rhs), true, where)
+          // What a non-opaque alias stands for, over its parameters, for matching to expand.
+          val noAlias: Optional[Api.Shape] = Unset
+          val noParams: List[Text] = Nil
+
+          val (aliasOf, aliasParams): (Optional[Api.Shape], List[Text]) =
+            if flags.is(Flags.Opaque) then (noAlias, noParams) else aliased match
+              case TypeLambda(names, _, body) =>
+                val target: Optional[Api.Shape] = shape(body)
+                val params: List[Text] = List.from(names.map(_.tt))
+                (target, params)
+
+              case TypeBounds(_, _) => (noAlias, noParams)
+
+              case other =>
+                val target: Optional[Api.Shape] = shape(other)
+                (target, noParams)
+
+          record(parent, name, own, Api.Declaration(Api.Kind.Type, modifiers(symbol), params, rhs, aliasOf = aliasOf, aliasParams = aliasParams), true, where)
 
           aliased match
             case TypeLambda(names, bounds, _) if own || Inspection.everyParameter =>
@@ -442,7 +592,15 @@ object Inspection:
           val (group, own0): (List[Syntax], List[Syntax]) =
             if kind == Api.Kind.Extension then extension(symbol) else (none, clauses(symbol))
 
-          record(parent, name, own, Api.Declaration(kind, modifiers(symbol), own0, syntax(result(symbol.info)), Nil, group, inherited), false, where)
+          val noShape: Optional[Api.Shape] = Unset
+          val noShapes: List[Api.Shape] = Nil
+
+          val (receiver, requires): (Optional[Api.Shape], List[Api.Shape]) =
+            if kind == Api.Kind.Def then (noShape, noShapes) else matching(symbol, kind == Api.Kind.Extension)
+
+          val provides: Optional[Api.Shape] = if kind == Api.Kind.Given then shape(result(symbol.info)) else Unset
+          val declaration: Api.Declaration = Api.Declaration(kind, modifiers(symbol), own0, syntax(result(symbol.info)), Nil, group, inherited, receiver, requires, provides, exported = flags.is(Flags.Exported))
+          record(parent, name, own, declaration, false, where)
           parameters(typeForm(parent, name), symbol.paramSymss, own)
         else if symbol.isValDef then
           val kind: Api.Kind =
@@ -453,7 +611,23 @@ object Inspection:
 
           // An enum's value case has the enum as its type, which its page already says.
           val tpe: Optional[Syntax] = if kind == Api.Kind.Case then Unset else syntax(result(symbol.info))
-          record(parent, name, own, Api.Declaration(kind, modifiers(symbol), Nil, tpe, Nil, Nil, inherited), false, where)
+
+          // A given with a body is a value of its own object's type, which provides the object's
+          // first parent, the type as it was written; a given is lazy by nature, not by
+          // declaration.
+          val provides: Optional[Api.Shape] =
+            if kind != Api.Kind.Given then Unset else
+              val tpeSymbol: Symbol = result(symbol.info).typeSymbol
+              if tpeSymbol.flags.is(Flags.Module) then objectProvides(tpeSymbol)
+              else shape(result(symbol.info))
+
+          val shownType: Optional[Syntax] =
+            if kind == Api.Kind.Given && result(symbol.info).typeSymbol.flags.is(Flags.Module)
+            then objectType(result(symbol.info).typeSymbol).or(tpe)
+            else tpe
+
+          val mods: List[Text] = if kind == Api.Kind.Given then modifiers(symbol).filter(_ != t"lazy") else modifiers(symbol)
+          record(parent, name, own, Api.Declaration(kind, mods, Nil, shownType, Nil, Nil, inherited, provides = provides, exported = flags.is(Flags.Exported)), false, where)
 
     // An alias's right-hand side, a bound type's bounds, or nothing for an opaque type's
     // underlying (which is not the API).
@@ -475,11 +649,15 @@ object Inspection:
         val parent: Optional[Designator] = designator(symbol.owner)
 
         if symbol.flags.is(Flags.Module) then
-          record(parent, name, own, Api.Declaration(Api.Kind.Object, modifiers(symbol), Nil, Unset, parents(symbol)), false, where)
+          // A given object (`given foo: Show[Doc] with …`) is a given, which provides its
+          // first parent.
+          if symbol.flags.is(Flags.Given) then
+            record(parent, name, own, Api.Declaration(Api.Kind.Given, modifiers(symbol), Nil, objectType(symbol), parents(symbol), provides = objectProvides(symbol)), false, where)
+          else record(parent, name, own, Api.Declaration(Api.Kind.Object, modifiers(symbol), Nil, Unset, parents(symbol)), false, where)
         else
           val kind: Api.Kind = templateKind(symbol)
           val constructor: List[Syntax] = if kind == Api.Kind.Trait && symbol.primaryConstructor.paramSymss.forall(_.isEmpty) then Nil else clauses(symbol.primaryConstructor)
-          record(parent, name, own, Api.Declaration(kind, modifiers(symbol), constructor, Unset, parents(symbol)), true, where)
+          record(parent, name, own, Api.Declaration(kind, modifiers(symbol), constructor, Unset, parents(symbol)), true, where, bases(symbol))
           here.let { (here: Designator) => parameters(here, symbol.primaryConstructor.paramSymss, own) }
 
       // A member which cannot be read is left out, and the rest are still walked.
@@ -500,16 +678,28 @@ object Inspection:
     // A top-level class or module of a dependency, by the name its `.tasty` entry gives,
     // loaded from the classpath; its packages are recorded with it.
     def load(name: Text): Unit =
-      val isModule: Boolean = name.ends(t"$$")
-      val plainName: Text = if isModule then name.keep(name.length - 1) else name
+      // A package object's carrier (`pkg_core$package`) is a module, named without its `$`.
+      val isModule: Boolean = name.ends(t"$$") || name.ends(t"$$package")
+      val plainName: Text = if name.ends(t"$$") then name.keep(name.length - 1) else name
 
-      val symbol: Optional[Symbol] =
+      // A name looked up in the session's symbol table without a stub being made for one it
+      // does not have (as `requiredClass` and `requiredModule` would, which the session would
+      // then meet as a bad symbolic reference when it compiles a fragment).
+      def static(name: dotty.tools.dotc.core.Names.Name): Optional[Symbol] =
         try
-          val found: Symbol = if isModule then Symbol.requiredModule(plainName.s).moduleClass else Symbol.requiredClass(plainName.s)
-          if found.isNoSymbol then Unset else found
+          given dotty.tools.dotc.core.Contexts.Context = quotes.asInstanceOf[scala.quoted.runtime.impl.QuotesImpl].ctx
+          val denotation = dotty.tools.dotc.core.Denotations.staticRef(name, generateStubs = false)
+          if denotation.exists && denotation.symbol.exists then denotation.symbol.asInstanceOf[Symbol] else Unset
         catch case _: Throwable => Unset
 
-      symbol.let: (symbol: Symbol) =>
+      // One `.tasty` holds a class and its companion object, or an object alone, which the
+      // symbol table keeps apart: both are walked.
+      val module: Optional[Symbol] =
+        static(dotty.tools.dotc.core.Names.termName(plainName.s)).let { (m: Symbol) => if m.isNoSymbol then Unset else m.moduleClass }
+
+      val cls: Optional[Symbol] = if isModule then Unset else static(dotty.tools.dotc.core.Names.typeName(plainName.s))
+
+      (cls.let(List(_)).or(Nil) + module.let(List(_)).or(Nil)).each: (symbol: Symbol) =>
         try
           packageEntity(symbol.owner)
           template(symbol, false)

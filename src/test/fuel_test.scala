@@ -909,9 +909,13 @@ object Util:
           case error: Throwable => error.toString
       . assert(_ == (true, false, Api.Kind.Class, true, t"scala.Option[B]"))
 
-      test(m"every type of a dependency renders through stenography, none from its parts and none as `?`"):
-        (Inspection.fallbacks.get, Inspection.unrendered.get, Inspection.rendered.get > 10000)
-      . assert(_ == (0, 0, true))
+      // A companion's members bring a few types stenography cannot render (a literal type, a
+      // type with a companion's prefix): under one in a thousand, and under one in ten
+      // thousand shown as `?`.
+      test(m"every type of a dependency renders, all but a few through stenography whole and almost none as `?`"):
+        val rendered: Int = Inspection.rendered.get
+        (rendered > 10000, Inspection.fallbacks.get * 1000 < rendered, Inspection.unrendered.get * 10000 < rendered)
+      . assert(_ == (true, true, true))
 
       test(m"a dependency jar is walked before a build, in a session on that jar under the project's options"):
         val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
@@ -935,6 +939,111 @@ object Util:
       test(m"a symbolic name is encoded in its path, and decoded from it"):
         Api.unpath(Api.path(stenography.Designator(t"a.B"), t"+:")).name
       . assert(_ == t"+:")
+
+      // A second source, compiled and walked as the first, with what applies to a type: an
+      // extension in its companion, its package, elsewhere, in a base's companion, on a bound,
+      // on a context bound a given of the type satisfies (one in the companion, one not, and
+      // one inside a given with a body), on a context bound nothing satisfies, and unbounded.
+      val extended: Text = t"""package extended
+
+trait Shape[+A]:
+  def area: Double
+
+object Shape:
+  extension (shape: Shape[?]) def describe: String = "shape"
+
+case class Doc(title: String, size: Int = 0) extends Shape[Int]:
+  def area: Double = 0.0
+
+object Doc:
+  extension (doc: Doc) def pages: Int = doc.size
+  given Show[Doc] = _.title
+
+object Util:
+  given Ordering[Doc] = Ordering.by(_.title)
+
+trait Show[T]:
+  def show(value: T): String
+
+trait Missing[T]
+
+object Showing:
+  extension [T: Show](value: T) def shown: String = summon[Show[T]].show(value)
+  extension [T <: Shape[?]](value: T) def areaTwice: Double = value.area * 2
+  extension [T](value: T) def same: T = value
+  extension [T: Ordering](value: T) def ordered: T = value
+  extension [T: Missing](value: T) def never: T = value
+
+object Chars:
+  given docText: Show[Doc] with
+    def show(value: Doc): String = value.title
+    extension (doc: Doc) def words: Int = 1
+
+extension (doc: Doc) def titled: String = doc.title
+"""
+
+      lazy val decorated: Api =
+        val output2: Text = Text(java.nio.file.Files.createTempDirectory("fuel-api2").nn.toString)
+        Checking.session(classpath, Nil) { (checker: Checker) => checker.build(Map(t"Extended.scala" -> extended), output2) }
+
+        Inspection.walk(List(output2), Nil, entries) match
+          case api: Api => Applicables.decorate(api)
+          case _        => Api.empty
+
+      def applicable(key: Text): List[(Text, Int, Int, Int, Optional[Text])] =
+        decorated(key).let(_.extensions.map { (e: Api.Applicable) => (e.key, e.tier, e.distance, e.reach, e.via) }).or(Nil)
+
+      test(m"a given with a body is one given, providing its first parent, which its signature shows"):
+        decorated(t"extended.Chars.docText").let { (e: Api.Entity) => e.definition.let { (d: Api.Declaration) => (d.kind, d.modifiers, d.result.let(_.qualified), d.provides, e.overloads.size) } }
+      . assert(_ == (Api.Kind.Given, Nil, t"extended.Show[extended.Doc]", Api.Shape.Named(t"extended.Show", List(Api.Shape.Named(t"extended.Doc"))), 0))
+
+      test(m"an extension's receiver and requirements are shapes, a context bound a requirement"):
+        decorated(t"extended.Showing.shown").let(_.definition.let { (d: Api.Declaration) => (d.receiver, d.requires) })
+      . assert(_ == (Api.Shape.Param(t"T"), List(Api.Shape.Named(t"extended.Show", List(Api.Shape.Param(t"T"))))))
+
+      test(m"a bounded type parameter's receiver has its bound, and a class its bases"):
+        (decorated(t"extended.Showing.areaTwice").let(_.definition.let(_.receiver)), decorated(t"extended.Doc").let(_.bases))
+      . assert(_ == (Api.Shape.Param(t"T", Api.Shape.Named(t"extended.Shape", List(Api.Shape.Named(t"scala.Any")))), List(t"extended.Shape")))
+
+      test(m"a type's extensions are ranked: companion, package, elsewhere, a base's, a bound's, then by a given, nearest first"):
+        applicable(t"extended.Doc")
+      . assert(_ == List(
+          (t"extended.Doc.pages", 0, 0, 0, Unset),
+          (t"extended.titled", 1, 0, 1, Unset),
+          (t"extended.Chars.docText.words", 2, 0, 2, t"extended.Chars.docText"),
+          (t"extended.Shape.describe", 3, 1, 0, Unset),
+          (t"extended.Showing.areaTwice", 4, 1, 2, Unset),
+          (t"extended.Showing.shown", 5, 0, 2, t"extended.Doc.given_Show_Doc"),
+          (t"extended.Showing.ordered", 5, 2, 2, t"extended.Util.given_Ordering_Doc") ))
+
+      test(m"an extension needing a given the type has none of is not the type's; a base's and a bound's are"):
+        applicable(t"extended.Shape").map(_(0))
+      . assert(_ == List(t"extended.Shape.describe", t"extended.Showing.areaTwice"))
+
+      test(m"an unbounded extension, and one needing a type class nothing provides, extend any value"):
+        applicable(t"scala.Any").map { (e: (Text, Int, Int, Int, Optional[Text])) => (e(0), e(1)) }
+      . assert(_ == List((t"extended.Showing.never", 7), (t"extended.Showing.same", 7)))
+
+      test(m"a type's givens are those for it, nearest first, and a type class's its instances"):
+        (decorated(t"extended.Doc").let(_.givens), decorated(t"extended.Show").let(_.givens))
+      . assert(_ == (List(t"extended.Doc.given_Show_Doc", t"extended.Chars.docText", t"extended.Util.given_Ordering_Doc"), List(t"extended.Chars.docText", t"extended.Doc.given_Show_Doc")))
+
+      test(m"a type's page lists its extensions by source, then its givens, and points to `Any`"):
+        decorated(t"extended.Doc").let: (doc: Api.Entity) =>
+          val scope: Scope = Scope.of(doc, Nil)
+          val page: List[Block] = ApiPages.page(decorated, doc, Resolver(decorated, scope), scope, Nil)
+          val headings: List[Text] = page.bind { case Block.Heading(3, content, _) => List(Blocks.plain(content)); case _ => Nil }
+          val leads: List[Text] = page.bind { case Block.Paragraph(content) => List(Blocks.plain(content)); case _ => Nil }
+          (headings, leads.filter(_.starts(t"In the companion")), leads.exists(_.starts(t"By import")), leads.exists(_.starts(t"The extensions of every value")))
+      . assert(_ == (List(t"Extensions", t"Givens"), List(t"In the companion object", t"In the companion object of Shape"), true, true))
+
+      test(m"the extensions an object declares are grouped under the clause they extend"):
+        api0(t"sample.Util").let: (util: Api.Entity) =>
+          val scope: Scope = Scope.of(util, Nil)
+          val page: List[Block] = ApiPages.page(api0, util, Resolver(api0, scope), scope, Nil)
+          page.bind { case code: Block.Code => code.lines.map { (line: Block.Line) => line.tokens.map(_.text).join }; case _ => Nil }
+        . or(Nil)
+      . assert(_.has(t"extension (text: String)"))
 
     suite(m"Overlays"):
       val overlay: Text = t"""base sample

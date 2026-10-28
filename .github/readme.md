@@ -217,6 +217,22 @@ package with no entry is a caution at the line it is declared, naming the entry 
 member which overrides or implements an inherited one is documented by it, and a parameter need
 not be documented at all.
 
+A type's page lists what applies to it beyond its own members. Its **extensions** are every
+extension method whose receiver the type satisfies — one declared on the type itself, on a base
+of it, on a type parameter bounded by one of them, or on a type parameter with a context bound
+(or a `using` clause) which some given *for this type* satisfies — ordered from the closest to
+the most general: those in the type's companion (or a base's) first, which need no import, then
+those in its own package, then those elsewhere; those on a base after those on the type; those
+reached through a given after those reached by the receiver alone, nearer givens first. Each
+run of one source is a table headed by what brings it: the companion, the `import` to write, the
+given which enables it. An extension whose context bound no given satisfies is not listed, and
+an unbounded extension (`extension [T](value: T)`, or one enabled only by a given for every
+type) is listed once, on the page of `scala.Any`, which every page with extensions points to.
+Its **givens** are the instances *of* it, for a type class, and the givens *for* it, for a
+type. Both are found in one pass over the whole model once the project and its dependencies are
+merged (`Applicables`), so an extension in one library extends a type in another, and the
+modularity form `T is Typeclass` is read as `Typeclass[T]`.
+
 Everything that names an entity links to its page, when the page exists: the identifiers in a
 signature; inline code in prose (`` `Text` ``), resolved as a name in code would be — as
 written, then under the page's own entity and those enclosing it, then under the `import`s of

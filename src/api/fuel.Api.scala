@@ -75,17 +75,58 @@ object Api:
 
     def isParameter: Boolean = this == Param || this == TypeParam
 
+  // The structure of a type as far as matching needs it — an extension's receiver against the
+  // type it may extend, a given's type against the type it is for — apart from how it is
+  // shown: a named type, by the key of its entity (an alias seen through, an opaque type not),
+  // with its arguments; a type parameter, with its upper bound where it has one; or anything
+  // else, which matches nothing in particular.
+  enum Shape:
+    case Named(key: Text, args: List[Shape] = Nil)
+    case Param(name: Text, upper: Optional[Shape] = Unset)
+    case Other
+
+    def head: Optional[Text] = this match
+      case Named(key, _) => key
+      case _             => Unset
+
   // One declaration: its kind, its modifiers (as written, `final`, `inline`, …), its clauses
   // (type and term parameters), its result (a return type, an alias's right-hand side, a type's
-  // bounds), a template's parents, and for an extension the clauses it extends.
+  // bounds), a template's parents, and for an extension the clauses it extends; then what
+  // matching reads: an extension's `receiver` (the shape of the one parameter it extends), the
+  // `requires` of an extension or a given (the shape of each of its `using` parameter, a
+  // context bound among them, and for an extension declared in a class or trait, an instance of
+  // it), a given's `provides` (the shape of its type), and a type alias's `aliasOf` (the shape
+  // it stands for, over its `aliasParams`; an opaque type stands for nothing).
   case class Declaration
-    ( kind:      Kind,
-      modifiers: List[Text]       = Nil,
-      clauses:   List[Syntax]     = Nil,
-      result:    Optional[Syntax] = Unset,
-      parents:   List[Syntax]     = Nil,
-      group:     List[Syntax]     = Nil,
-      overrides: Boolean          = false )   // implements or overrides an inherited member, which documents it
+    ( kind:        Kind,
+      modifiers:   List[Text]       = Nil,
+      clauses:     List[Syntax]     = Nil,
+      result:      Optional[Syntax] = Unset,
+      parents:     List[Syntax]     = Nil,
+      group:       List[Syntax]     = Nil,
+      overrides:   Boolean          = false,   // implements or overrides an inherited member, which documents it
+      receiver:    Optional[Shape]  = Unset,
+      requires:    List[Shape]      = Nil,
+      provides:    Optional[Shape]  = Unset,
+      aliasOf:     Optional[Shape]  = Unset,
+      aliasParams: List[Text]       = Nil,
+      exported:    Boolean          = false )   // an export forwarder, which what it forwards to documents
+
+  // An extension method applicable to an entity, as `Applicables` finds it: the `key` of the
+  // extension and the `index` of the declaration among the entity's (an overloaded name's
+  // variants extend different things), how it reaches the entity — its `tier`, lower the closer
+  // (see `Applicables`), the `distance` within the tier, and its `reach`: 0 where no import is
+  // needed (a companion's), 1 for the entity's own package, 2 for anywhere else — the given
+  // which makes it available (`via`), where one does, and the key of the object or package whose
+  // members bring it (`importFrom`).
+  case class Applicable
+    ( key:        Text,
+      index:      Int,
+      tier:       Int,
+      distance:   Int,
+      reach:      Int,
+      via:        Optional[Text] = Unset,
+      importFrom: Optional[Text] = Unset )
 
   // Where a declaration was written: its source file and line (from one), for the project's own
   // code, whose source the inspection has.
@@ -110,7 +151,8 @@ object Api:
   // declaration and `template` the type's; `overloads` are the further term declarations of the
   // name; `members` are the keys of its children; `own` says it comes from the project's
   // sources rather than a dependency; `removed` that an overlay documents it although nothing
-  // compiled declares it.
+  // compiled declares it. A type's `bases` are the keys of every class it extends, nearest
+  // first; its `extensions` and `givens` are what `Applicables` finds applies to it.
   case class Entity
     ( parent:     Optional[Designator],
       name:       Text,
@@ -122,7 +164,10 @@ object Api:
       location:   Optional[Location]    = Unset,
       doc:        Optional[Entry]       = Unset,
       removed:    Boolean               = false,
-      alias:      Optional[Designator]  = Unset ):   // an export forwarder's target, whose page is this one's
+      alias:      Optional[Designator]  = Unset,   // an export forwarder's target, whose page is this one's
+      bases:      List[Text]            = Nil,
+      extensions: List[Applicable]      = Nil,
+      givens:     List[Text]            = Nil ):
 
     def key: Text = Api.key(parent, name)
     def path: Text = Api.path(parent, name)
