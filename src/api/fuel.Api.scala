@@ -45,9 +45,11 @@ import stenography.{Designator, Syntax}
 // belongs to is what the parent's kind says, and what the URL's separator encodes — `.` for a
 // member of a term, `~` for a member of a type (`#` being a URL's fragment).
 object Api:
-  // The kinds of declaration, each with the keyword it is declared by.
+  // The kinds of declaration, each with the keyword it is declared by. A parameter is an
+  // entity too, a member of the type form of what it parameterises (`quux.foo#bar`,
+  // `quux.Box#T`), so that an overlay documents it as it does any member.
   enum Kind:
-    case Package, Object, Class, CaseClass, Trait, Enum, Case, Type, Def, Val, Var, Given, Extension
+    case Package, Object, Class, CaseClass, Trait, Enum, Case, Type, Def, Val, Var, Given, Extension, Param, TypeParam
 
     def keyword: Text = this match
       case Package   => t"package"
@@ -63,11 +65,15 @@ object Api:
       case Var       => t"var"
       case Given     => t"given"
       case Extension => t"extension"
+      case Param     => t"param"
+      case TypeParam => t"type"
 
     // Whether a declaration of this kind is a type (a template, as Amok said) or a term.
     def isType: Boolean = this match
-      case Class | CaseClass | Trait | Enum | Type => true
-      case _                                       => false
+      case Class | CaseClass | Trait | Enum | Type | TypeParam => true
+      case _                                                   => false
+
+    def isParameter: Boolean = this == Param || this == TypeParam
 
   // One declaration: its kind, its modifiers (as written, `final`, `inline`, …), its clauses
   // (type and term parameters), its result (a return type, an alias's right-hand side, a type's
@@ -130,6 +136,9 @@ object Api:
     def isPackage: Boolean = definition.let(_.kind == Kind.Package).or(false)
     def declarations: List[Declaration] = definition.let(List(_)).or(Nil) + template.let(List(_)).or(Nil) + overloads
     def hidden: Boolean = doc.let(_.hidden).or(false)
+
+    // A parameter, which its parent's page lists apart from its members.
+    def isParameter: Boolean = !declarations.nil && declarations.all(_.kind.isParameter)
 
   // The key of an entity: its parent's qualified name, the separator its parent's kind gives
   // (`#` after a type, `.` after a term or a package), and its name.

@@ -76,6 +76,20 @@ object Inspection:
     firstFailure = Unset
     result
 
+  // Whether a dependency's parameters are entities too, as the project's own always are: off,
+  // since nothing documents them, except to survey where parameters meet members.
+  @volatile
+  var everyParameter: Boolean = false
+
+  // The keys at which a parameter met a member of the same name (which the member keeps),
+  // each with the two kinds, since the last call, which resets them.
+  private val clashes0: juc.ConcurrentLinkedQueue[(Text, Api.Kind, Api.Kind)] = juc.ConcurrentLinkedQueue()
+
+  def clashes(): List[(Text, Api.Kind, Api.Kind)] =
+    val result = List.from(clashes0.iterator.nn.asScala.toList)
+    clashes0.clear()
+    result
+
   // The entities of every `.tasty` beneath the `directories` (the project's own, marked so)
   // and of every `jars` entry.
   def walk(directories: List[Text], jars: List[Text], classpath: List[Text]): Api | Throwable =
@@ -329,11 +343,45 @@ object Inspection:
 
         case entity: Api.Entity =>
           declaration.lay(entity): (declaration: Api.Declaration) =>
+            val slot: Optional[Api.Declaration] = if isType then entity.template else entity.definition
+            val parameter: Boolean = declaration.kind.isParameter
+            val other: Optional[Api.Declaration] = entity.declarations.seek(_.kind.isParameter != parameter)
+            other.let { (other: Api.Declaration) => Inspection.clashes0.add((key, other.kind, declaration.kind)) }
+
+            // A parameter is one entity however many overloads declare it, and a member of its
+            // name — a case class's field, which is its constructor's parameter — keeps the
+            // entity, whichever is met first.
+            if parameter && (slot.present || other.present) then entity
+            else if !parameter && slot.let(_.kind.isParameter).or(false) then
+              if isType then entity.copy(own = entity.own || own, template = declaration, location = where.or(entity.location))
+              else entity.copy(own = entity.own || own, definition = declaration, location = where.or(entity.location))
             // A package is met once per member loaded beneath it; it is declared once.
-            if declaration.kind == Api.Kind.Package && entity.definition.present then entity.copy(own = entity.own || own)
+            else if declaration.kind == Api.Kind.Package && entity.definition.present then entity.copy(own = entity.own || own)
             else if isType then entity.copy(own = entity.own || own, template = entity.template.or(declaration), location = entity.location.or(where))
             else if entity.definition.absent then entity.copy(own = entity.own || own, definition = declaration, location = entity.location.or(where))
             else entity.copy(own = entity.own || own, overloads = entity.overloads + List(declaration)))
+
+    // The parameters of a method, a constructor or a type alias, each a member of the type form
+    // of what it parameterises (`parent`), from every clause: type parameters with their bounds,
+    // term parameters with their types. A name the compiler made up (`x$1`, an evidence) is not
+    // the API.
+    private def parameters(parent: Designator, clauses: scala.List[scala.List[Symbol]], own: Boolean): Unit =
+      if own || Inspection.everyParameter then clauses.foreach: params =>
+        params.foreach: param =>
+          if !skipped(param) && !param.name.contains("$") then
+            val name: Text = param.name.tt
+            val where: Optional[Api.Location] = if own then location(param) else Unset
+
+            if param.isType then
+              val bounds: Optional[Syntax] = typeResult(param.info, param.flags)
+              record(parent, name, own, Api.Declaration(Api.Kind.TypeParam, Nil, Nil, bounds), true, where)
+            else
+              val contextual: List[Text] = if param.flags.is(Flags.Given) then List(t"using") else Nil
+              val declaration: Api.Declaration = Api.Declaration(Api.Kind.Param, contextual + modifiers(param), Nil, syntax(param.info.widenByName))
+              record(parent, name, own, declaration, false, where)
+
+    private def typeForm(parent: Optional[Designator], name: Text): Designator =
+      parent.lay(Designator.Top(name)) { (parent: Designator) => Designator.Type(parent, name) }
 
     private def overrides(symbol: Symbol): Boolean =
       try symbol.allOverriddenSymbols.nonEmpty catch case _: Throwable => false
@@ -346,6 +394,8 @@ object Inspection:
         val inherited: Boolean = overrides(symbol)
 
         if symbol.isClassDef then template(symbol, own)
+        // A class's type parameter is its constructor's, which `template` records.
+        else if symbol.isTypeDef && flags.is(Flags.Param) then ()
         else if symbol.isTypeDef then
           // An alias is bounds whose two ends are the same; a parameterised one a lambda.
           val aliased: TypeRepr = symbol.info match
@@ -369,6 +419,14 @@ object Inspection:
 
           record(parent, name, own, Api.Declaration(Api.Kind.Type, modifiers(symbol), params, rhs), true, where)
 
+          aliased match
+            case TypeLambda(names, bounds, _) if own || Inspection.everyParameter =>
+              names.zip(bounds).foreach: (param, bound) =>
+                val declaration: Api.Declaration = Api.Declaration(Api.Kind.TypeParam, Nil, Nil, typeResult(bound, Flags.EmptyFlags))
+                record(typeForm(parent, name), param.tt, own, declaration, true, Unset)
+            case _ =>
+              ()
+
           // An exported type is a page elsewhere: a reference through the export leads there.
           if flags.is(Flags.Exported) then rhs match
             case Syntax.Simple(target) => collected.computeIfPresent(Api.key(parent, name), (_, e) => e.nn.copy(alias = target))
@@ -385,6 +443,7 @@ object Inspection:
             if kind == Api.Kind.Extension then extension(symbol) else (none, clauses(symbol))
 
           record(parent, name, own, Api.Declaration(kind, modifiers(symbol), own0, syntax(result(symbol.info)), Nil, group, inherited), false, where)
+          parameters(typeForm(parent, name), symbol.paramSymss, own)
         else if symbol.isValDef then
           val kind: Api.Kind =
             if flags.is(Flags.Enum) && flags.is(Flags.Case) then Api.Kind.Case
@@ -421,6 +480,7 @@ object Inspection:
           val kind: Api.Kind = templateKind(symbol)
           val constructor: List[Syntax] = if kind == Api.Kind.Trait && symbol.primaryConstructor.paramSymss.forall(_.isEmpty) then Nil else clauses(symbol.primaryConstructor)
           record(parent, name, own, Api.Declaration(kind, modifiers(symbol), constructor, Unset, parents(symbol)), true, where)
+          here.let { (here: Designator) => parameters(here, symbol.primaryConstructor.paramSymss, own) }
 
       // A member which cannot be read is left out, and the rest are still walked.
       symbol.declarations.foreach: child =>
