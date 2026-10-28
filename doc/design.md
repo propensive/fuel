@@ -352,6 +352,41 @@ variables reach it too.
     so it is a failure. Pyrocosm gained `Inline.Annotated` and `Block.Code.id` for this.
     Deferred: a reader's own imports (Amok's cookie) deciding how a signature qualifies a
     name, which is `Scope.has` in `Signatures` and nowhere else.
+  - **Extensions and givens** (a fourth cut). A type's page lists the extension methods
+    which apply to it and the givens of and for it, found in one pass over the merged model
+    (`Applicables.decorate`, in `model()` after the overlays), since an extension in one jar
+    extends a type in another. The inspector records what matching needs as `Api.Shape` — a
+    named type by its key with its arguments, a type parameter with its bound, or `Other` —
+    on each declaration: an extension's `receiver` and `requires` (its `using` parameters, a
+    context bound among them, and for one declared in a trait an instance of the trait), a
+    given's `provides`, an alias's `aliasOf`, and a type's `bases`. No alias is seen through
+    in the walker, since a symbol met through the session's symbol table does not report
+    `Opaque` (vacuous's `Optional` dealiased to a union); the pass expands aliases and export
+    forwarders from the model instead. The modularity form `T is Typeclass` is the refinement
+    `Typeclass { type Self = T }`, read as `Typeclass[T]`; a given with a body is a value and
+    an object of one name (its `Self` member says what it is for), and the two are one
+    declaration. Matching is a small unifier: a requirement's parameter binds to what a given
+    names there (or to the bound of the given's parameter), a given's own requirements are
+    checked in turn to a depth of 3, and a parameter left standing for a given's parameter is
+    bound by what *that* given's requirements bind it to — so `[value: Textualizable] =>
+    value is Showable` makes `show` apply to each `Textualizable`. A type class with no given
+    anywhere is taken as provided some other way (`ClassTag`, a context function's `Tactic`),
+    so a requirement of it is satisfied, unattributed. The result is `Api.Applicable` on each
+    entity (tier, distance, reach, the given `via`, the `importFrom`), which the page cache key
+    sees through `entity.toString`. Found on the way: the jar walk loaded a `.tasty` entry as a
+    class alone, so a package object's carrier (`gossamer_core$package`) and every companion
+    object were missing from a dependency's model — most of Soundness's extensions and givens;
+    both are walked now (66k entities for the launcher jar, decorated in 2.5s), looked up
+    without stubs (`staticRef(…, generateStubs = false)`, since `requiredModule` leaves a stub
+    the session later meets as a bad symbolic reference). The fuller walk through the compile's
+    own session left its next build writing no classfiles at all (and its fragments
+    misbehaving), so each jar is walked in a session of its own, once per version of the jar;
+    and a jar's copies of the packages the sources declare (a launcher assembly carrying the
+    project itself) are skipped, since the sources shadow them — which also ends the
+    ambiguity of `show` and `compile` in this document. Deferred: an
+    extension within a class reached through an instance of the class in scope (not a given);
+    refinements other than `Self` (prepositional's `Operand`, `Result`) as constraints;
+    stenography's few failures on companions' types (under 0.1%, shown from their parts).
 - **Output** (done, first cut). `fuel compile` writes its output, when an `output` directory is
   configured, as BinTEL records under the schema derived from each record's type (`Output`):
   each fence's output with what it left to its session, each document's prose with a sentinel

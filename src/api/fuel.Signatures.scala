@@ -157,14 +157,21 @@ object Signatures:
 
     declaration.kind match
       case Api.Kind.Extension =>
-        val group: List[Token] = declaration.group.bind(tokens(_, api, scope))
-        List(keyword(t"extension"), plain(t" ")) + group + List(plain(t" ")) + modifiers + List(keyword(t"def"), plain(t" "), named) + clauses + result
+        group(declaration.group, api, scope) + List(plain(t" ")) + modifiers + List(keyword(t"def"), plain(t" "), named) + clauses + result
 
       case Api.Kind.Package =>
         List(keyword(t"package"), plain(t" "), named)
 
+      // A given object provides its first parent, which is how it was written.
+      case Api.Kind.Given if declaration.result.absent && !declaration.parents.nil =>
+        modifiers + List(keyword(t"given"), plain(t" "), named, symbol(t":"), plain(t" ")) + tokens(declaration.parents.stdlib.head, api, scope)
+
       case kind =>
         modifiers + List(keyword(kind.keyword), plain(t" "), named) + clauses + result + parents
+
+  // The clauses an extension extends, after its keyword: `extension (text: String)`.
+  def group(group: List[Syntax], api: Api, scope: Scope): List[Token] =
+    List(keyword(t"extension"), plain(t" ")) + group.bind(tokens(_, api, scope))
 
   def code(tokens: List[Token]): Inline.Snippet = Inline.Snippet(Language.Scala, tokens)
   def line(tokens: List[Token]): Block.Code = Block.Code(Language.Scala, List(Block.Line(tokens)))

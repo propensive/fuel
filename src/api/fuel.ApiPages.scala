@@ -35,16 +35,18 @@ package fuel
 import soundness.{Language as _, Token as _, *}
 
 import dysasymptotics.linearSize
-import pyrocosm.{Block, Inline, Tone}
+import pyrocosm.{Block, Inline, Language, Token, Tone}
 import stenography.Designator
 
 // An entity's page, and the navigation of the whole API, as blocks: Amok's `JvmFolio` layout.
 // The page is its place (each parent a link), its name, its one-line info, then for each of
 // its declarations the signature and a table of the members which belong to it (kind, name
-// linked and anchored by its id, signature, info; an extension's group heads its rows) — the
-// parameters, in a table of their own beneath the signature they belong to — then its
-// Markdown detail, what it refers to, and — for an entity nothing declares any more — the
-// notice of its removal and what replaces it.
+// linked and anchored by its id, signature, info; the extensions it declares in a table per
+// clause they extend) — the parameters, in a table of their own beneath the signature they
+// belong to — then, for a type, the extensions which apply to it (a table per source, in the
+// order `Applicables` ranks them, each headed by what brings it: the companion, an import, a
+// given) and the givens of it and for it; then its Markdown detail, what it refers to, and —
+// for an entity nothing declares any more — the notice of its removal and what replaces it.
 object ApiPages:
   def page(api: Api, entity: Api.Entity, resolver: Resolver, scope: Scope, embeddings: List[Embedding]): List[Block] =
     val doc: Optional[Api.Entry] = entity.doc
@@ -76,14 +78,18 @@ object ApiPages:
     val children: List[Api.Entity] = api.children(entity).filter(!_.hidden)
     val (parameters, others) = children.partition(_.isParameter)
 
+    // A declaration's row; a member's own rows are anchored by its name, another page's are
+    // not (its anchors are its own).
+    def row(member: Api.Entity, d: Api.Declaration, anchored: Boolean): Block.Row =
+      val kind: List[Inline] = List(Inline.Toned(Tone.Muted, Inline.text(d.kind.keyword)))
+      val name: List[Inline] = List(Inline.Strong(List(Inline.Link(Inline.Destination.Local(member.url), Inline.text(member.name)))))
+      val signature: List[Inline] = List(Signatures.code(Signatures.tokens(Syntax0.of(d), api, scope)))
+      val info: List[Inline] = member.doc.let(_.info).let(Blocks.inline(_, resolver)).or(Nil)
+      val tone: Optional[Tone] = if member.removed then Tone.Muted else Unset
+      Block.Row(List(Block.Cell(kind), Block.Cell(name), Block.Cell(signature), Block.Cell(info)), tone, Unset, if anchored then member.name else Unset)
+
     def rows(members: List[Api.Entity]): List[Block.Row] = members.bind: (member: Api.Entity) =>
-      member.declarations.map: (d: Api.Declaration) =>
-        val kind: List[Inline] = List(Inline.Toned(Tone.Muted, Inline.text(d.kind.keyword)))
-        val name: List[Inline] = List(Inline.Strong(List(Inline.Link(Inline.Destination.Local(member.url), Inline.text(member.name)))))
-        val signature: List[Inline] = List(Signatures.code(Signatures.tokens(Syntax0.of(d), api, scope)))
-        val info: List[Inline] = member.doc.let(_.info).let(Blocks.inline(_, resolver)).or(Nil)
-        val tone: Optional[Tone] = if member.removed then Tone.Muted else Unset
-        Block.Row(List(Block.Cell(kind), Block.Cell(name), Block.Cell(signature), Block.Cell(info)), tone, Unset, member.name)
+      member.declarations.map(row(member, _, true))
 
     def table(heading: Text, signature: Text, rows: List[Block.Row]): List[Block] =
       val columns: List[Block.Column] =
@@ -99,18 +105,95 @@ object ApiPages:
       val members: List[Api.Entity] = others.filter: (child: Api.Entity) =>
         child.parent.let(_.isInstanceOf[Designator.Type]).or(false) == ofType
 
-      // Extension rows are grouped under the clause they extend.
-      val grouped: List[Block.Row] =
-        val (extensions, plain) = members.partition(_.declarations.exists(_.kind == Api.Kind.Extension))
-        rows(members)
+      // The extensions this entity declares are grouped under the clauses they extend, each
+      // group a table of its own headed by its clause, after the other members.
+      val declared: List[(Api.Entity, Api.Declaration)] =
+        members.bind { (m: Api.Entity) => m.declarations.map((m, _)) }
+
+      val (extended, plain) = declared.partition(_(1).kind == Api.Kind.Extension)
+
+      val groups: List[Block] =
+        val keys: List[Text] = extended.map(_(1).group.map(_.qualified).join(t" "))
+
+        keys.distinct.bind: (key: Text) =>
+          val these: List[(Api.Entity, Api.Declaration)] = extended.filter(_(1).group.map(_.qualified).join(t" ") == key)
+          val clause: Block = Signatures.line(Signatures.group(these.stdlib.head(1).group, api, scope))
+          clause :: table(t"Name", t"Signature", these.map { (m: Api.Entity, d: Api.Declaration) => row(m, d, true) })
 
       val own: List[Block.Row] = if ofType || entity.template.absent then rows(parameters) else Nil
-      signature :: table(t"Parameter", t"Type", own) + table(t"Name", t"Signature", grouped)
+      signature :: table(t"Parameter", t"Type", own) + table(t"Name", t"Signature", plain.map { (m: Api.Entity, d: Api.Declaration) => row(m, d, true) }) + groups
 
     val sections: List[Block] =
       entity.definition.let(section(_, false)).or(Nil)
       + entity.template.let(section(_, true)).or(Nil)
       + entity.overloads.bind { (d: Api.Declaration) => List(Signatures.line(Signatures.declaration(entity.name, d, api, scope))) }
+
+    // A link to an entity by its name, where it has a page.
+    def link(key: Text): List[Inline] = api(key).lay(Inline.text(key)): (e: Api.Entity) =>
+      List(Inline.Link(Inline.Destination.Local(e.url), Inline.text(e.name)))
+
+    // The extensions which apply to the type, each run of one source one table, headed by what
+    // brings it: declared in the companion (or a base's), or by an import, or within a given;
+    // and the given which makes a type parameter's extension apply, where one does.
+    val extensions: List[Block] =
+      if entity.extensions.nil then Nil else
+        def source(first: Api.Applicable): List[Block] =
+          val from: Optional[Api.Entity] = first.importFrom.let(api(_))
+
+          val where: List[Inline] = from match
+            case Unset => Nil
+            case from: Api.Entity =>
+              if from.key == entity.key then Inline.text(t"In the companion object")
+              else if entity.bases.has(from.key) then Inline.text(t"In the companion object of ") + link(from.key)
+              else
+                val tokens: List[Token] =
+                  List(Token(t"import", Token.Accent.Keyword), Token.plain(t" "), Token(from.key, Token.Accent.Term, Unset, Inline.Destination.Local(from.url)), Token(t".*", Token.Accent.Symbol))
+
+                List(Inline.Textual(t"By "), Signatures.code(tokens))
+
+          val via: List[Inline] = first.via.let(api(_)).lay(Nil: List[Inline]): (g: Api.Entity) =>
+            val within: Boolean = first.key.starts(t"${g.key}.")
+            val lead: Text = if within then t", within " else t", with "
+            val signature: List[Inline] = g.definition.let { (d: Api.Declaration) => List(Signatures.code(Signatures.tokens(Syntax0.of(d), api, scope))) }.or(Nil)
+            val named: Inline = Inline.Snippet(Language.Scala, List(Token(t"given", Token.Accent.Keyword), Token.plain(t" "), Token(g.name, Token.Accent.Term, Unset, Inline.Destination.Local(g.url))))
+            List(Inline.Textual(lead), named) + signature
+
+          if where.nil && via.nil then Nil else List(Block.Paragraph(where + via))
+
+        // Consecutive extensions of one source and one given are one table.
+        def runs(remaining: List[Api.Applicable]): List[(Api.Applicable, List[Api.Applicable])] = remaining match
+          case Nil => Nil
+          case first :: _ =>
+            val (run, rest) = remaining.span { (e: Api.Applicable) => e.importFrom == first.importFrom && e.via == first.via }
+            (first, run) :: runs(rest)
+
+        val tables: List[Block] = runs(entity.extensions).bind: (first: Api.Applicable, run: List[Api.Applicable]) =>
+          val these: List[Block.Row] = run.bind: (e: Api.Applicable) =>
+            api(e.key).lay(Nil: List[Block.Row]): (member: Api.Entity) =>
+              member.declarations.stdlib.lift(e.index) match
+                case Some(d) => List(row(member, d, false))
+                case None    => Nil
+
+          source(first) + table(t"Name", t"Signature", these)
+
+        val every: List[Block] =
+          if entity.key == Applicables.any then Nil
+          else api(Applicables.any).lay(Nil: List[Block]): (any: Api.Entity) =>
+            if any.extensions.nil then Nil else List(Block.Paragraph(Inline.text(t"The extensions of every value are listed on ") + link(any.key) + Inline.text(t".")))
+
+        List(Block.Heading(3, Inline.text(t"Extensions"))) + tables + every
+
+    // The givens which provide this type, as a type class, and those which provide another for
+    // it.
+    val givens: List[Block] =
+      if entity.givens.nil then Nil else
+        val all: List[Api.Entity] = entity.givens.bind { (key: Text) => api(key).let(List(_)).or(Nil) }
+        val (instances, others) = all.partition(_.declarations.exists(_.provides.let(_.head == entity.key).or(false)))
+
+        def part(title: Text, these: List[Api.Entity]): List[Block] =
+          if these.nil then Nil else List(Block.Paragraph(Inline.text(title))) + table(t"Name", t"Signature", these.bind { (g: Api.Entity) => g.declarations.map(row(g, _, false)) })
+
+        List(Block.Heading(3, Inline.text(t"Givens"))) + part(t"Instances:", instances) + part(t"For ${entity.name}:", others)
 
     val detail: List[Block] = doc.let(_.detail).let { (text: Text) => Blocks.of(Parser.parse(text), embeddings, resolver) }.or(Nil)
 
@@ -122,7 +205,7 @@ object ApiPages:
 
         List(Block.Heading(3, Inline.text(t"See also")), Block.Listing(false, items))
 
-    place + List(heading) + info + removed + sections + detail + refer
+    place + List(heading) + info + removed + sections + extensions + givens + detail + refer
 
   // The navigation: the project's own packages, then its dependencies' (closed), each node a
   // link to its page, open along the way to `current`, with the packages, types and objects
@@ -167,4 +250,10 @@ private object Syntax0:
         case Api.Kind.TypeParam => List(r)
         case _                  => List(stenography.Syntax.Symbolic(t": "), r)
 
-    stenography.Syntax.Compound(declaration.clauses + result)
+    // A given object's type is its first parent.
+    val provided: List[stenography.Syntax] =
+      if declaration.kind == Api.Kind.Given && declaration.result.absent && !declaration.parents.nil
+      then List(stenography.Syntax.Symbolic(t": "), declaration.parents.stdlib.head)
+      else Nil
+
+    stenography.Syntax.Compound(declaration.clauses + result + provided)

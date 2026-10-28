@@ -473,16 +473,26 @@ private def model(config: Workspace.Config, checker: Checker)(using Stdio)
           report(Compilation.unreadable(file))
           Nil
 
-  // The dependencies first, walked through the session before it compiles anything: a walk
-  // after a compile under the project's options reads next to nothing.
+  // The packages the sources declare, whose copies in a jar are theirs to shadow.
+  val shadowed: List[Text] = List.from(sources.stdlib.flatMap { (_, text) =>
+    text.s.linesIterator.map(_.trim.nn).filter(_.startsWith("package ")).map { line =>
+      val name: String = line.substring(8).nn.trim.nn
+      Text(name.takeWhile { c => c.isLetterOrDigit || c == '.' || c == '_' })
+    }.filter(_ != t"")
+  }.distinct)
+
+  // The dependencies, each walked through a session of its own (once per version of the jar,
+  // which the daemon keeps): a walk through the compile's session leaves it, whichever comes
+  // first, reading next to nothing or writing nothing.
   val dependencies: Api = config.classpath.filter(_.ends(t".jar")).stdlib.foldLeft(Api.empty): (acc, jar) =>
-    val walked: Api = Server.jar(jar):
-      checker.context.lay(Api.empty): (context: dotty.tools.dotc.core.Contexts.Context) =>
-        Inspection.classpath(List(jar), context) match
-          case api: Api => api
-          case error: Throwable =>
-            report(failed(t"The dependency $jar could not be inspected", error))
-            Api.empty
+    val walked: Api = Server.jar(jar, shadowed):
+      Checking.session(config.classpath, config.options): (walker: Checker) =>
+        walker.context.lay(Api.empty): (context: dotty.tools.dotc.core.Contexts.Context) =>
+          Inspection.classpath(List(jar), context, shadowed) match
+            case api: Api => api
+            case error: Throwable =>
+              report(failed(t"The dependency $jar could not be inspected", error))
+              Api.empty
 
     acc.merge(walked)
 
@@ -560,8 +570,11 @@ private def model(config: Workspace.Config, checker: Checker)(using Stdio)
           report(Compilation.unreadable(file))
           Nil
 
-  val (api, merging) = if overlays.nil then (inspected, Nil: List[Block]) else Overlay.merge(inspected, overlays)
+  val (merged, merging) = if overlays.nil then (inspected, Nil: List[Block]) else Overlay.merge(inspected, overlays)
   merging.each(report)
+
+  // What applies to each type beyond its members, over the whole model.
+  val api: Api = Applicables.decorate(merged)
 
   if !overlays.nil then Out.println(t"fuel: ${overlays.size.show} overlays")
 
