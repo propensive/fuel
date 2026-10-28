@@ -864,6 +864,33 @@ object Util:
         entity(t"sample.Util.Pair").let(_.template.let { (d: Api.Declaration) => (d.kind, d.clauses.size, d.result.let(_.qualified)) })
       . assert(_ == (Api.Kind.Type, 1, t"(A, A)"))
 
+      test(m"a method's parameters are members of its type form, one entity across its overloads"):
+        ( entity(t"sample.Doc.parse#text").let(_.definition.let(_.kind)),
+          entity(t"sample.Doc.parse#size").let(_.definition.let(_.result.let(_.qualified))),
+          entity(t"sample.Doc.parse#text").let(_.overloads.size),
+          entity(t"sample.Doc.parse#text").let(_.url) )
+      . assert(_ == (Api.Kind.Param, t"scala.Int", 0, t"/api/sample.Doc.parse~text"))
+
+      test(m"a class's, an alias's and an extension's parameters are entities, type and term"):
+        ( entity(t"sample.Shape#A").let(_.template.let(_.kind)),
+          entity(t"sample.Util.Pair#A").let(_.template.let(_.kind)),
+          entity(t"sample.Util.twice#text").let(_.definition.let(_.kind)) )
+      . assert(_ == (Api.Kind.TypeParam, Api.Kind.TypeParam, Api.Kind.Param))
+
+      test(m"a case class's field is its constructor's parameter, and stays a field"):
+        entity(t"sample.Doc#title").let { (e: Api.Entity) => (e.definition.let(_.kind), e.overloads.size, e.isParameter) }
+      . assert(_ == (Api.Kind.Val, 0, false))
+
+      test(m"a parameter is not in the navigation"):
+        api match
+          case api: Api =>
+            def names(nodes: List[Block.TreeNode]): List[Text] =
+              nodes.bind { (node: Block.TreeNode) => List(Blocks.plain(node.label)) + names(node.children) }
+
+            names(ApiPages.tree(api, t"sample.Shape").roots).has(t"A")
+          case _ => true
+      . assert(_ == false)
+
       test(m"a given and a val are declarations of their kinds"):
         (entity(t"sample.Util.given_Ordering_Doc").let(_.definition.let(_.kind)), entity(t"sample.Util.limit").let(_.definition.let(_.kind)))
       . assert(_ == (Api.Kind.Given, Api.Kind.Val))
@@ -925,6 +952,7 @@ entry .Doc   a document
   entry #shout   its title, loudly
   entry #area    nothing much
   entry .parse   parses a document
+    entry #text   the text to parse
   entry #whisper  its title, quietly
     until 0.2.0  sample.Doc#shout
 
@@ -973,7 +1001,48 @@ entry .nowhere   nothing of the sort
 
       test(m"an entry for a member nothing declares is a failure at its line"):
         problems(Tone.Failure)
-      . assert(_ == List(t"doc/api/sample.tel:22: `.nowhere` is documented here, but no such member of `sample` is declared."))
+      . assert(_ == List(t"doc/api/sample.tel:23: `.nowhere` is documented here, but no such member of `sample` is declared."))
+
+      test(m"a parameter is documented as a member of its method's type form"):
+        merged.let(_(0)(t"sample.Doc.parse#text").let(_.doc.let(_.info)))
+      . assert(_ == t"the text to parse")
+
+      def failures(text: Text): List[Text] = Overlay.read(t"x.tel", text) match
+        case overlay: Overlay =>
+          val lines: List[Text] = overlay.problems.bind:
+            case Block.Diagnostic(_, location, message, _, _) =>
+              List(t"${location.let(_.line).or(0).toString}: ${Blocks.plain(message.bind { case Block.Paragraph(c) => c; case _ => Nil })}")
+            case _ => Nil
+
+          List.from(lines.stdlib.sortBy(_.cut(t":").prim.or(t"").s.toInt))
+        case diagnostic: Block.Diagnostic => List(t"unread")
+
+      test(m"an overlay's format is checked, each failure at its line"):
+        failures(t"""base sample
+domain sample
+info  one
+info  two
+entry .Doc   a document
+  info  again
+  detial
+      oops
+  entry #title  its title
+  entry #title  its title again
+  entry
+""")
+      . assert(_ == List
+          ( t"2: `domain` is not part of an overlay: An overlay may hold `base`, `import`, `info`, `detail`, `refer`, `hidden`, `until`, `entry`.",
+            t"4: `info` is given more than once here.",
+            t"6: This entry's info is already given on its line.",
+            t"7: `detial` is not part of an overlay: An entry may hold `import`, `info`, `detail`, `refer`, `hidden`, `until`, `entry`.",
+            t"10: `#title` already has an entry here.",
+            t"11: An `entry` must name the member it documents, as `.name` or `#Name`." ))
+
+      test(m"an info may be 140 characters as it reads, and no more"):
+        val fits: Text = t"`${"a".repeat(140).nn.tt}`"
+        val over: Text = "a".repeat(141).nn.tt
+        failures(t"base sample\nentry .Doc  $fits\nentry .Shape\n  info $over\n")
+      . assert(_ == List(t"4: This info is 141 characters long, and may be at most 140: say the rest in a `detail`."))
 
       test(m"an entry marked `until` need not exist, and has a page which is removed"):
         merged.let(_(0)(t"sample.Doc#whisper").let { (e: Api.Entity) => (e.removed, e.doc.let(_.until.let(_.replacement))) })

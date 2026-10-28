@@ -309,6 +309,25 @@ variables reach it too.
   - Overloads are kept (one entity, every signature); an exported type is an `alias` whose
     page is its target's; a member which overrides is documented by what it overrides.
   - Not yet: `Criteria` search; a dependency's own overlays; `fuel watch`.
+  - **Overlays checked; parameters** (a third cut). An overlay's format is checked as it is
+    read, since it is read as an untyped `Tel` which would drop a misspelt keyword silently:
+    an unknown keyword, one given twice which is given once, an info or detail given both
+    inline and as a child, a duplicate entry, a nameless one, and an `info` over 140
+    characters as it reads are failures at their lines (each compound's line found by walking
+    the compounds and the file's lines together). Overloads are one page by design, and so
+    are a type and its companion. A parameter is an entity (`Kind.Param`, `Kind.TypeParam`),
+    a member of the type form of what it parameterises (`quux.foo#bar`, `quux.Box#T`), so an
+    overlay documents it as any member, `` `#bar` `` on `foo`'s page resolves to it, and
+    `/api/quux.foo#bar` is a row's anchor; only the project's own are recorded, documenting
+    one is optional, and a member of the same name keeps the entity. A survey over the
+    launcher's classpath (every dependency's parameters, `Inspection.everyParameter`) found
+    2131 meetings: 2111 a constructor parameter and its own field (`val`, `var`, a `using`
+    parameter's given) — one thing, rightly one entity; 2 a constructor parameter and a method
+    of its name (`guillotine.Job#process`); and 9 a lowercase type parameter and a method of
+    its name (`contingency.Attempt#success`, `gossamer.Dictionary#value`), Soundness's
+    convention for type parameters, which leaves one entity holding a `type` and a `def`, its
+    row showing both. Open: whether a type parameter which meets a member needs a key of its
+    own.
   - **Links** (a second cut). A reference in prose may say its kind: `` `#Name` `` is a type
     and `` `.name` `` a term, resolved as an unsigilled name is and shown without the sigil
     in the accent of its kind; one nothing resolves is shown as written and is a failure

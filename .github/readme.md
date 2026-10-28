@@ -170,6 +170,13 @@ term follows `.` and a member of a type follows `~` (`#` being a URL's fragment)
 `gossamer.Text`'s `length` is at `/api/gossamer.Text~length`, and a member's row on its parent's
 page is the anchor `/api/gossamer.Text#length`. A dependency's page is rendered when it is asked
 for; a project's own pages are rendered by the compile, with the examples in them compiled.
+An overloaded name is one page, since each of its variants means the same thing, and a type and
+its companion object are one page, which can speak of "the type" and "the companion object".
+A parameter is an entity too, a member of the type form of what it parameterises: in package
+`quux`, `def foo[T](bar: Baz)` is the page `quux.foo`, and its parameters are `quux.foo#bar` and
+`quux.foo#T`, listed in a table of their own on its page; a class's constructor parameters and
+type parameters are members of the class (`quux.Box#T`), where a field of the same name — a case
+class's — is the parameter's entity.
 
 An **overlay** documents a package, in a TEL file beneath an `overlay` directory: Amok's format.
 
@@ -188,6 +195,7 @@ entry .Text   a one-line summary     # `.name` is a member of the term, `#Name` 
   import gossamer.*                  # a scope of this entry's own, inherited by those within
   entry #length   its length          # a leaf entry's Markdown may follow it as a source atom
   entry .apply    makes one
+    entry #text   the characters       # a parameter, a member of `apply`'s type form
   entry #whisper  gone
     until 0.74.0  gossamer.Text#shout # removed in that version; its replacement, if any
   entry .Internal
@@ -195,11 +203,19 @@ entry .Text   a one-line summary     # `.name` is a member of the term, `#Name` 
   refer gossamer.Textual             # "See also"
 ```
 
+An overlay is held to its format, each failure at its line: a keyword other than those above
+(`base` only at the top), `base`, `info`, `detail`, `hidden` or `until` given twice, an entry's
+info given both on its line and as `info` (or its detail both as a source atom and as `detail`),
+two entries for the same member, an `entry` without a name, and an `info` longer than 140
+characters as it reads (Markdown's markup not counted): an `info` is a line, and the rest belongs
+in the `detail`.
+
 The overlay and the code are held to each other: an entry naming a member nothing declares
 fails the compile (unless it is marked `until`, when it keeps a page saying what replaced it),
 an `until` on a member which still exists is a caution, and a public member of a documented
 package with no entry is a caution at the line it is declared, naming the entry to write. A
-member which overrides or implements an inherited one is documented by it.
+member which overrides or implements an inherited one is documented by it, and a parameter need
+not be documented at all.
 
 Everything that names an entity links to its page, when the page exists: the identifiers in a
 signature; inline code in prose (`` `Text` ``), resolved as a name in code would be — as

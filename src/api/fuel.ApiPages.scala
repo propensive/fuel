@@ -41,8 +41,9 @@ import stenography.Designator
 // An entity's page, and the navigation of the whole API, as blocks: Amok's `JvmFolio` layout.
 // The page is its place (each parent a link), its name, its one-line info, then for each of
 // its declarations the signature and a table of the members which belong to it (kind, name
-// linked and anchored by its id, signature, info; an extension's group heads its rows), then
-// its Markdown detail, what it refers to, and — for an entity nothing declares any more — the
+// linked and anchored by its id, signature, info; an extension's group heads its rows) — the
+// parameters, in a table of their own beneath the signature they belong to — then its
+// Markdown detail, what it refers to, and — for an entity nothing declares any more — the
 // notice of its removal and what replaces it.
 object ApiPages:
   def page(api: Api, entity: Api.Entity, resolver: Resolver, scope: Scope, embeddings: List[Embedding]): List[Block] =
@@ -73,32 +74,38 @@ object ApiPages:
       List(Block.Notice(Tone.Warning, Unset, List(Block.Paragraph(List(Inline.Textual(t"${entity.name} $verb ${until.version}")) + replacement + List(Inline.Textual(t"."))))))
 
     val children: List[Api.Entity] = api.children(entity).filter(!_.hidden)
+    val (parameters, others) = children.partition(_.isParameter)
 
+    def rows(members: List[Api.Entity]): List[Block.Row] = members.bind: (member: Api.Entity) =>
+      member.declarations.map: (d: Api.Declaration) =>
+        val kind: List[Inline] = List(Inline.Toned(Tone.Muted, Inline.text(d.kind.keyword)))
+        val name: List[Inline] = List(Inline.Strong(List(Inline.Link(Inline.Destination.Local(member.url), Inline.text(member.name)))))
+        val signature: List[Inline] = List(Signatures.code(Signatures.tokens(Syntax0.of(d), api, scope)))
+        val info: List[Inline] = member.doc.let(_.info).let(Blocks.inline(_, resolver)).or(Nil)
+        val tone: Optional[Tone] = if member.removed then Tone.Muted else Unset
+        Block.Row(List(Block.Cell(kind), Block.Cell(name), Block.Cell(signature), Block.Cell(info)), tone, Unset, member.name)
+
+    def table(heading: Text, signature: Text, rows: List[Block.Row]): List[Block] =
+      val columns: List[Block.Column] =
+        List(Block.Column(Inline.text(t"")), Block.Column(Inline.text(heading)), Block.Column(Inline.text(signature)), Block.Column(Inline.text(t"Description")))
+
+      if rows.nil then Nil else List(Block.Table(columns, rows, Unset))
+
+    // The parameters belong to the signature of the type, where there is one, since a class's
+    // are its constructor's; else to the term's.
     def section(declaration: Api.Declaration, ofType: Boolean): List[Block] =
       val signature: Block = Signatures.line(Signatures.declaration(entity.name, declaration, api, scope))
 
-      val members: List[Api.Entity] = children.filter: (child: Api.Entity) =>
+      val members: List[Api.Entity] = others.filter: (child: Api.Entity) =>
         child.parent.let(_.isInstanceOf[Designator.Type]).or(false) == ofType
-
-      val rows: List[Block.Row] = members.bind: (member: Api.Entity) =>
-        member.declarations.map: (d: Api.Declaration) =>
-          val kind: List[Inline] = List(Inline.Toned(Tone.Muted, Inline.text(d.kind.keyword)))
-          val name: List[Inline] = List(Inline.Strong(List(Inline.Link(Inline.Destination.Local(member.url), Inline.text(member.name)))))
-          val signature: List[Inline] = List(Signatures.code(Signatures.tokens(Syntax0.of(d), api, scope)))
-          val info: List[Inline] = member.doc.let(_.info).let(Blocks.inline(_, resolver)).or(Nil)
-          val tone: Optional[Tone] = if member.removed then Tone.Muted else Unset
-          Block.Row(List(Block.Cell(kind), Block.Cell(name), Block.Cell(signature), Block.Cell(info)), tone, Unset, member.name)
 
       // Extension rows are grouped under the clause they extend.
       val grouped: List[Block.Row] =
         val (extensions, plain) = members.partition(_.declarations.exists(_.kind == Api.Kind.Extension))
-        rows
+        rows(members)
 
-      val columns: List[Block.Column] =
-        List(Block.Column(Inline.text(t"")), Block.Column(Inline.text(t"Name")), Block.Column(Inline.text(t"Signature")), Block.Column(Inline.text(t"Description")))
-
-      val table: List[Block] = if rows.nil then Nil else List(Block.Table(columns, grouped, Unset))
-      signature :: table
+      val own: List[Block.Row] = if ofType || entity.template.absent then rows(parameters) else Nil
+      signature :: table(t"Parameter", t"Type", own) + table(t"Name", t"Signature", grouped)
 
     val sections: List[Block] =
       entity.definition.let(section(_, false)).or(Nil)
@@ -130,7 +137,7 @@ object ApiPages:
     def node(entity: Api.Entity, whole: Boolean): Block.TreeNode =
       val children: List[Block.TreeNode] =
         if !whole && !path.has(entity.key) then Nil
-        else api.children(entity).filter { (c: Api.Entity) => !c.hidden && (c.isPackage || c.template.present || c.definition.let(_.kind == Api.Kind.Object).or(false)) }.map(node(_, whole))
+        else api.children(entity).filter { (c: Api.Entity) => !c.hidden && !c.isParameter && (c.isPackage || c.template.present || c.definition.let(_.kind == Api.Kind.Object).or(false)) }.map(node(_, whole))
 
       val open: Optional[Boolean] = if children.nil then Unset else path.has(entity.key)
       val tone: Optional[Tone] = if entity.key == current then Tone.Accent else if entity.removed then Tone.Muted else Unset
@@ -156,7 +163,8 @@ private object Syntax0:
   def of(declaration: Api.Declaration): stenography.Syntax =
     val result: List[stenography.Syntax] = declaration.result.lay(Nil: List[stenography.Syntax]): (r: stenography.Syntax) =>
       declaration.kind match
-        case Api.Kind.Type => List(stenography.Syntax.Symbolic(t" = "), r)
-        case _             => List(stenography.Syntax.Symbolic(t": "), r)
+        case Api.Kind.Type      => List(stenography.Syntax.Symbolic(t" = "), r)
+        case Api.Kind.TypeParam => List(r)
+        case _                  => List(stenography.Syntax.Symbolic(t": "), r)
 
     stenography.Syntax.Compound(declaration.clauses + result)
