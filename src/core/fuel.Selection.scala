@@ -51,10 +51,10 @@ object Selection:
   // A mark's selection from its TEL node: its first atom, refined by the `line` and
   // `occurrence` children beneath it.
   def read(node: Tel): Selection =
-    val base: Selection = parse(node.atomTexts.to[List].filter(_ != t"").prim.or(t""))
+    val base: Selection = parse(node.atomTexts.to[List].filter(_ != t"").head.or(t""))
 
     def number(keyword: Text): Optional[Int] =
-      node.fields(keyword).to[List].prim.let { (child: Tel) => safely(child.primaryAtom.as[Int]) }
+      node.fields(keyword).to[List].head.let { (child: Tel) => safely(child.primaryAtom.as[Int]) }
 
     base.copy(line = number(t"line"), occurrence = number(t"occurrence").or(1))
 

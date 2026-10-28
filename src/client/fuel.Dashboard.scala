@@ -144,7 +144,7 @@ final class Dashboard():
     if path == t"/" || path == t"" then first
     else if path.starts(t"/doc/") then
       val rest: List[Text] = path.skip(5).cut(t"/")
-      rest.prim.let { (section: Text) => Target.Document(decode(section), rest.skip(1).map(decode).join(t"/")) }
+      rest.head.let { (section: Text) => Target.Document(decode(section), rest.skip(1).map(decode).join(t"/")) }
     else if path.starts(t"/api/") then
       Server.api.locate(path.skip(5)).lay(Target.Missing(path)) { (entity: Api.Entity) => Target.Entity(entity.key) }
     else if path == t"/glossary" then Target.Glossary()
@@ -153,7 +153,7 @@ final class Dashboard():
   private def first: Optional[Target] =
     Server.corpus.let: (corpus: Corpus) =>
       corpus.sections.seek(!_.docs.nil).let: (section: Corpus.Section) =>
-        section.docs.prim.let { (doc: Doc) => Target.Document(section.name, doc.path) }
+        section.docs.head.let { (doc: Doc) => Target.Document(section.name, doc.path) }
 
   def handle(event: Event): Unit = event match
     case Event.Located(path) =>

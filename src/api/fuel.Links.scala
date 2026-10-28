@@ -85,7 +85,7 @@ object Links:
       case Linkage.Target.Site(path, fragment) =>
         if path.starts(t"/doc/") then
           val rest: List[Text] = path.skip(5).cut(t"/").map(decode)
-          document(rest.prim.or(t""), rest.skip(1).join(t"/"), fragment)
+          document(rest.head.or(t""), rest.skip(1).join(t"/"), fragment)
         else if path.starts(t"/api/") then
           api.locate(path.skip(5)) match
             case entity: Api.Entity =>

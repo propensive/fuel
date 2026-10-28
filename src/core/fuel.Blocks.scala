@@ -48,11 +48,6 @@ object Linkage:
     case Url(url: Text)                                                   // a URL, with a scheme
     case Sigil(reference: Text)                                           // a sigilled reference nothing resolved
 
-  // The schema BinTEL writes a target under, anchored here so that a record holding one (the
-  // output's prose) derives it in the member form; see `fuel_schemas.scala`.
-  object Target:
-    given telSchematic: Target is stratiform.TelSchematic over Tels.Type = atMember(TargetSchema.derived)
-
 case class Linkage(line: Int, target: Linkage.Target)
 
 // A Markdown document as Pyrocosm blocks, node for node: Pyrocosm's own conversion
@@ -279,7 +274,7 @@ object Blocks:
 
     def embed(info: List[Text], content: Text, fence: Int): Optional[List[Block]] =
       val scanned: Optional[(Text, List[(Text, Linker.Kind)])] =
-        if info.prim != t"scala" && !info.has(t"fuel") then Unset else
+        if info.head != t"scala" && !info.has(t"fuel") then Unset else
           scala += 1
           Embedding.scan(info, content, scala)
 
@@ -300,7 +295,7 @@ object Blocks:
   private def filled(block: Block, outputs: List[List[Block]]): List[Block] = block match
     case Block.Code(Output.fence, _, _, index: Int, _, _) =>
       val empty: List[Block] = Nil
-      outputs.skip(index).prim.or(empty)
+      outputs.skip(index).head.or(empty)
 
     case Block.Quotation(content) =>
       List(Block.Quotation(fill(content, outputs)))

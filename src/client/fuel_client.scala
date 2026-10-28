@@ -204,7 +204,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
     // `fuel present <file>`: a presentation's slides in a browser, until Ctrl+C.
     case ui.Present() :: rest =>
       val config: Workspace.Config = Workspace.load(directory)
-      val operand: Optional[Text] = rest.map(_()).filter(!_.starts(t"-")).prim
+      val operand: Optional[Text] = rest.map(_()).filter(!_.starts(t"-")).head
 
       val port: Int = ui.PresentPort() match
         case text: Text => safely(text.as[Int]).or(Presenter.port)
@@ -255,7 +255,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
     // `fuel show <file>`: one document, compiled as `compile` would, set in the terminal.
     case ui.Show() :: rest =>
       val config: Workspace.Config = Workspace.load(directory)
-      val operand: Optional[Text] = rest.map(_()).filter(!_.starts(t"-")).prim
+      val operand: Optional[Text] = rest.map(_()).filter(!_.starts(t"-")).head
       ambient(show(config, directory, operand))
 
     case ui.Compile() :: _ =>

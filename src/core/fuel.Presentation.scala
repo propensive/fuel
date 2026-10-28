@@ -132,7 +132,7 @@ object Presentation:
 
     // A slide's code: the code alone, or a preamble beneath it with the code in `code`.
     private def code(child: Tel.Compound, node: Optional[Tel], line: Int): List[Part] =
-      words(child).prim match
+      words(child).head match
         case language: Text =>
           node.let: (node: Tel) =>
             if child.children.stdlib.forall(_.compounds.stdlib.isEmpty) then
@@ -239,8 +239,8 @@ object Presentation:
     // a frame for each.
     def animated(run: List[Slide], language: Text): Block.Leaf =
       val codes: List[Part.Code] = run.bind(lone(_).let(List(_)).or(Nil))
-      val line: Int = run.prim.let(_.line).or(1)
-      val first: Preamble = codes.prim.let(_.preamble).or(Preamble.empty)
+      val line: Int = run.head.let(_.line).or(1)
+      val first: Preamble = codes.head.let(_.preamble).or(Preamble.empty)
       val preamble: Preamble = first.copy(marks = Nil, frames = codes.map(frame))
       val fenced: List[Block] = scala.embedWith(info(language), preamble, t"", line)
 
