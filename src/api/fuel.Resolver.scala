@@ -120,9 +120,9 @@ class Resolver(api: Api, scope0: Scope, page: Optional[Text] = Unset) extends Li
       val cleaned: Text = Text(body.s.replace("{", "").nn.replace("}", "").nn)
 
       cleaned.cut(t",").bind: (clause: Text) =>
-        val path: Text = clause.trim.cut(t" ").prim.or(t"")
+        val path: Text = clause.trim.cut(t" ").head
         val segments: List[Text] = path.cut(t".").filter(_ != t"")
-        val prefix: List[Text] = if segments.reverse.prim.let(_ == t"*").or(false) then segments.keep(segments.size - 1) else segments.keep(segments.size - 1)
+        val prefix: List[Text] = if segments.reverse.head.let(_ == t"*").or(false) then segments.keep(segments.size - 1) else segments.keep(segments.size - 1)
         if prefix.nil then Nil else List(Designator(prefix.join(t".")))
 
     scope = scope.copy(imports = (scope.imports + learned).distinct)
@@ -225,7 +225,7 @@ class Resolver(api: Api, scope0: Scope, page: Optional[Text] = Unset) extends Li
         case Nil        => Unset
         case many       =>
           // The same page reached by several routes is no ambiguity.
-          if many.map(_.key).distinct.size == 1 then many.prim.let(destination) else
+          if many.map(_.key).distinct.size == 1 then many.head.let(destination) else
             if record then ambiguous.add(text)
             Unset
 

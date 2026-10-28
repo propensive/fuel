@@ -72,7 +72,7 @@ object Doc:
     val parsed: Markdown of Layout = Parser.parse(extended)
 
     val unclosed: Optional[Int] =
-      if definitions == t"" then Unset else parsed.children.reverse.prim.let: (node: Layout) =>
+      if definitions == t"" then Unset else parsed.children.reverse.head.let: (node: Layout) =>
         node match
           case Layout.CodeBlock(line, _, content) if content.s.contains(definitions.s) => line.n1
           case _                                                                       => Unset
@@ -127,7 +127,7 @@ object Doc:
     // What each Scala fence will define, and under which anchor, as text: part of the prose's
     // key, since a reference resolves through them.
     val declared: List[Text] =
-      val scala: List[Blocks.Fence] = fences.filter { (fence: Blocks.Fence) => fence.info.prim == t"scala" || fence.info.has(t"fuel") }
+      val scala: List[Blocks.Fence] = fences.filter { (fence: Blocks.Fence) => fence.info.head == t"scala" || fence.info.has(t"fuel") }
 
       scala.indexed.bind: (fence: Blocks.Fence, index: Ordinal) =>
         Embedding.scan(fence.info, fence.content, index.n1).let: (scanned: (Text, List[(Text, Linker.Kind)])) =>
@@ -157,7 +157,7 @@ object Doc:
 
   // The last segment of a path, without a `.md` extension.
   def filename(path: Text): Text =
-    val name: Text = path.cut(t"/").reverse.prim.or(path)
+    val name: Text = path.cut(t"/").reverse.head.or(path)
     if name.ends(t".md") then Text(name.s.substring(0, name.s.length - 3).nn) else name
 
 // One Markdown document, compiled: its path relative to the directory it was found under, its

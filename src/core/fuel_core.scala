@@ -284,7 +284,7 @@ object Embedding:
       . join(t"\n")
 
     def embed(info: List[Text], content: Text, fence: Int): Optional[List[Block]] =
-      if info.prim != t"scala" && !info.has(t"fuel") then Unset else
+      if info.head != t"scala" && !info.has(t"fuel") then Unset else
         prepare()
         val before: List[Block] = problems0
 
@@ -342,7 +342,7 @@ object Embedding:
 
         val id: Text = preamble.id.or(t"fragment-${count.show}")
         val context: Optional[harlequin.Scala.Context] = preamble.scalaContext
-        val language: Text = preamble.language.or(info.prim.or(t"scala"))
+        val language: Text = preamble.language.or(info.head.or(t"scala"))
         val mode: Preamble.Mode = preamble.mode.or(Preamble.Mode.Typecheck)
 
         val wrapper: Int = context match
@@ -506,7 +506,7 @@ object Embedding:
       val animation: Block.Animation =
         Block.Animation.of(frameLines, details).copy(autoplay = preamble.autoplay, loop = preamble.loop)
 
-      List(Block.Code(Language(language), frameLines.prim.or(Nil), details.prim.lay(Nil)(_.notes), start, animation, id))
+      List(Block.Code(Language(language), frameLines.head.or(Nil), details.head.lay(Nil)(_.notes), start, animation, id))
 
     private def embedPlain
       ( code:     Text,
@@ -563,7 +563,7 @@ object Embedding:
     :   Block.Code =
 
       val restored: Text = blank(code, marked, index)
-      val text: Text = code.cut(t"\n").skip(index).prim.or(t"")
+      val text: Text = code.cut(t"\n").skip(index).head.or(t"")
       val count: Int = code.cut(t"\n").size
 
       def replaced(line: Block.Line): List[Block.Line] =
@@ -571,7 +571,7 @@ object Embedding:
 
       highlight(t"scala", restored, framing, mode, true) match
         case source: SourceCode =>
-          val line: Block.Line = framing.own(linked(source), count).skip(index).prim.or(Block.Line(List(Token.plain(text))))
+          val line: Block.Line = framing.own(linked(source), count).skip(index).head.or(Block.Line(List(Token.plain(text))))
           val error: Optional[harlequin.Diagnostic] = source.diagnostics.seek(_.importance == harlequin.Diagnostic.Importance.Error)
 
           error.lay(block.copy(lines = replaced(line))): (diagnostic: harlequin.Diagnostic) =>
@@ -652,7 +652,7 @@ object Embedding:
 
   object JavaCode extends Embedding:
     def embed(info: List[Text], content: Text, fence: Int): Optional[List[Block]] =
-      if info.prim == t"java"
+      if info.head == t"java"
       then List(Block.Code(Language.Java, modelLines(harlequin.Java.highlight(trimmed(content))), Nil, fence + 2))
       else Unset
 
@@ -677,7 +677,7 @@ object Embedding:
   // its code (the last Scala frame's, of an animation), which a document's prose is linked
   // against before its fences are compiled.
   def scan(info: List[Text], content: Text, count: Int): Optional[(Text, List[(Text, Linker.Kind)])] =
-    if info.prim != t"scala" && !info.has(t"fuel") then Unset else
+    if info.head != t"scala" && !info.has(t"fuel") then Unset else
       val (header, code0) = if info.has(t"fuel") then Preamble.split(content) else (Unset, content)
       val code: Text = trimmed(code0)
 
@@ -687,7 +687,7 @@ object Embedding:
           case _                  => Preamble.empty
 
       val id: Text = preamble.id.or(t"fragment-${count.show}")
-      val language: Text = preamble.language.or(info.prim.or(t"scala"))
+      val language: Text = preamble.language.or(info.head.or(t"scala"))
 
       val source: Text =
         if preamble.frames.nil then code
@@ -702,7 +702,7 @@ object Embedding:
 
   // The fallback: the content line by line, as unparsed tokens, numbered from the file.
   def plain(info: List[Text], content: Text, fence: Int): Block =
-    Block.Code(info.prim.lay(Language.Plain) { (name: Text) => Language(name) }, lines(content), Nil, fence + 2)
+    Block.Code(info.head.lay(Language.Plain) { (name: Text) => Language(name) }, lines(content), Nil, fence + 2)
 
   def lines(content: Text): List[Block.Line] =
     trimmed(content).cut(t"\n").map: (line: Text) => Block.Line(List(Token.plain(line)))

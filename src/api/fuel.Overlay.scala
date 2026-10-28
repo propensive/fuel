@@ -82,7 +82,7 @@ object Overlay:
       val tel: Tel = headed(text).read[Tel]
       val lines: Lines = Lines(text, tel.childCompounds.to[List])
 
-      val base: Optional[Text] = tel.fields(t"base").to[List].prim.let(_.primaryAtom).let { (b: Text) => if b == t"" then Unset else b }
+      val base: Optional[Text] = tel.fields(t"base").to[List].head.let(_.primaryAtom).let { (b: Text) => if b == t"" then Unset else b }
 
       base.lay[Overlay | Block.Diagnostic](Block.Diagnostic(Tone.Failure, Block.Location(path, 1), List(Block.paragraph(t"An overlay must name the package it documents with `base`.")))):
         (base: Text) =>
@@ -160,7 +160,7 @@ object Overlay:
           else Nil
 
         name + check(path, lines, child, grandchildren, entryKeywords)
-      else grandchildren.prim.lay(Nil: List[Block]): (first: Tel.Compound) =>
+      else grandchildren.head.lay(Nil: List[Block]): (first: Tel.Compound) =>
         List(failure(path, lines(first), t"`$keyword` holds no `${first.keyword}`: it takes its value alone."))
 
     val repeated: List[Block] = once.bind: (keyword: Text) =>
@@ -170,17 +170,17 @@ object Overlay:
     // atom, but not as well as a child which says the same.
     val doubled: List[Block] = entry.lay(Nil: List[Block]): (entry: Tel.Compound) =>
       val info: List[Block] =
-        if inlineAtoms(entry).size > 1 then named(t"info").prim.lay(Nil: List[Tel.Compound])(List(_)).map { (child: Tel.Compound) => failure(path, lines(child), t"This entry's info is already given on its line.") }
+        if inlineAtoms(entry).size > 1 then named(t"info").head.lay(Nil: List[Tel.Compound])(List(_)).map { (child: Tel.Compound) => failure(path, lines(child), t"This entry's info is already given on its line.") }
         else Nil
 
       val detail: List[Block] =
-        if sourceAtom(entry).present then named(t"detail").prim.lay(Nil: List[Tel.Compound])(List(_)).map { (child: Tel.Compound) => failure(path, lines(child), t"This entry's detail is already given beneath its line.") }
+        if sourceAtom(entry).present then named(t"detail").head.lay(Nil: List[Tel.Compound])(List(_)).map { (child: Tel.Compound) => failure(path, lines(child), t"This entry's detail is already given beneath its line.") }
         else Nil
 
       info + detail
 
     val duplicates: List[Block] =
-      val entries: List[(Text, Tel.Compound)] = named(t"entry").bind { (child: Tel.Compound) => inlineAtoms(child).prim.lay(Nil: List[(Text, Tel.Compound)]) { (name: Text) => List((name, child)) } }
+      val entries: List[(Text, Tel.Compound)] = named(t"entry").bind { (child: Tel.Compound) => inlineAtoms(child).head.lay(Nil: List[(Text, Tel.Compound)]) { (name: Text) => List((name, child)) } }
 
       entries.indexed.bind: (pair: (Text, Tel.Compound), index: Ordinal) =>
         if entries.keep(index.n0).exists(_(0) == pair(0)) then List(failure(path, lines(pair(1)), t"`${pair(0)}` already has an entry here."))
@@ -188,7 +188,7 @@ object Overlay:
 
     // The info as it reads, which is what the limit is on, not the Markdown it is written in.
     val long: List[Block] =
-      val infoChild: Optional[Tel.Compound] = named(t"info").prim
+      val infoChild: Optional[Tel.Compound] = named(t"info").head
       val inline: List[Text] = entry.lay(Nil: List[Text]) { (entry: Tel.Compound) => inlineAtoms(entry).skip(1) }
 
       val info: Optional[Text] =
@@ -206,7 +206,7 @@ object Overlay:
 
   // The text of a node's child by keyword: its atoms, inline then the indented source, joined.
   private def child(node: Tel, keyword: Text): Optional[Text] =
-    node.fields(keyword).to[List].prim.let(_.atomTexts.to[List].filter(_ != t"").join(t" ")).let { (t: Text) => if t == t"" then Unset else t }
+    node.fields(keyword).to[List].head.let(_.atomTexts.to[List].filter(_ != t"").join(t" ")).let { (t: Text) => if t == t"" then Unset else t }
 
   private def atoms(node: Tel, keyword: Text): List[Text] =
     node.fields(keyword).to[List].bind(_.atomTexts.to[List].filter(_ != t""))
@@ -216,9 +216,9 @@ object Overlay:
   // What a node says of its entity, with the imports of those enclosing it.
   private def doc(node: Tel, line: Int, inherited: List[Text]): Api.Entry =
     val until: Optional[Api.Until] =
-      node.fields(t"until").to[List].prim.let: (until: Tel) =>
+      node.fields(t"until").to[List].head.let: (until: Tel) =>
         val texts: List[Text] = until.atomTexts.to[List].filter(_ != t"")
-        texts.prim.let { (version: Text) => Api.Until(version, texts.at(Sec)) }
+        texts.head.let { (version: Text) => Api.Until(version, texts.at(Sec)) }
 
     Api.Entry
       ( info    = child(node, t"info"),
@@ -244,7 +244,7 @@ object Overlay:
       val inline: List[Text] = inlineAtoms(compound)
       val source: Optional[Text] = sourceAtom(compound)
 
-      inline.prim.lay(Nil: List[Entry]): (name: Text) =>
+      inline.head.lay(Nil: List[Entry]): (name: Text) =>
         val line: Int = lines(compound)
         val isType: Boolean = name.starts(t"#")
         val plain: Text = if name.starts(t".") || name.starts(t"#") then name.skip(1) else name

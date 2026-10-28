@@ -56,7 +56,7 @@ object Compilation:
       glossary: Glossary                 = Glossary.none )
 
   // A section's name is its directory's last segment.
-  def name(root: Text): Text = root.cut(t"/").filter(_ != t"").reverse.prim.or(root)
+  def name(root: Text): Text = root.cut(t"/").filter(_ != t"").reverse.head.or(root)
 
   def section(root: Text, checker: Checker = Checker.tokenized, regime: Regime = Regime()): Corpus.Section =
     import filesystemBackends.javaBaseFilesystem

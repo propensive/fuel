@@ -65,7 +65,7 @@ object Glossary:
 
   // The text of a node's child by keyword: its atoms, inline then the indented source, joined.
   private def child(node: Tel, keyword: Text): Optional[Text] =
-    node.fields(keyword).to[List].prim.let(_.atomTexts.to[List].filter(_ != t"").join(t" ")).let:
+    node.fields(keyword).to[List].head.let(_.atomTexts.to[List].filter(_ != t"").join(t" ")).let:
       (text: Text) => if text == t"" then Unset else text
 
   // A glossary read from a file's text, or the diagnostic which says why it could not be.

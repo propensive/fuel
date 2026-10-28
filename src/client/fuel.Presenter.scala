@@ -72,7 +72,7 @@ object Presenter:
         case (presentation: Presentation, problems: List[Block] @unchecked) =>
           val (deck, raised) = compile(config, path, presentation)
           print(problems + raised)
-          val name: Text = path.cut(t"/").reverse.prim.or(path)
+          val name: Text = path.cut(t"/").reverse.head.or(path)
           (presentation.title.or(name), deck)
 
   private def compile(config: Workspace.Config, path: Text, presentation: Presentation)

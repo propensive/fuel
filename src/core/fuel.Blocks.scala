@@ -279,7 +279,7 @@ object Blocks:
 
     def embed(info: List[Text], content: Text, fence: Int): Optional[List[Block]] =
       val scanned: Optional[(Text, List[(Text, Linker.Kind)])] =
-        if info.prim != t"scala" && !info.has(t"fuel") then Unset else
+        if info.head != t"scala" && !info.has(t"fuel") then Unset else
           scala += 1
           Embedding.scan(info, content, scala)
 
@@ -300,7 +300,7 @@ object Blocks:
   private def filled(block: Block, outputs: List[List[Block]]): List[Block] = block match
     case Block.Code(Output.fence, _, _, index: Int, _, _) =>
       val empty: List[Block] = Nil
-      outputs.skip(index).prim.or(empty)
+      outputs.skip(index).head.or(empty)
 
     case Block.Quotation(content) =>
       List(Block.Quotation(fill(content, outputs)))

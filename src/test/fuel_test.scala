@@ -242,7 +242,7 @@ error oops
       test(m"a frame's label, hold, at and language are read"):
         Preamble.parse(t"frame\n  code\n      val x = 1\n  label the *first* step\n  hold 2\n  at 12.5\n  language java\n") match
           case p: Preamble =>
-            p.frames.prim.let: (frame: Preamble.Frame) =>
+            p.frames.head.let: (frame: Preamble.Frame) =>
               val emphasised: Boolean = frame.label.exists { case Inline.Emphasis(_) => true; case _ => false }
               (Blocks.plain(frame.label), emphasised, frame.hold, frame.at, frame.language)
 
@@ -255,7 +255,7 @@ error oops
         Preamble.parse(t"frame\n  code\n      val x = x\n  highlight x  the variable\n    line 1\n    occurrence 2\n") match
           case p: Preamble =>
             val own: Optional[List[(Block.Note.Style, Optional[Text], Optional[Int], Int)]] =
-              p.frames.prim.let(_.marks.map { (mark: Preamble.Mark) => (mark.style, mark.caption, mark.selection.line, mark.selection.occurrence) })
+              p.frames.head.let(_.marks.map { (mark: Preamble.Mark) => (mark.style, mark.caption, mark.selection.line, mark.selection.occurrence) })
 
             (p.marks.size, own)
 
@@ -306,7 +306,7 @@ error oops
         Doc.parse(t"doc/anim.md", text).blocks match
           case Block.Code(_, _, notes, _, animation, _) :: Nil =>
             animation.let: (animation: Block.Animation) =>
-              val second: Block.Slide = animation.slides.skip(1).prim.or(Block.Slide(-1))
+              val second: Block.Slide = animation.slides.skip(1).head.or(Block.Slide(-1))
               (notes.size, animation.slides.map(_.notes.size), Blocks.plain(second.label), second.hold, second.at)
 
           case _ =>
@@ -324,7 +324,7 @@ error oops
           doc.blocks match
             case Block.Code(_, _, _, _, animation, _) :: Nil =>
               animation.let: (animation: Block.Animation) =>
-                (doc.problems.size, animation.slides.skip(1).prim.let(_.language), animation.lines(1).prim.let(_.size > 1))
+                (doc.problems.size, animation.slides.skip(1).head.let(_.language), animation.lines(1).head.let(_.size > 1))
 
             case _ =>
               Unset
@@ -562,7 +562,7 @@ slide
       test(m"markdown on a slide is blocks, and code on a slide is not numbered"):
         val all: List[Block.Leaf] = leaves(talk)
 
-        val first: Optional[Text] = all.prim.let(_.content.prim).let:
+        val first: Optional[Text] = all.head.let(_.content.head).let:
           case Block.Heading(1, content, _) => Blocks.plain(content)
           case _                            => Unset
 
@@ -1094,13 +1094,13 @@ entry .nowhere   nothing of the sort
       test(m"an entry has its name, kind, info (inline), detail (source), line and inherited imports"):
         read match
           case overlay: Overlay =>
-            overlay.entries.prim.let { (e: Overlay.Entry) => (e.name, e.isType, e.doc.info, e.doc.detail.let(_.trim), e.line, e.doc.imports, e.entries.size) }
+            overlay.entries.head.let { (e: Overlay.Entry) => (e.name, e.isType, e.doc.info, e.doc.detail.let(_.trim), e.line, e.doc.imports, e.entries.size) }
           case other => other
       . assert(_ == (t"Doc", false, t"a document", t"A `Doc` has a *title*.", 8, List(t"scala", t"scala.util"), 5))
 
       test(m"a leaf entry's detail is its source atom"):
         read match
-          case overlay: Overlay => overlay.entries.at(Sec).let(_.entries.prim.let(_.doc.detail))
+          case overlay: Overlay => overlay.entries.at(Sec).let(_.entries.head.let(_.doc.detail))
           case other            => other
       . assert(_ == Unset)
 
@@ -1123,7 +1123,7 @@ entry .nowhere   nothing of the sort
               List(t"${location.let(_.line).or(0).toString}: ${Blocks.plain(message.bind { case Block.Paragraph(c) => c; case _ => Nil })}")
             case _ => Nil
 
-          List.from(lines.stdlib.sortBy(_.cut(t":").prim.or(t"").s.toInt))
+          List.from(lines.stdlib.sortBy(_.cut(t":").head.s.toInt))
         case diagnostic: Block.Diagnostic => List(t"unread")
 
       test(m"an overlay's format is checked, each failure at its line"):
@@ -1266,12 +1266,12 @@ entry .Doc   a document
         val doc: Api.Entity = api(t"sample.Doc").or(Api.Entity(Unset, t"?"))
         val page = ApiPages.page(api, doc, resolver(Scope.of(doc, Nil)), Scope.of(doc, Nil), Nil)
         val rows: List[Text] = page.bind { case Block.Table(_, rows, _) => rows.bind { (r: Block.Row) => r.id.let(List(_)).or(Nil) }; case _ => Nil }
-        (page.prim, rows.has(t"title"), rows.has(t"parse"))
+        (page.head, rows.has(t"title"), rows.has(t"parse"))
       . assert(_ == (Block.Paragraph(List(Inline.Link(Inline.Destination.Local(t"/api/sample"), Inline.text(t"sample")), Inline.Toned(Tone.Muted, Inline.text(t".")))), true, true))
 
       test(m"the tree links each node to its page, open along the way to the current one"):
         val tree = ApiPages.tree(Tests.this.api0, t"sample.Doc")
-        tree.roots.prim.let { (n: Block.TreeNode) => (n.destination, n.open, n.children.map(_.label).map(Blocks.plain)) }
+        tree.roots.head.let { (n: Block.TreeNode) => (n.destination, n.open, n.children.map(_.label).map(Blocks.plain)) }
       . assert(_ == (Inline.Destination.Local(t"/api/sample"), true, List(t"Doc", t"Shape", t"Util")))
 
     suite(m"References"):
@@ -1303,7 +1303,7 @@ entry .Doc   a document
       test(m"`.name` names the term, through its path, each segment linked and the last in its kind's accent"):
         doc(t"See `.Util.limit`.\n").blocks match
           case Block.Paragraph(_ :: Inline.Snippet(_, tokens) :: _) :: _ =>
-            (tokens.map(_.text).join(t""), tokens.map(_.link), tokens.reverse.prim.let(_.accent))
+            (tokens.map(_.text).join(t""), tokens.map(_.link), tokens.reverse.head.let(_.accent))
           case _ =>
             Unset
       . assert(_ == (t"Util.limit", List(Inline.Destination.Local(t"/api/sample.Util"), Unset, Inline.Destination.Local(t"/api/sample.Util.limit")), pyrocosm.Token.Accent.Term))

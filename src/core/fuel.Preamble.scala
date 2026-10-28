@@ -141,7 +141,7 @@ object Preamble:
       // The text of a node's first child by a keyword: its atoms, inline then the indented
       // source, joined, so that a one-liner serves as well as an indented block.
       def child(node: Tel, keyword: Text): Optional[Text] =
-        node.fields(keyword).to[List].prim.let(_.atomTexts.to[List].filter(_ != t"").join(t" "))
+        node.fields(keyword).to[List].head.let(_.atomTexts.to[List].filter(_ != t"").join(t" "))
 
       def number(text: Optional[Text]): Optional[Double] =
         text.let { (text: Text) => safely(text.as[Double]) }
@@ -158,7 +158,7 @@ object Preamble:
                 val inline: Optional[Text] = if rest.nil then Unset else rest.join(t" ")
 
                 val beneath: Optional[Text] =
-                  mark.fields(t"caption").to[List].prim.let(_.atomTexts.to[List].join(t" "))
+                  mark.fields(t"caption").to[List].head.let(_.atomTexts.to[List].join(t" "))
 
                 List(Mark(style, Selection.read(mark), beneath.or(inline)))
 
@@ -174,7 +174,7 @@ object Preamble:
       val frames: List[Frame] =
         tel.fields(t"frame").to[List].map: (node: Tel) =>
           Frame
-            ( node.fields(t"code").to[List].prim.let(_.atomTexts.to[List].join(t" ")),
+            ( node.fields(t"code").to[List].head.let(_.atomTexts.to[List].join(t" ")),
               child(node, t"label").lay(Nil)(Blocks.inline(_)),
               number(child(node, t"hold")),
               number(child(node, t"at")),
@@ -189,21 +189,21 @@ object Preamble:
         else if flag(t"typecheck") then Mode.Typecheck
         else Unset
 
-      val errors: Errors = atoms(t"errors").prim match
+      val errors: Errors = atoms(t"errors").head match
         case t"show"   => Errors.Show
         case t"ignore" => Errors.Ignore
         case _         => Errors.Fail
 
       Preamble
-        ( atoms(t"context").prim,
-          atoms(t"id").prim,
+        ( atoms(t"context").head,
+          atoms(t"id").head,
           atoms(t"follows"),
           errors,
           marks(tel),
           frames,
           flag(t"autoplay"),
           flag(t"loop"),
-          atoms(t"language").prim,
+          atoms(t"language").head,
           mode,
           flag(t"restart"),
           atoms(t"feature") )
