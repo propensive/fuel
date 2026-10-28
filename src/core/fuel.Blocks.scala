@@ -48,11 +48,6 @@ object Linkage:
     case Url(url: Text)                                                   // a URL, with a scheme
     case Sigil(reference: Text)                                           // a sigilled reference nothing resolved
 
-  // The schema BinTEL writes a target under, anchored here so that a record holding one (the
-  // output's prose) derives it in the member form; see `fuel_schemas.scala`.
-  object Target:
-    given telSchematic: Target is stratiform.TelSchematic over Tels.Type = atMember(TargetSchema.derived)
-
 case class Linkage(line: Int, target: Linkage.Target)
 
 // A Markdown document as Pyrocosm blocks, node for node: Pyrocosm's own conversion
