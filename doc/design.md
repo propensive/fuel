@@ -128,9 +128,9 @@ classpath lib/extras.jar
 document doc
 document doc/modules
 
-# Serve the dashboard from the daemon's start, on this port (8060 by default).
+# Serve the dashboard from the daemon's start, behind the machine's Pyrocosm hub at
+# http://localhost:8090/fuel/; `port` would serve it on a port of its own as well.
 serve
-port 8060
 ```
 
 Later keywords, as the layers arrive: `api <jar>` (M5, the jars whose API is documented and

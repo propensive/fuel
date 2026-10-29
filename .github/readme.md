@@ -17,7 +17,7 @@ the subcommands and configuration files every Pyrocosm tool shares are fuel's to
 ```sh
 fuel compile       # compile the configured directories of Markdown documents
 fuel compile --force  # the same, ignoring what the output directory keeps
-fuel serve         # serve the compiled documents at http://localhost:8060/ until Ctrl+C
+fuel serve         # serve the compiled documents at http://localhost:8090/fuel/ until Ctrl+C
 fuel show doc/x.md # one document, set in the terminal: justified, hyphenated, highlighted
 fuel present doc/slides.tel  # a presentation's slides in a browser until Ctrl+C
 fuel install       # install tab-completions and the manpage
@@ -316,9 +316,9 @@ check-links
 # Write the compiled documents and API pages here, as BinTEL, compiling only what changed.
 output dist/doc
 
-# Serve the documents from the daemon's start, on this port (8060 by default).
+# Serve the documents from the daemon's start, behind the machine's Pyrocosm hub at
+# http://localhost:8090/fuel/; `port` would serve them on a port of their own as well.
 serve
-port 8060
 ```
 
 Each setting is also reachable as a flag (`--document doc`), a `fuel.`-prefixed system property

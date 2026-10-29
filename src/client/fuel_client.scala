@@ -184,8 +184,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
             SignalResponse.Accept
 
         async(fuel.Dashboard.web.serve(port))
-        val url: Text = t"http://localhost:${port.toString.tt}/"
-        Out.println(t"fuel: serving the documents at $url (Ctrl+C to stop)")
+        Out.println(t"fuel: serving the documents at ${fuel.Dashboard.address(port)} (Ctrl+C to stop)")
 
         // On a terminal the launcher forwards Ctrl+C as a byte rather than a signal, so the
         // input is read for it here.
