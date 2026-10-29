@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ivy-module version="2.0" xmlns:e="http://ant.apache.org/ivy/extra">
+    <info organisation="dev.propensive" module="fuel-client" revision="0.4.0" status="release">
+        <description/>
+    </info>
+    <configurations>
+        <conf name="pom" visibility="public" description=""/>
+        <conf extends="runtime" name="test" visibility="public" description=""/>
+        <conf name="provided" visibility="public" description=""/>
+        <conf name="optional" visibility="public" description=""/>
+        <conf name="compile" visibility="public" description=""/>
+        <conf extends="compile" name="runtime" visibility="public" description=""/>
+    </configurations>
+    <publications>
+        <artifact name="fuel-client" type="pom" ext="pom" conf="pom"/>
+        <artifact name="fuel-client" type="jar" ext="jar" conf="compile"/>
+    </publications>
+    <dependencies>
+        <dependency org="dev.propensive" name="punctuation-core" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="harlequin-core" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="harlequin-typed" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="anthology-core" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="anthology-scala" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="hellenism-jvm" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="stratiform-core" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="ambience-core" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="galilei-jvm" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="kaleidoscope-core" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="serpentine-core" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="contingency-core" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="gossamer-core" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="gossamer-lexicon" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="acyclicity-core" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="vacuous-core" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="eucalyptus-core" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="ethereal-core" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency 
+        org="dev.propensive" name="exoskeleton-completions" rev="0.74.0" conf="compile->compile;runtime->runtime">
+</dependency>
+        <dependency 
+        org="dev.propensive" name="exoskeleton-manpage" rev="0.74.0" conf="compile->compile;runtime->runtime">
+</dependency>
+        <dependency org="dev.propensive" name="burdock-core" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="burdock-boot" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="escapade-core" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="escapade-io" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="turbulence-stdio" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="ambience-core" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="iridescence-core" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="stratiform-core" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="eucalyptus-core" rev="0.74.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="pyrocosm-model" rev="0.10.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="pyrocosm-compiler" rev="0.10.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="pyrocosm-terminal" rev="0.10.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="pyrocosm-web" rev="0.10.0" conf="compile->compile;runtime->runtime"/>
+        <dependency org="dev.propensive" name="pyrocosm-cli" rev="0.10.0" conf="compile->compile;runtime->runtime"/>
+        <dependency 
+        org="org.scala-lang" name="scala3-compiler_3" rev="3.10.0-pro-1.0.2" conf="compile->compile;runtime->runtime">
+</dependency>
+        <dependency 
+        org="org.scala-lang" name="scala3-tasty-inspector_3" rev="3.10.0-pro-1.0.2" conf="compile->compile;runtime->runtime">
+</dependency>
+        <dependency 
+        org="org.scala-lang" name="scala-library" rev="3.10.0-pro-1.0.2" conf="compile->compile;runtime->runtime">
+</dependency>
+        <dependency 
+        org="org.scala-lang" name="proscala-library_3" rev="3.10.0-pro-1.0.2" conf="compile->compile;runtime->runtime">
+</dependency>
+        <dependency org="dev.propensive" name="fuel-api" rev="0.4.0" conf="compile->compile;runtime->runtime"/>
+    </dependencies>
+</ivy-module>
