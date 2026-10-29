@@ -1208,6 +1208,11 @@ extension (doc: Doc) def titled: String = doc.title
           (sub(t"scala.Nothing", t"sample.Doc"), sub(t"scala.Null", t"sample.Doc"), sub(t"scala.Null", t"scala.Int"))
         . assert(_ == (true, true, false))
 
+        test(m"a base's distance is its place in the linearisation, a universal type's beyond them"):
+          def distance(a: Text, b: Text): Int = lattice.distance(lattice.id(a).or(-1), lattice.id(b).or(-1))
+          (distance(t"sample.Doc", t"sample.Doc"), distance(t"sample.Doc", t"sample.Shape"), distance(t"sample.Doc", t"scala.AnyRef") > 1, distance(t"sample.Shape", t"sample.Doc"))
+        . assert(_ == (0, 1, true, -1))
+
         test(m"String is a CharSequence"):
           sub(t"java.lang.String", t"java.lang.CharSequence")
         . assert(_ == true)

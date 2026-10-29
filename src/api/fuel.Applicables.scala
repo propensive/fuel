@@ -70,10 +70,10 @@ import stenography.Designator
 object Applicables:
   import Api.Shape
 
-  val any: Text = t"scala.Any"
+  val any: Text = Lattice.any
 
   // The types every value has: a receiver of one extends everything.
-  val universal: sci.Set[Text] = sci.Set(any, t"scala.AnyRef", t"java.lang.Object", t"scala.Matchable", t"scala.AnyVal")
+  val universal: sci.Set[Text] = Lattice.tops
 
   private val depth: Int = 3
 
@@ -95,6 +95,7 @@ object Applicables:
 
   def decorate(api: Api): Api =
     val entities: scala.List[Api.Entity] = api.entities.values.toList
+    val lattice: Lattice = api.lattice
 
     def expanded(declaration: Api.Declaration): Api.Declaration =
       declaration.copy(receiver = declaration.receiver.let(api.expand(_)), requires = declaration.requires.map(api.expand(_)), provides = declaration.provides.let(api.expand(_)))
@@ -114,10 +115,6 @@ object Applicables:
       entity.declarations.stdlib.zipWithIndex.collect:
         case (d, index) if d.kind == Api.Kind.Extension && d.receiver.present && !d.exported => Candidate(entity, index, expanded(d), within)
 
-    // Every type's subtypes, each with its distance (the base's place in the subtype's bases).
-    val subtypes: sci.Map[Text, scala.List[(Text, Int)]] =
-      entities.flatMap { e => e.bases.stdlib.zipWithIndex.map { (base, i) => (base, (e.key, i + 1)) } }.groupMap(_(0))(_(1))
-
     // How far an entity declared beneath `from` is from `target`: 0 in the target or its
     // companion or a base's, 1 in its own package or enclosing object, 2 anywhere else.
     def reach(from: Optional[Text], target: Api.Entity): Int = from.lay(2): (from: Text) =>
@@ -133,9 +130,16 @@ object Applicables:
       case Shape.Named(key, args) => Shape.Named(key, args.map(substitute(_, binding)))
       case other                  => other
 
-    // Whether a type is another, or extends it.
+    // Whether a type is another, or extends it, as the lattice says (a type the lattice has no
+    // id for is beneath itself alone).
     def beneathKey(key: Text, base: Text): Boolean =
-      key == base || api(key).let(_.bases.has(base)).or(false)
+      key == base || lattice.id(key).let { (sub: Int) => lattice.id(base).let { (sup: Int) => lattice.isSubtype(sub, sup) } }.or(false)
+
+    // The type and every subtype beneath it, each with its distance, as entities.
+    def beneath(key: Text): scala.List[(Api.Entity, Int)] =
+      lattice.id(key).lay(scala.Nil): (sup: Int) =>
+        lattice.beneath(sup).toList.flatMap: sub =>
+          api(lattice.key(sub)).let { (e: Api.Entity) => scala.List((e, lattice.distance(sub, sup))) }.or(scala.Nil)
 
     // A requirement against what a given provides: a parameter of the requirement is bound to
     // the type the given names there (and must be bound alike wherever it recurs), or to the
@@ -248,10 +252,6 @@ object Applicables:
 
       def extension(target: Api.Entity, tier: Int, distance: Int, via: Optional[Text]): Api.Applicable =
         Api.Applicable(candidate.key, candidate.index, tier, distance, reach(candidate.importFrom, target), via, candidate.importFrom)
-
-      // The type and every subtype beneath it, each with its distance, as entities.
-      def beneath(key: Text): scala.List[(Api.Entity, Int)] =
-        ((key, 0) :: subtypes.getOrElse(key, scala.Nil)).flatMap { (k, d) => api(k).let { (e: Api.Entity) => scala.List((e, d)) }.or(scala.Nil) }
 
       lazy val unconditional: Boolean = allSatisfied(declaration.requires, sci.Map()).isDefined
 

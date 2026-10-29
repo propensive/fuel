@@ -40,7 +40,8 @@ import soundness.{Language as _, Token as _, *}
 // The subtyping of every named type the model knows, for search to ask quickly whether one type
 // is beneath another: each type's key has a dense id, and `supers(id)` is the sorted ids of
 // every class it extends — `Entity.bases`, which is already the whole linearisation — so that
-// `isSubtype` is one binary search and `beneath`/`above` walk a row each. The universal types
+// `isSubtype` is one binary search and `beneath`/`above` walk a row each; `distance` is the
+// base's place in the linearisation, nearest first, which orders what a type inherits. The universal types
 // are predicates rather than rows (`Any` and `Matchable` are above everything; `AnyRef` and
 // `java.lang.Object` above every type that is not a value type; `AnyVal` above the primitives
 // and the classes whose bases say so; `Nothing` beneath everything, `Null` beneath every
@@ -128,19 +129,27 @@ object Lattice:
 
     val size: Int = keys.length
     val supers: scala.Array[scala.Array[Int]] = new scala.Array(size)
+    val distances: scala.Array[scala.Array[Int]] = new scala.Array(size)
+
+    // A row of bases, nearest first, as ids sorted for searching, each with its distance (its
+    // place in the row, from 1) alongside.
+    def row(own: Int, bases: scala.List[Text]): Unit =
+      val pairs: scala.List[(Int, Int)] = bases.map(id).zipWithIndex.distinctBy(_(0)).map { (base, i) => (base, i + 1) }.sortBy(_(0))
+      supers(own) = pairs.map(_(0)).toArray
+      distances(own) = pairs.map(_(1)).toArray
 
     entities.foreach: entity =>
-      if !entity.bases.nil then
-        ids.get(entity.key).foreach: own =>
-          supers(own) = entity.bases.stdlib.map(id).distinct.sorted.toArray
+      if !entity.bases.nil then ids.get(entity.key).foreach { own => row(own, entity.bases.stdlib) }
 
     javaTypes.foreach: (key, parents) =>
       val own: Int = id(key)
-      if supers(own) == null then supers(own) = parents.map(id).distinct.sorted.toArray
+      if supers(own) == null then row(own, parents)
 
     var index: Int = 0
     while index < size do
-      if supers(index) == null then supers(index) = scala.Array.empty[Int]
+      if supers(index) == null then
+        supers(index) = scala.Array.empty[Int]
+        distances(index) = scala.Array.empty[Int]
       index += 1
 
     // The inversion, by counting each type's subtypes before placing them.
@@ -159,14 +168,15 @@ object Lattice:
     val anyValId: Int = id(anyVal)
     val value: scala.Array[Boolean] = scala.Array.tabulate(size) { i => primitives.contains(keys(i)) || _root_.java.util.Arrays.binarySearch(supers(i), anyValId) >= 0 }
 
-    new Lattice(ids.toMap, keys.toArray, supers, subs, value)
+    new Lattice(ids.toMap, keys.toArray, supers, distances, subs, value)
 
 final class Lattice private
   ( ids:    sci.Map[Text, Int],
     keys:   scala.Array[Text],
-    supers: scala.Array[scala.Array[Int]],
-    subs:   scala.Array[scala.Array[Int]],
-    value:  scala.Array[Boolean] ):
+    supers:    scala.Array[scala.Array[Int]],
+    distances: scala.Array[scala.Array[Int]],
+    subs:      scala.Array[scala.Array[Int]],
+    value:     scala.Array[Boolean] ):
 
   private val anyId: Int = ids(Lattice.any)
   private val matchableId: Int = ids(Lattice.matchable)
@@ -196,6 +206,17 @@ final class Lattice private
     || (isRefTop(sup) && (isReference(sub) || isRefTop(sub)))
     || (isValTop(sup) && value(sub))
     || _root_.java.util.Arrays.binarySearch(supers(sub), sup) >= 0
+
+  // How far a type is beneath another: 0 for itself, the base's place in its linearisation
+  // (nearest first, from 1) for a base, beyond every base for a universal type, and -1 where it
+  // is not beneath it at all.
+  def distance(sub: Int, sup: Int): Int =
+    if sub == sup then 0
+    else
+      val found: Int = _root_.java.util.Arrays.binarySearch(supers(sub), sup)
+      if found >= 0 then distances(sub)(found)
+      else if isSubtype(sub, sup) then supers(sub).length + 1
+      else -1
 
   private def all: Iterator[Int] = Iterator.range(0, size)
 
