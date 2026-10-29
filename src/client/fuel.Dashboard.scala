@@ -36,16 +36,16 @@ import java.util.concurrent as juc
 
 import soundness.{Query as _, *}
 
-import dysasymptotics.{linearAccess, linearSize}
-
-import pyrocosm.{Action, Block, Control, Event, Hints, Inline, Input, Interface, Live, Panel, Tone, Tool, hints}
+import dysasymptotics.linearSize
+import pyrocosm.{Block, Control, Event, Inline, Input, Interface, Live, Panel, Tone, Tool}
 
 // The documents and the API as the web front-end `Tool` serves from the daemon: launched once,
 // for as long as the daemon lives, when a config says `serve`, and stopped by `fuel quit`. It
 // is served behind the machine's Pyrocosm hub, at `/fuel/` on the hub's origin (8090), from a
 // port of its own the hub reaches it by; a `port` in a config serves it on that port too.
-// `fuel serve` remains the interactive way to serve it, from a terminal. Every tab has a session of its own, since every page has a URL of its own:
-// `/doc/<section>/<path>` for a document, `/api/<entity>` for an entity.
+// `fuel serve` remains the interactive way to serve it, from a terminal. Every tab has a session
+// of its own, since every page has a URL of its own: `/doc/<section>/<path>` for a document,
+// `/api/<entity>` for an entity.
 object Dashboard:
   // The search field, one for every tab, which `handle` knows its events by.
   val searchInput: Input = Input(t"search")
@@ -57,7 +57,8 @@ object Dashboard:
 
     Query.read(text) match
       case error: Query.Error =>
-        List(Block.Notice(Tone.Warning, Inline.text(t"Query"), List(Block.paragraph(error.message.text))))
+        val message: List[Block] = List(Block.paragraph(error.message.text))
+        List(Block.Notice(Tone.Warning, Inline.text(t"Query"), message))
 
       case query: Query =>
         ApiPages.search(api, text, api.search(query), Resolver(api, scope), scope)
@@ -65,7 +66,8 @@ object Dashboard:
   // Where the documents on `port` are found: under the hub's origin for port 0, which the hub
   // holds, and at the port itself otherwise.
   def address(port: Int): Text =
-    if port == 0 then t"http://localhost:${pyrocosm.Hubs.port}/fuel/" else t"http://localhost:${port.toString.tt}/"
+    if port == 0 then t"http://localhost:${pyrocosm.Hubs.port}/fuel/"
+    else t"http://localhost:${port.toString.tt}/"
 
   val web: Tool.Web = new Tool.Web:
     def port: Int = 0
@@ -93,7 +95,7 @@ object Dashboard:
       try
         async:
           while serving.get do
-            live.keySet.nn.forEach { dashboard => dashboard.nn.tick() }
+            live.keySet.nn.forEach: dashboard => dashboard.nn.tick()
             snooze(0.25*Second)
 
         running.serve: () =>
@@ -105,6 +107,7 @@ object Dashboard:
             event match
               case Event.Closed => live.remove(dashboard)
               case _            => ()
+
             dashboard.handle(event)
 
           (dashboard.interface, handle)
@@ -114,6 +117,19 @@ object Dashboard:
 
   // The URL of a document: its section and its path, each segment encoded.
   def docUrl(section: Text, path: Text): Text = Doc.url(section, path)
+
+  // A page rendered when asked for — a dependency's, or one the compile did not render — with
+  // its examples highlighted alone, on the compiler's thread.
+  private def render(entity: Api.Entity): List[Block] =
+    Checking.exclusive:
+      val api: Api = Server.api
+      val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Nil))
+      val resolver: Resolver = Resolver(api, scope)
+
+      val scala: Embedding.ScalaCode =
+        Embedding.ScalaCode(Checker.tokenized, entity.key, false, Unset, resolver)
+
+      ApiPages.page(api, entity, resolver, scope, List(scala, Embedding.JavaCode))
 
 // One tab's dashboard: the navigation of every section's documents and of the API, and the
 // page its URL names.
@@ -178,16 +194,20 @@ final class Dashboard():
     if path == t"/" || path == t"" then first
     else if path.starts(t"/doc/") then
       val rest: List[Text] = path.skip(5).cut(t"/")
-      rest.head.let { (section: Text) => Target.Document(decode(section), rest.skip(1).map(decode).join(t"/")) }
+      val within: Text = rest.skip(1).map(decode).join(t"/")
+      rest.head.let: (section: Text) => Target.Document(decode(section), within)
     else if path.starts(t"/api/") then
-      Server.api.locate(path.skip(5)).lay(Target.Missing(path)) { (entity: Api.Entity) => Target.Entity(entity.key) }
-    else if path == t"/glossary" then Target.Glossary()
-    else Target.Missing(path)
+      Server.api.locate(path.skip(5)).lay(Target.Missing(path)): (entity: Api.Entity) =>
+        Target.Entity(entity.key)
+    else if path == t"/glossary" then
+      Target.Glossary()
+    else
+      Target.Missing(path)
 
   private def first: Optional[Target] =
     Server.corpus.let: (corpus: Corpus) =>
       corpus.sections.seek(!_.docs.nil).let: (section: Corpus.Section) =>
-        section.docs.head.let { (doc: Doc) => Target.Document(section.name, doc.path) }
+        section.docs.head.let: (doc: Doc) => Target.Document(section.name, doc.path)
 
   def handle(event: Event): Unit = event match
     case Event.Located(path) =>
@@ -197,13 +217,18 @@ final class Dashboard():
 
     // Every keystroke searches; the decoration carries the version of the text it describes.
     case Event.Edited(Dashboard.searchInput, text, caret, version) =>
-      search.decoration() = Control.Field.Decoration(Query.tokens(text), Server.api.search.completions(text, caret), false, version = version)
+      val completions = Server.api.search.completions(text, caret)
+
+      search.decoration() =
+        Control.Field.Decoration(Query.tokens(text), completions, false, version = version)
+
       selected = if text.trim == t"" then first else Target.Search(text)
       show()
       refresh()
 
     case Event.Submitted(Dashboard.searchInput, text) =>
       search.decoration() = Control.Field.Decoration()
+
       if text.trim != t"" then
         selected = Target.Search(text)
         show()
@@ -244,7 +269,8 @@ final class Dashboard():
   private def show(): Unit =
     selected.let:
       case Target.Document(section, path) =>
-        Server.corpus.let(_.doc(section, path)).let { (doc: Doc) => content() = doc.blocks + doc.problems }
+        Server.corpus.let(_.doc(section, path)).let: (doc: Doc) =>
+          content() = doc.blocks + doc.problems
 
       case Target.Entity(key) =>
         content() = Server.page(key).or(Server.api(key).let(Dashboard.render).or(Nil))
@@ -256,7 +282,8 @@ final class Dashboard():
         content() = Dashboard.searchPage(text)
 
       case Target.Missing(path) =>
-        content() = List(Block.Notice(Tone.Warning, Inline.text(t"Not found"), List(Block.paragraph(t"There is no page at $path."))))
+        val message: List[Block] = List(Block.paragraph(t"There is no page at $path."))
+        content() = List(Block.Notice(Tone.Warning, Inline.text(t"Not found"), message))
 
   // The navigation: each section's documents, by title, then the API, the current page
   // marked.
@@ -271,7 +298,9 @@ final class Dashboard():
             section.docs.map: (doc: Doc) =>
               val current: Boolean = selected == Target.Document(section.name, doc.path)
               val tone: Optional[Tone] = if current then Tone.Accent else Unset
-              Block.TreeNode(Inline.text(doc.title), Nil, tone, Unset, Unset, Inline.Destination.Local(Dashboard.docUrl(section.name, doc.path)))
+              val url: Text = Dashboard.docUrl(section.name, doc.path)
+              val destination: Inline.Destination = Inline.Destination.Local(url)
+              Block.TreeNode(Inline.text(doc.title), Nil, tone, Unset, Unset, destination)
 
           Block.TreeNode(Inline.text(section.name), children, Unset, Unset, true)
 
@@ -279,9 +308,11 @@ final class Dashboard():
       val glossary: List[Block.TreeNode] =
         if Server.glossary.nil then Nil else
           val tone: Optional[Tone] = if selected == Target.Glossary() then Tone.Accent else Unset
-          List(Block.TreeNode(Inline.text(t"Glossary"), Nil, tone, Unset, Unset, Inline.Destination.Local(t"/glossary")))
+          val destination: Inline.Destination = Inline.Destination.Local(t"/glossary")
+          List(Block.TreeNode(Inline.text(t"Glossary"), Nil, tone, Unset, Unset, destination))
 
       val api: Api = Server.api
+
       val current: Optional[Text] = selected match
         case Target.Entity(key) => key
         case _                  => Unset
@@ -291,16 +322,3 @@ final class Dashboard():
         else List(Block.Heading(3, Inline.text(t"API")), ApiPages.tree(api, current))
 
       List(Block.Tree(documents + glossary)) + apiTree
-
-
-
-// A page rendered when asked for — a dependency's, or one the compile did not render — with
-// its examples highlighted alone, on the compiler's thread.
-extension (dashboard: Dashboard.type)
-  private def render(entity: Api.Entity): List[Block] =
-    Checking.exclusive:
-      val api: Api = Server.api
-      val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Nil))
-      val resolver: Resolver = Resolver(api, scope)
-      val scala: Embedding.ScalaCode = Embedding.ScalaCode(Checker.tokenized, entity.key, false, Unset, resolver)
-      ApiPages.page(api, entity, resolver, scope, List(scala, Embedding.JavaCode))

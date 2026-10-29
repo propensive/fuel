@@ -35,7 +35,7 @@ package fuel
 import scala.collection.immutable as sci
 import scala.collection.mutable as scm
 
-import soundness.{Language as _, Token as _, Query as _, *}
+import soundness.*
 
 import rankings.balancedRanking
 
@@ -69,7 +69,9 @@ object Hierarchy:
   // the parent is shared, and drawn once.
   case class Route(edge: Edge, points: scala.List[(Int, Int)], labelAt: Optional[(Int, Int)])
   case class Stem(x: Int, top: Int, bottom: Int)
-  case class Layout(boxes: List[Box], routes: List[Route], stems: List[Stem], width: Int, height: Int)
+
+  case class Layout
+    ( boxes: List[Box], routes: List[Route], stems: List[Stem], width: Int, height: Int )
 
   // How many children and peers are drawn before a note stands for the rest.
   val childLimit: Int = 6
@@ -89,13 +91,16 @@ object Hierarchy:
   private val trackStep: Int = 6
   private val labelStep: Int = 12
 
-  private def universal(key: Text): Boolean = key == Lattice.any || key == Lattice.anyRef || key == Lattice.anyVal
+  private def universal(key: Text): Boolean =
+    key == Lattice.any || key == Lattice.anyRef || key == Lattice.anyVal
 
   // The graph around an entity, or nothing where it is not a class, trait or enum, or where the
   // drawing would say only that it extends `AnyRef`.
   def of(api: Api, entity: Api.Entity, scope: Scope): Optional[Graph] =
     entity.template.let: template =>
-      val drawable: Boolean = template.aliasOf.absent && template.kind != Api.Kind.Type && template.kind != Api.Kind.TypeParam
+      val drawable: Boolean =
+        template.aliasOf.absent && template.kind != Api.Kind.Type &&
+          template.kind != Api.Kind.TypeParam
 
       if !drawable then Unset else api.lattice.id(entity.key).let: id =>
         val lattice: Lattice = api.lattice
@@ -108,11 +113,14 @@ object Hierarchy:
 
         def node(key: Text, role: Role): Node =
           val found: Optional[Api.Entity] = api(key)
-          val name: Text = found.let(_.name).or(Text(key.s.substring(key.s.lastIndexWhere { c => c == '.' || c == '#' } + 1).nn))
-          val pkg: Text = Text(key.s.substring(0, key.s.length - name.s.length).nn.stripSuffix(".").stripSuffix("#"))
+          val start: Int = key.s.lastIndexWhere { c => c == '.' || c == '#' } + 1
+          val name: Text = found.let(_.name).or(Text(key.s.substring(start).nn))
+          val prefix: String = key.s.substring(0, key.s.length - name.s.length).nn
+          val pkg: Text = Text(prefix.stripSuffix(".").stripSuffix("#"))
           Node(key, name, pkg, found.let(_.path), if universal(key) then Role.Universal else role)
 
-        def place(key: Text, role: Role): Unit = if !nodes.contains(key) then nodes(key) = node(key, role)
+        def place(key: Text, role: Role): Unit =
+          if !nodes.contains(key) then nodes(key) = node(key, role)
 
         place(entity.key, Role.Current)
 
@@ -122,6 +130,7 @@ object Hierarchy:
 
         def ancestors(from: Int, depth: Int): Unit = if depth < 32 && visited.add(from) then
           val written: scala.List[Int] = lattice.parents(from)
+
           val above: scala.List[Int] =
             if written.nonEmpty then written
             else if from == anyId then scala.Nil
@@ -136,7 +145,10 @@ object Hierarchy:
         ancestors(id, 0)
 
         def shown(ids: scala.List[Int]): scala.List[Api.Entity] =
-          ids.flatMap { i => api(lattice.key(i)).let(scala.List(_)).or(scala.Nil) }.filter(!_.hidden).sortBy { e => (!e.own, e.key.s) }
+          val entities: scala.List[Api.Entity] =
+            ids.flatMap: i => api(lattice.key(i)).let(scala.List(_)).or(scala.Nil)
+
+          entities.filter(!_.hidden).sortBy: e => (!e.own, e.key.s)
 
         def group(all: scala.List[Api.Entity], limit: Int, role: Role, parent: Text): Int =
           all.take(limit).foreach: child =>
@@ -156,10 +168,12 @@ object Hierarchy:
         group(children, childLimit, Role.Child, entity.key)
 
         // Peers: the other types under the first parent as written.
-        val peers: scala.List[Api.Entity] = lattice.primaryParent(id).lay(scala.Nil): (parent: Int) =>
-          shown(lattice.children(parent).filter(_ != id))
+        val peers: scala.List[Api.Entity] =
+          lattice.primaryParent(id).lay(scala.Nil): (parent: Int) =>
+            shown(lattice.children(parent).filter(_ != id))
 
-        lattice.primaryParent(id).let { (parent: Int) => group(peers, peerLimit, Role.Peer, lattice.key(parent)) }
+        lattice.primaryParent(id).let: (parent: Int) =>
+          group(peers, peerLimit, Role.Peer, lattice.key(parent))
 
         // The written form of each parent, where it says more than the name.
         val labels: sci.Map[Text, Text] =
@@ -168,14 +182,18 @@ object Hierarchy:
               val key: Text = if head == Lattice.obj then Lattice.anyRef else head
               val label: Text = Signatures.tokens(syntax, api, scope).map(_.text).join
               if nodes.get(key).exists(_.name == label) then scala.Nil else scala.List(key -> label)
+
             . or(scala.Nil)
+
           . toMap
 
         val labelled: scala.List[Edge] = edges.toList.map: edge =>
-          if edge.child == entity.key then edge.copy(label = labels.get(edge.parent).getOrElse(Unset)) else edge
+          if edge.child != entity.key then edge
+          else edge.copy(label = labels.get(edge.parent).getOrElse(Unset))
 
         val trivial: Boolean =
-          children.isEmpty && peers.isEmpty && nodes.values.forall { n => n.role == Role.Current || n.role == Role.Universal }
+          children.isEmpty && peers.isEmpty && nodes.values.forall: n =>
+            n.role == Role.Current || n.role == Role.Universal
 
         if trivial then Unset else Graph(List.from(nodes.values), List.from(labelled), entity.key)
 
@@ -187,12 +205,15 @@ object Hierarchy:
     val byKey: sci.Map[Text, Node] = graph.nodes.stdlib.map { n => n.key -> n }.toMap
     val parentsOf: sci.Map[Text, scala.List[Text]] = graph.edges.stdlib.groupMap(_.child)(_.parent)
 
-    val dag: Optional[Dag[Text]] =
-      safely(Dag(graph.nodes.map(_.key).to[Set]) { (key: Text) => List.from(parentsOf.getOrElse(key, scala.Nil)).to[Set] })
+    def parentSet(key: Text): Set[Text] = List.from(parentsOf.getOrElse(key, scala.Nil)).to[Set]
+    val dag: Optional[Dag[Text]] = safely(Dag(graph.nodes.map(_.key).to[Set])(parentSet))
 
     dag.let: dag =>
       val layering: Layering[Text] = dag.layered
-      val layers: scala.Array[scala.Array[Layering.Vertex[Text]]] = layering.layers.map(_.toArray).toArray
+
+      val layers: scala.Array[scala.Array[Layering.Vertex[Text]]] =
+        layering.layers.map(_.toArray).toArray
+
       val depth: Int = layers.length
 
       def widthOf(vertex: Layering.Vertex[Text]): Int = vertex match
@@ -200,10 +221,13 @@ object Hierarchy:
         case _                         => 0
 
       val widths: scala.Array[scala.Array[Int]] = layers.map(_.map(widthOf))
-      val xs: scala.Array[scala.Array[Double]] = layers.map { layer => new scala.Array[Double](layer.length) }
+
+      val xs: scala.Array[scala.Array[Double]] = layers.map: layer =>
+        new scala.Array[Double](layer.length)
 
       def initial(layer: Int): Unit =
         var cursor: Double = 0.0
+
         layers(layer).indices.foreach: i =>
           xs(layer)(i) = cursor
           cursor += widths(layer)(i) + gap
@@ -227,33 +251,48 @@ object Hierarchy:
         val desired: scala.Array[Double] = layers(layer).indices.map: i =>
           val near: scala.List[Int] = neighbours(i)
           if near.isEmpty then centre(layer, i) else near.map(centre(fixed, _)).sum/near.length
+
         . toArray
 
-        layers(layer).indices.foreach { i => xs(layer)(i) = desired(i) - widths(layer)(i)/2.0 }
+        layers(layer).indices.foreach: i => xs(layer)(i) = desired(i) - widths(layer)(i)/2.0
 
         (1 until layers(layer).length).foreach: i =>
           xs(layer)(i) = xs(layer)(i).max(xs(layer)(i - 1) + widths(layer)(i - 1) + gap)
 
         if layers(layer).nonEmpty then
-          val drift: Double = layers(layer).indices.map { i => centre(layer, i) - desired(i) }.sum/layers(layer).length
-          layers(layer).indices.foreach { i => xs(layer)(i) -= drift }
+          val total: Double = layers(layer).indices.map { i => centre(layer, i) - desired(i) }.sum
+          val drift: Double = total/layers(layer).length
+          layers(layer).indices.foreach: i => xs(layer)(i) -= drift
 
-      def down(): Unit = (1 until depth).foreach { layer => settle(layer, above(layer, _), layer - 1) }
-      def up(): Unit = (depth - 2 to 0 by -1).foreach { layer => settle(layer, below(layer, _), layer + 1) }
+      def down(): Unit = (1 until depth).foreach: layer => settle(layer, above(layer, _), layer - 1)
+
+      def up(): Unit =
+        (depth - 2 to 0 by -1).foreach: layer => settle(layer, below(layer, _), layer + 1)
 
       down(); up(); down()
 
       val least: Double = xs.iterator.flatMap(_.iterator).minOption.getOrElse(0.0)
-      xs.foreach { row => row.indices.foreach { i => row(i) = row(i) - least + margin } }
+
+      for
+        row <- xs
+        i   <- row.indices
+      do row(i) = row(i) - least + margin
 
       // The type's own labelled edges stack their labels up its vertical segment, so the gap
       // above its layer grows to hold them.
-      val labelled: scala.List[Edge] = graph.edges.stdlib.filter { e => e.child == graph.current && e.label.present }
+      val labelled: scala.List[Edge] =
+        graph.edges.stdlib.filter: e => e.child == graph.current && e.label.present
+
       val currentLayer: Int = layering.rank.getOrElse(graph.current, -1)
-      def gapAbove(layer: Int): Int = if layer == currentLayer then layerGap.max(2*margin + labelStep*labelled.length) else layerGap
+
+      def gapAbove(layer: Int): Int =
+        if layer == currentLayer then layerGap.max(2*margin + labelStep*labelled.length)
+        else layerGap
 
       val tops: scala.Array[Int] =
-        (1 until depth).scanLeft(margin) { (top, layer) => top + boxHeight + gapAbove(layer) }.toArray
+        (1 until depth)
+        . scanLeft(margin): (top, layer) => top + boxHeight + gapAbove(layer)
+        . toArray
 
       // A box's centre is rounded once, and its left edge placed from it, so that boxes with one
       // centre share a column exactly.
@@ -264,19 +303,25 @@ object Hierarchy:
       val boxes: scala.List[Box] = layers.indices.toList.flatMap: layer =>
         layers(layer).indices.toList.flatMap: i =>
           layers(layer)(i) match
-            case Layering.Vertex.Real(key) => scala.List(Box(byKey(key), x(layer, i), layerTop(layer), widths(layer)(i), boxHeight))
-            case _                         => scala.Nil
+            case Layering.Vertex.Real(key) =>
+              scala.List(Box(byKey(key), x(layer, i), layerTop(layer), widths(layer)(i), boxHeight))
+
+            case _ =>
+              scala.Nil
 
       // The track beneath each parent of a gap: a few pixels under the layer, one step lower for
       // each parent to its left which also has children, so their runs do not share a line.
       def track(layer: Int, i: Int): Int =
-        val parents: scala.List[Int] = (0 until layers(layer).length).toList.filter(below(layer, _).nonEmpty).sortBy(mid(layer, _))
+        val parents: scala.List[Int] =
+          layers(layer).indices.toList.filter(below(layer, _).nonEmpty).sortBy(mid(layer, _))
+
         val rank: Int = parents.indexOf(i).max(0).min((layerGap - 2*margin)/trackStep)
         layerTop(layer) + boxHeight + margin + rank*trackStep
 
       // Each layer's vertices by position: a long edge's virtual vertex is one value in every
       // layer it passes, so it is found by layer.
-      val positions: scala.Array[sci.Map[Layering.Vertex[Text], Int]] = layers.map(_.iterator.zipWithIndex.toMap)
+      val positions: scala.Array[sci.Map[Layering.Vertex[Text], Int]] =
+        layers.map(_.iterator.zipWithIndex.toMap)
 
       def route(edge: Edge): Optional[Route] =
         (layering.rank.get(edge.child), layering.rank.get(edge.parent)) match
@@ -288,7 +333,8 @@ object Hierarchy:
             def climb(layer: Int, i: Int, points: scala.List[(Int, Int)]): scala.List[(Int, Int)] =
               if layer == parentLayer then points else
                 val upper: Layering.Vertex[Text] =
-                  if layer - 1 == parentLayer then Layering.Vertex.Real(edge.parent) else Layering.Vertex.Virtual(edge.parent, edge.child)
+                  if layer - 1 == parentLayer then Layering.Vertex.Real(edge.parent)
+                  else Layering.Vertex.Virtual(edge.parent, edge.child)
 
                 positions(layer - 1).get(upper) match
                   case Some(j) =>
@@ -298,12 +344,14 @@ object Hierarchy:
                   case None => points
 
             val points: scala.List[(Int, Int)] = climb(childLayer, childAt, scala.List(start))
-            val label: Optional[(Int, Int)] = edge.label.let { _ => (start._1 + 4, start._2 - 6 - labelStep*labelled.indexOf(edge).max(0)) }
+            val lift: Int = 6 + labelStep*labelled.indexOf(edge).max(0)
+            val label: Optional[(Int, Int)] = edge.label.let: _ => (start._1 + 4, start._2 - lift)
             Route(edge, points, label)
 
           case _ => Unset
 
-      val routes: scala.List[Route] = graph.edges.stdlib.flatMap { e => route(e).let(scala.List(_)).or(scala.Nil) }
+      val routes: scala.List[Route] =
+        graph.edges.stdlib.flatMap: e => route(e).let(scala.List(_)).or(scala.Nil)
 
       // One stem for each parent with children, from its track to its bottom.
       val stems: scala.List[Stem] = layers.indices.toList.flatMap: layer =>
@@ -311,91 +359,147 @@ object Hierarchy:
           layers(layer)(i) match
             case Layering.Vertex.Real(_) if below(layer, i).nonEmpty =>
               scala.List(Stem(mid(layer, i), layerTop(layer) + boxHeight, track(layer, i)))
-            case _ => scala.Nil
+
+            case _ =>
+              scala.Nil
 
       val width: Int = boxes.map { b => b.x + b.w }.maxOption.getOrElse(0) + margin
       val height: Int = layerTop(depth - 1) + boxHeight + margin
       Layout(List.from(boxes), List.from(routes), List.from(stems), width, height)
 
   private def escape(text: Text): Text =
-    Text(text.s.replace("&", "&amp;").nn.replace("<", "&lt;").nn.replace(">", "&gt;").nn.replace("\"", "&quot;").nn)
+    val escaped: String =
+      text.s.replace("&", "&amp;").nn.replace("<", "&lt;").nn.replace(">", "&gt;").nn
+      . replace("\"", "&quot;").nn
+
+    Text(escaped)
 
   private val mono: Text = t"font-family: var(--pyro-font-mono)"
 
   def svg(layout: Layout): Text =
     def path(points: scala.List[(Int, Int)]): Text = points match
       case scala.Nil => t""
+
       case scala.::((x, y), rest) =>
         val moves: scala.List[Text] = rest.zip(points).flatMap: (to, from) =>
           if to == from then scala.Nil
           else if to._1 == from._1 then scala.List(t"V${to._2.toString.tt}")
           else scala.List(t"H${to._1.toString.tt}")
+
         t"M${x.toString.tt} ${y.toString.tt}${List.from(moves).join}"
 
     val edges: Text = layout.routes.map: route =>
-      val own: Boolean = layout.boxes.exists { b => b.node.key == route.edge.child && b.node.role == Role.Current }
+      val own: Boolean = layout.boxes.exists: b =>
+        b.node.key == route.edge.child && b.node.role == Role.Current
+
       val stroke: Text = if own then t"var(--pyro-muted)" else t"var(--pyro-border)"
-      t"""<path d="${path(route.points)}" style="fill: none; stroke: $stroke; stroke-width: 1.2"/>"""
+      val style: Text = t"fill: none; stroke: $stroke; stroke-width: 1.2"
+      t"""<path d="${path(route.points)}" style="$style"/>"""
+
     . join
 
     val stems: Text = layout.stems.map: stem =>
-      t"""<path d="M${stem.x.toString.tt} ${stem.bottom.toString.tt}V${stem.top.toString.tt}" style="fill: none; stroke: var(--pyro-border); stroke-width: 1.2"/>"""
+      val d: Text = t"M${stem.x.toString.tt} ${stem.bottom.toString.tt}V${stem.top.toString.tt}"
+      t"""<path d="$d" style="fill: none; stroke: var(--pyro-border); stroke-width: 1.2"/>"""
+
     . join
 
     val boxes: Text = layout.boxes.map: box =>
       val node: Node = box.node
       val current: Boolean = node.role == Role.Current
       val more: Boolean = node.role == Role.More
-      val stroke: Text = if current then t"stroke: var(--pyro-tone-accent); stroke-width: 2" else t"stroke: var(--pyro-border); stroke-width: 1"
+
+      val stroke: Text =
+        if current then t"stroke: var(--pyro-tone-accent); stroke-width: 2"
+        else t"stroke: var(--pyro-border); stroke-width: 1"
+
       val dashes: Text = if more then t""" stroke-dasharray="4 3"""" else t""
-      val nameFill: Text = if current then t"var(--pyro-fg)" else if node.href.present then t"var(--pyro-link)" else t"var(--pyro-muted)"
+
+      val nameFill: Text =
+        if current then t"var(--pyro-fg)"
+        else if node.href.present then t"var(--pyro-link)"
+        else t"var(--pyro-muted)"
+
       val mid: Text = box.centre.toString.tt
 
-      val rect: Text = t"""<rect x="${box.x.toString.tt}" y="${box.y.toString.tt}" width="${box.w.toString.tt}" height="${box.h.toString.tt}" style="fill: var(--pyro-surface); $stroke"$dashes/>"""
-      val pkg: Text = if node.pkg == t"" then t"" else t"""<text x="$mid" y="${(box.y + 14).toString.tt}" text-anchor="middle" style="$mono; font-size: var(--pyro-text-small); fill: var(--pyro-muted)">${escape(node.pkg)}</text>"""
-      val name: Text = t"""<text x="$mid" y="${(box.y + 30).toString.tt}" text-anchor="middle" style="$mono; font-size: var(--pyro-text-inline); fill: $nameFill">${escape(node.name)}</text>"""
+      // A line of text in the box, centred, `y` pixels below its top.
+      def text(y: Int, style: Text, content: Text): Text =
+        val at: Text = t"""x="$mid" y="${(box.y + y).toString.tt}" text-anchor="middle""""
+        t"""<text $at style="$mono; $style">${escape(content)}</text>"""
+
+      val position: Text = t"""x="${box.x.toString.tt}" y="${box.y.toString.tt}""""
+      val size: Text = t"""width="${box.w.toString.tt}" height="${box.h.toString.tt}""""
+      val fill: Text = t"fill: var(--pyro-surface); $stroke"
+      val rect: Text = t"""<rect $position $size style="$fill"$dashes/>"""
+
+      val pkg: Text =
+        if node.pkg == t"" then t""
+        else text(14, t"font-size: var(--pyro-text-small); fill: var(--pyro-muted)", node.pkg)
+
+      val name: Text = text(30, t"font-size: var(--pyro-text-inline); fill: $nameFill", node.name)
       val inner: Text = rect + pkg + name
 
       if current then t"<g>$inner</g>"
-      else node.href.lay(t"<g>$inner</g>") { (href: Text) => t"""<a class="pyro-locate" href="${escape(href)}">$inner</a>""" }
+      else
+        node.href.lay(t"<g>$inner</g>"): (href: Text) =>
+          t"""<a class="pyro-locate" href="${escape(href)}">$inner</a>"""
+
     . join
 
-    val labels: Text = List.from(layout.routes.stdlib.flatMap { route =>
-      route.labelAt.let { (x, y) =>
-        route.edge.label.let { label =>
-          scala.List(t"""<text x="${x.toString.tt}" y="${y.toString.tt}" text-anchor="start" style="$mono; font-size: var(--pyro-text-small); fill: var(--pyro-muted); paint-order: stroke; stroke: var(--pyro-surface); stroke-width: 3">${escape(label)}</text>""")
-        }.or(scala.Nil)
-      }.or(scala.Nil)
-    }).join
+    def label(route: Route): Optional[Text] = route.labelAt.let: (x, y) =>
+      route.edge.label.let: (label: Text) =>
+        val at: Text = t"""x="${x.toString.tt}" y="${y.toString.tt}" text-anchor="start""""
+        val paint: Text = t"paint-order: stroke; stroke: var(--pyro-surface); stroke-width: 3"
+        val small: Text = t"font-size: var(--pyro-text-small); fill: var(--pyro-muted)"
+        val style: Text = t"$mono; $small; $paint"
+        t"""<text $at style="$style">${escape(label)}</text>"""
+
+    val labels: Text =
+      List.from(layout.routes.stdlib.flatMap(label(_).let(scala.List(_)).or(scala.Nil))).join
 
     val w: Text = layout.width.toString.tt
     val h: Text = layout.height.toString.tt
 
     // Drawn at its own size where there is room, and scaled down to the width there is where
     // there is not; the inline style outranks the stylesheet's sizing of a drawing.
-    t"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 $w $h" role="img" style="width: min(100%, ${w}px); height: auto"><g>$edges$stems</g><g>$boxes</g><g>$labels</g></svg>"""
+    val xmlns: Text = t"http://www.w3.org/2000/svg"
+    val style: Text = t"width: min(100%, ${w}px); height: auto"
+    val open: Text = t"""<svg xmlns="$xmlns" viewBox="0 0 $w $h" role="img" style="$style">"""
+    t"""$open<g>$edges$stems</g><g>$boxes</g><g>$labels</g></svg>"""
 
   // The drawing in a sentence, for a reader without it.
   def alt(graph: Graph): Text =
     val byKey: sci.Map[Text, Node] = graph.nodes.stdlib.map { n => n.key -> n }.toMap
-    val current: Text = byKey.get(graph.current).map(_.name).getOrElse(graph.current)
+    def name(key: Text): Text = byKey.get(key).map(_.name).getOrElse(key)
+    val current: Text = name(graph.current)
 
-    def names(keys: scala.List[Text]): Text = keys.map { k => byKey.get(k).map(_.name).getOrElse(k) } match
+    def names(keys: scala.List[Text]): Text = keys.map(name) match
       case scala.Nil                => t""
       case scala.::(one, scala.Nil) => one
       case many                     => t"${List.from(many.init).join(t", ")} and ${many.last}"
 
     // The universal types go unsaid: every type extends them.
     val parents: scala.List[Text] =
-      graph.edges.stdlib.filter { e => e.child == graph.current && !universal(e.parent) }
-      . map { e => e.label.or(byKey.get(e.parent).map(_.name).getOrElse(e.parent)) }
+      graph.edges.stdlib.filter: e => e.child == graph.current && !universal(e.parent)
+      . map: e => e.label.or(name(e.parent))
 
-    val children: scala.List[Text] = graph.edges.stdlib.filter { e => e.parent == graph.current && byKey.get(e.child).exists(n => n.role == Role.Child || n.role == Role.More) }.map(_.child)
-    val peers: scala.List[Text] = graph.nodes.stdlib.filter { n => n.role == Role.Peer || (n.role == Role.More && !children.contains(n.key)) }.map(_.key)
-    val under: Optional[Text] = graph.edges.stdlib.find(_.child == graph.current).map { e => byKey.get(e.parent).map(_.name).getOrElse(e.parent) }.getOrElse(Unset)
+    def below(key: Text): Boolean =
+      byKey.get(key).exists: n => n.role == Role.Child || n.role == Role.More
+
+    val children: scala.List[Text] =
+      graph.edges.stdlib.filter { e => e.parent == graph.current && below(e.child) }.map(_.child)
+
+    def peer(node: Node): Boolean =
+      node.role == Role.Peer || (node.role == Role.More && !children.contains(node.key))
+
+    val peers: scala.List[Text] = graph.nodes.stdlib.filter(peer).map(_.key)
+
+    val under: Optional[Text] =
+      graph.edges.stdlib.find(_.child == graph.current).map { e => name(e.parent) }.getOrElse(Unset)
 
     val extending: Text = if parents.isEmpty then t"" else t" extends ${names(parents)}"
     val extended: Text = if children.isEmpty then t"" else t"; extended by ${names(children)}"
-    val siblings: Text = if peers.isEmpty then t"" else t"; a sibling of ${names(peers)}${under.lay(t"") { p => t" under $p" }}"
+    val beneath: Text = under.lay(t""): p => t" under $p"
+    val siblings: Text = if peers.isEmpty then t"" else t"; a sibling of ${names(peers)}$beneath"
 
     t"$current$extending$extended$siblings."

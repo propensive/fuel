@@ -33,12 +33,13 @@
 package fuel
 
 import java.util.concurrent as juc
+
 import scala.collection.mutable as scm
 
-import soundness.{Compilation as _, Query as _, *}
+import soundness.*
 
-import pyrocosm.{Block, Board, Status, TerminalRenderer}
 import palettes.solarizedDarkGaugePalette
+import pyrocosm.{Block, Board, Status, TerminalRenderer}
 import tableStyles.thickTableStyle
 import textMetrics.uniformMetric
 
@@ -91,7 +92,8 @@ final class Progress(board: Optional[Board], width: Int)(using Stdio):
       done(phase) = now
       (now, totals.getOrElse(phase, now), fraction)
 
-    board.let(_.gauge(Status.Fraction(part), t"${phase.caption}, ${now.toString.tt} of ${total.toString.tt}"))
+    val caption: Text = t"${phase.caption}, ${now.toString.tt} of ${total.toString.tt}"
+    board.let(_.gauge(Status.Fraction(part), caption))
 
   // A phase done whole, whatever was planned for it.
   def finish(phase: Phase): Unit =
@@ -100,14 +102,21 @@ final class Progress(board: Optional[Board], width: Int)(using Stdio):
 
   // The weight done over the weight planned; under the lock, or by a caller holding it.
   def fraction: Double = synchronized:
-    val planned: Double = totals.iterator.map { (phase, total) => (total*phase.weight).toDouble }.sum
-    val completed: Double = totals.iterator.map { (phase, total) => (done.getOrElse(phase, 0).min(total)*phase.weight).toDouble }.sum
+    val planned: Double =
+      totals.iterator.map { (phase, total) => (total*phase.weight).toDouble }.sum
+
+    val completed: Double =
+      totals.iterator
+      . map: (phase, total) => (done.getOrElse(phase, 0).min(total)*phase.weight).toDouble
+      . sum
+
     if planned == 0.0 then 0.0 else (completed/planned).min(1.0)
 
   // A problem, shown as it is found: on the board, or on the terminal where there is none.
   def report(block: Block): Unit =
     found.add(block)
-    board.lay(renderer.blocks(List(block), width).each { (line: Teletype) => Out.println(line) }) { (board: Board) => board.append(block) }
+    def print(): Unit = renderer.blocks(List(block), width).each(Out.println(_))
+    board.lay(print()): (board: Board) => board.append(block)
 
   def reports(blocks: List[Block]): Unit = blocks.each(report)
 

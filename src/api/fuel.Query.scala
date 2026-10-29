@@ -33,8 +33,9 @@
 package fuel
 
 import scala.collection.immutable as sci
+import scala.collection.mutable as scm
 
-import soundness.{Language as _, Token as _, *}
+import soundness.{Token as _, *}
 
 import pyrocosm.Token
 
@@ -61,14 +62,17 @@ object Query:
     case Type, Term
 
   object Keyword:
-    val all: sci.Map[Text, Keyword] = sci.Map.from(scala.Predef.wrapRefArray(Keyword.values).map { keyword => (keyword.text, keyword) })
+    private val keywords: scm.ArraySeq[Keyword] = scala.Predef.wrapRefArray(Keyword.values)
+    val all: sci.Map[Text, Keyword] = sci.Map.from(keywords.map(_.text).zip(keywords))
+
     def parse(word: Text): Optional[Keyword] = all.get(word).getOrElse(Unset)
 
   // Every bare word which is a constraint rather than a name: a kind, or a modifier spelt as
   // `Inspection.modifiers` spells it.
   enum Keyword:
     case Def, Val, Var, Given, Extension, Class, CaseClass, Trait, Object, Enum, Case, Type, Package
-    case Inline, Transparent, Private, Protected, Final, Open, Sealed, Abstract, Lazy, Opaque, Infix, Erased, Implicit, Override
+    case Inline, Transparent, Private, Protected, Final, Open, Sealed, Abstract, Lazy, Opaque, Infix
+    case Erased, Implicit, Override
 
     def kinds: sci.Set[Api.Kind] = this match
       case Def       => sci.Set(Api.Kind.Def)
@@ -86,14 +90,16 @@ object Query:
       case Package   => sci.Set(Api.Kind.Package)
       case _         => sci.Set()
 
+    private def lower: Text = Text(toString.toLowerCase.nn)
+
     def modifier: Optional[Text] = this match
-      case Inline | Transparent | Private | Protected | Final | Open | Sealed | Abstract | Lazy | Opaque | Infix | Erased | Implicit | Override =>
-        Text(toString.toLowerCase.nn)
-      case _ => Unset
+      case Inline | Transparent | Private | Protected | Final | Open | Sealed  => lower
+      case Abstract | Lazy | Opaque | Infix | Erased | Implicit | Override     => lower
+      case _                                                                   => Unset
 
     def text: Text = this match
       case CaseClass => t"case class"
-      case other     => Text(other.toString.toLowerCase.nn)
+      case _         => lower
 
   case class Name(text: Text, exact: Boolean)
 
@@ -116,7 +122,8 @@ object Query:
         case BareSymbol(text)    => m"a symbolic name is written in backticks, as `$text`"
         case BadType(text)       => m"$text is not a type"
 
-  case class Error(reason: Error.Reason, offset: Int)(using Diagnostics) extends soundness.Error(reason.message)
+  case class Error(reason: Error.Reason, offset: Int)(using Diagnostics)
+  extends soundness.Error(reason.message)
 
   // A query, or what is wrong with it.
   def read(text: Text): Query | Error = try parse(text) catch case error: Error => error
@@ -126,25 +133,32 @@ object Query:
   def tokens(text: Text): List[Token] =
     val s: String = text.s
     val length: Int = s.length
-    val tokens: scala.collection.mutable.ListBuffer[Token] = scala.collection.mutable.ListBuffer()
+    val tokens: scm.ListBuffer[Token] = scm.ListBuffer()
 
     def add(from: Int, until: Int, accent: Token.Accent): Unit =
       if until > from then tokens += Token(s.substring(from, until).nn.tt, accent)
 
-    def space(index: Int): Int = if index < length && s.charAt(index).isWhitespace then space(index + 1) else index
+    def space(index: Int): Int =
+      if index < length && s.charAt(index).isWhitespace then space(index + 1) else index
 
     def word(index: Int, dotted: Boolean): Int =
-      if index < length && (s.charAt(index).isLetterOrDigit || s.charAt(index) == '_' || (dotted && s.charAt(index) == '.')) then word(index + 1, dotted) else index
+      def part(char: Char): Boolean = char.isLetterOrDigit || char == '_' || (dotted && char == '.')
+      if index < length && part(s.charAt(index)) then word(index + 1, dotted) else index
+
+    def opens(char: Char): Boolean = char == '(' || char == '[' || char == '{'
+    def closes(char: Char): Boolean = char == ')' || char == ']' || char == '}'
 
     def balanced(index: Int, depth: Int, quote: Optional[Char]): Int =
       if index >= length then index else
         val char: Char = s.charAt(index)
+
         quote match
           case q: Char => balanced(index + 1, depth, if char == q then Unset else q)
+
           case _ =>
             if char.isWhitespace && depth == 0 then index
-            else if char == '(' || char == '[' || char == '{' then balanced(index + 1, depth + 1, Unset)
-            else if char == ')' || char == ']' || char == '}' then balanced(index + 1, (depth - 1).max(0), Unset)
+            else if opens(char) then balanced(index + 1, depth + 1, Unset)
+            else if closes(char) then balanced(index + 1, (depth - 1).max(0), Unset)
             else if char == '"' || char == '`' then balanced(index + 1, depth, char)
             else balanced(index + 1, depth, Unset)
 
@@ -155,43 +169,45 @@ object Query:
       if gap > index then
         add(index, gap, Token.Accent.Unparsed)
         recur(gap)
-      else char match
-        case '/' =>
-          add(index, index + 1, Token.Accent.Symbol)
-          val start: Int = space(index + 1)
-          val end: Int = word(start, true)
-          add(index + 1, start, Token.Accent.Unparsed)
-          add(start, end, Token.Accent.Term)
-          recur(end)
+      else
+        char match
+          case '/' =>
+            add(index, index + 1, Token.Accent.Symbol)
+            val start: Int = space(index + 1)
+            val end: Int = word(start, true)
+            add(index + 1, start, Token.Accent.Unparsed)
+            add(start, end, Token.Accent.Term)
+            recur(end)
 
-        case '#' | '.' | '?' | '~' =>
-          add(index, index + 1, Token.Accent.Symbol)
-          recur(index + 1)
+          case '#' | '.' | '?' | '~' =>
+            add(index, index + 1, Token.Accent.Symbol)
+            recur(index + 1)
 
-        case '+' | '-' =>
-          add(index, index + 1, Token.Accent.Symbol)
-          val start: Int = space(index + 1)
-          val end: Int = balanced(start, 0, Unset)
-          add(index + 1, start, Token.Accent.Unparsed)
-          add(start, end, Token.Accent.Typal)
-          recur(end)
+          case '+' | '-' =>
+            add(index, index + 1, Token.Accent.Symbol)
+            val start: Int = space(index + 1)
+            val end: Int = balanced(start, 0, Unset)
+            add(index + 1, start, Token.Accent.Unparsed)
+            add(start, end, Token.Accent.Typal)
+            recur(end)
 
-        case '`' =>
-          val close: Int = s.indexOf('`', index + 1)
-          val end: Int = if close < 0 then length else close + 1
-          add(index, end, Token.Accent.String)
-          recur(end)
+          case '`' =>
+            val close: Int = s.indexOf('`', index + 1)
+            val end: Int = if close < 0 then length else close + 1
+            add(index, end, Token.Accent.String)
+            recur(end)
 
-        case char if char.isLetterOrDigit || char == '_' =>
-          val end: Int = word(index, false)
-          val text: Text = s.substring(index, end).nn.tt
-          add(index, end, if Keyword.parse(text).present then Token.Accent.Keyword else Token.Accent.Term)
-          recur(end)
+          case char if char.isLetterOrDigit || char == '_' =>
+            val end: Int = word(index, false)
+            val text: Text = s.substring(index, end).nn.tt
+            val keyword: Boolean = Keyword.parse(text).present
+            add(index, end, if keyword then Token.Accent.Keyword else Token.Accent.Term)
+            recur(end)
 
-        case _ =>
-          val end: Int = balanced(index, 0, Unset)
-          add(index, end.max(index + 1), Token.Accent.Error)
-          recur(end.max(index + 1))
+          case _ =>
+            val end: Int = balanced(index, 0, Unset)
+            add(index, end.max(index + 1), Token.Accent.Error)
+            recur(end.max(index + 1))
 
     recur(0)
     List.from(tokens)
@@ -205,10 +221,12 @@ object Query:
     def space(char: Char): Boolean = char.isWhitespace
     def wordChar(char: Char): Boolean = char.isLetterOrDigit || char == '_'
 
-    def skipSpace(index: Int): Int = if index < length && space(s.charAt(index)) then skipSpace(index + 1) else index
+    def skipSpace(index: Int): Int =
+      if index < length && space(s.charAt(index)) then skipSpace(index + 1) else index
 
     def word(index: Int, dotted: Boolean): Int =
-      if index < length && (wordChar(s.charAt(index)) || (dotted && s.charAt(index) == '.')) then word(index + 1, dotted) else index
+      def part(char: Char): Boolean = wordChar(char) || (dotted && char == '.')
+      if index < length && part(s.charAt(index)) then word(index + 1, dotted) else index
 
     // The end of a run which whitespace ends only outside brackets, quotes and backticks.
     def balanced(index: Int, stack: scala.List[Char]): Int =
@@ -216,10 +234,12 @@ object Query:
         if stack.isEmpty then index else fail(Error.Reason.Unterminated(stack.head), index)
       else
         val char: Char = s.charAt(index)
+
         stack match
           case scala.::(open, rest) if char == open         => balanced(index + 1, rest)
           case scala.::('"' | '`', _)                       => balanced(index + 1, stack)
           case _ if space(char) && stack.isEmpty            => index
+
           case _ => char match
             case '(' => balanced(index + 1, ')' :: stack)
             case '[' => balanced(index + 1, ']' :: stack)
@@ -240,16 +260,20 @@ object Query:
         var depth: Int = 0
         var start: Int = 0
         var i: Int = 0
-        val parts: scala.collection.mutable.ListBuffer[String] = scala.collection.mutable.ListBuffer()
+        val parts: scm.ListBuffer[String] = scm.ListBuffer()
+
         while i < text.length do
           val c: Char = text.charAt(i)
+
           if c == '(' || c == '[' || c == '{' then depth += 1
           else if c == ')' || c == ']' || c == '}' then depth -= 1
           else if depth == 0 && text.startsWith(separator, i) then
             parts += text.substring(start, i).nn
             i += separator.length - 1
             start = i + 1
+
           i += 1
+
         parts += text.substring(start).nn
         parts.toList
 
@@ -263,25 +287,33 @@ object Query:
 
         if contextual.length > 1 then
           val params: scala.List[TypeQuery] = tuple(contextual.head.trim.nn, true)
-          TypeQuery(Text(s"scala.ContextFunction${params.length}"), List.from(params :+ parse(contextual.tail.mkString("?=>"))))
+          val result: TypeQuery = parse(contextual.tail.mkString("?=>"))
+          TypeQuery(Text(s"scala.ContextFunction${params.length}"), List.from(params :+ result))
         else if plain.length > 1 then
           val params: scala.List[TypeQuery] = tuple(plain.head.trim.nn, true)
-          TypeQuery(Text(s"scala.Function${params.length}"), List.from(params :+ parse(plain.tail.mkString("=>"))))
+          val result: TypeQuery = parse(plain.tail.mkString("=>"))
+          TypeQuery(Text(s"scala.Function${params.length}"), List.from(params :+ result))
         else if text.startsWith("(") then
           if !text.endsWith(")") then bad()
           val elements: scala.List[TypeQuery] = tuple(text, false)
+
           if elements.length == 1 then elements.head
           else TypeQuery(Text(s"scala.Tuple${elements.length}"), List.from(elements))
         else
           val end: Int = text.indexWhere { c => !(wordChar(c) || c == '.') } match
             case -1  => text.length
             case end => end
+
           val name: String = text.substring(0, end).nn
           if name.isEmpty then bad()
           val rest: String = text.substring(end).nn.trim.nn
+          val bracketed: Boolean = rest.startsWith("[") && rest.endsWith("]")
+
+          def args: List[TypeQuery] =
+            List.from(split(rest.substring(1, rest.length - 1).nn, ",").map(parse))
+
           if rest.isEmpty then TypeQuery(name.tt)
-          else if rest.startsWith("[") && rest.endsWith("]") then
-            TypeQuery(name.tt, List.from(split(rest.substring(1, rest.length - 1).nn, ",").map(parse)))
+          else if bracketed then TypeQuery(name.tt, args)
           else bad()
 
       // The elements of a parenthesised group, or a single unparenthesised type as a group of
@@ -290,8 +322,10 @@ object Query:
         if text.startsWith("(") && text.endsWith(")") then
           val inner: String = text.substring(1, text.length - 1).nn
           if inner.trim.nn.isEmpty then scala.Nil else split(inner, ",").map(parse)
-        else if loneAllowed then scala.List(parse(text))
-        else bad()
+        else if loneAllowed then
+          scala.List(parse(text))
+        else
+          bad()
 
       parse(raw)
 
@@ -329,7 +363,8 @@ object Query:
           case '`' =>
             val close: Int = s.indexOf('`', index + 1)
             if close < 0 then fail(Error.Reason.Unterminated('`'), index)
-            recur(close + 1, query.copy(names = query.names + List(Name(s.substring(index + 1, close).nn.tt, true))))
+            val name: Name = Name(s.substring(index + 1, close).nn.tt, true)
+            recur(close + 1, query.copy(names = query.names + List(name)))
 
           case char if wordChar(char) =>
             val end: Int = word(index, false)
@@ -341,8 +376,14 @@ object Query:
 
             if text == t"case" && next > end && s.substring(next, afterNext) == "class" then
               recur(afterNext, query.copy(kinds = query.kinds ++ Keyword.CaseClass.kinds))
-            else Keyword.parse(text).lay(recur(end, query.copy(names = query.names + List(Name(text, false))))): keyword =>
-              recur(end, query.copy(kinds = query.kinds ++ keyword.kinds, modifiers = keyword.modifier.lay(query.modifiers)(query.modifiers + _)))
+            else
+              val named: Query = query.copy(names = query.names + List(Name(text, false)))
+
+              Keyword.parse(text).lay(recur(end, named)): keyword =>
+                val modifiers: sci.Set[Text] =
+                  keyword.modifier.lay(query.modifiers)(query.modifiers + _)
+
+                recur(end, query.copy(kinds = query.kinds ++ keyword.kinds, modifiers = modifiers))
 
           case _ =>
             val end: Int = balanced(index, scala.Nil)
@@ -360,8 +401,11 @@ case class Query
     parameters: List[Query.TypeQuery] = Nil ):
 
   def empty: Boolean =
-    packages.nil && form.absent && kinds.isEmpty && modifiers.isEmpty && names.nil && results.nil && parameters.nil
+    packages.nil && form.absent && kinds.isEmpty && modifiers.isEmpty && names.nil && results.nil &&
+      parameters.nil
 
   // What can be said of a query before it is run.
   def warnings: List[Text] =
-    if modifiers.contains(t"private") then List(t"Private members are not documented, so nothing can match `private`.") else Nil
+    if modifiers.contains(t"private")
+    then List(t"Private members are not documented, so nothing can match `private`.")
+    else Nil

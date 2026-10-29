@@ -35,8 +35,9 @@ package fuel
 import java.util.concurrent as juc
 
 import scala.collection.immutable as sci
+import scala.collection.mutable as scm
 
-import soundness.{Language as _, Token as _, *}
+import soundness.*
 
 import stenography.Designator
 
@@ -87,9 +88,13 @@ object Applicables:
 
   // An extension method: its entity, the index of the declaration among the entity's, and the
   // declaration; `within` the given it is declared inside, where it is.
-  private case class Candidate(entity: Api.Entity, index: Int, declaration: Api.Declaration, within: Optional[Provider]):
+  private case class Candidate
+    ( entity: Api.Entity, index: Int, declaration: Api.Declaration, within: Optional[Provider] ):
+
     def key: Text = entity.key
-    def importFrom: Optional[Text] = within.lay(entity.parent.let(Api.key(_))) { (w: Provider) => w.entity.parent.let(Api.key(_)) }
+
+    def importFrom: Optional[Text] =
+      within.lay(entity.parent.let(Api.key(_))): (w: Provider) => w.entity.parent.let(Api.key(_))
 
   private def keyOf(designator: Optional[Designator]): Optional[Text] = designator.let(Api.key(_))
 
@@ -98,22 +103,30 @@ object Applicables:
     val lattice: Lattice = api.lattice
 
     def expanded(declaration: Api.Declaration): Api.Declaration =
-      declaration.copy(receiver = declaration.receiver.let(api.expand(_)), requires = declaration.requires.map(api.expand(_)), provides = declaration.provides.let(api.expand(_)))
+      declaration.copy
+        ( receiver = declaration.receiver.let(api.expand(_)),
+          requires = declaration.requires.map(api.expand(_)),
+          provides = declaration.provides.let(api.expand(_)) )
 
     // Every given, by the key of the type class it provides.
     val providers: scala.List[Provider] = entities.flatMap: entity =>
-      entity.declarations.stdlib.filter { d => d.kind == Api.Kind.Given && d.provides.present && !d.exported }.map { d => Provider(entity, expanded(d)) }
+      entity.declarations.stdlib
+      . filter: d => d.kind == Api.Kind.Given && d.provides.present && !d.exported
+      . map: d => Provider(entity, expanded(d))
 
     val byHead: sci.Map[Text, scala.List[Provider]] = providers.groupBy(_.provides.head.or(t""))
 
     def providerOf(key: Optional[Text]): Optional[Provider] =
-      key.let(api(_)).let { (e: Api.Entity) => e.definition.let { (d: Api.Declaration) => if d.kind == Api.Kind.Given then Provider(e, d) else Unset } }
+      key.let(api(_)).let: (e: Api.Entity) =>
+        e.definition.let: (d: Api.Declaration) =>
+          if d.kind == Api.Kind.Given then Provider(e, d) else Unset
 
     val candidates: scala.List[Candidate] = entities.flatMap: entity =>
       val within: Optional[Provider] = providerOf(keyOf(entity.parent))
 
       entity.declarations.stdlib.zipWithIndex.collect:
-        case (d, index) if d.kind == Api.Kind.Extension && d.receiver.present && !d.exported => Candidate(entity, index, expanded(d), within)
+        case (d, index) if d.kind == Api.Kind.Extension && d.receiver.present && !d.exported =>
+          Candidate(entity, index, expanded(d), within)
 
     // How far an entity declared beneath `from` is from `target`: 0 in the target or its
     // companion or a base's, 1 in its own package or enclosing object, 2 anywhere else.
@@ -133,13 +146,16 @@ object Applicables:
     // Whether a type is another, or extends it, as the lattice says (a type the lattice has no
     // id for is beneath itself alone).
     def beneathKey(key: Text, base: Text): Boolean =
-      key == base || lattice.id(key).let { (sub: Int) => lattice.id(base).let { (sup: Int) => lattice.isSubtype(sub, sup) } }.or(false)
+      val sub: Optional[Int] = lattice.id(key)
+      val sup: Optional[Int] = lattice.id(base)
+      key == base || sub.let { (sub: Int) => sup.let(lattice.isSubtype(sub, _)) }.or(false)
 
     // The type and every subtype beneath it, each with its distance, as entities.
     def beneath(key: Text): scala.List[(Api.Entity, Int)] =
       lattice.id(key).lay(scala.Nil): (sup: Int) =>
         lattice.beneath(sup).toList.flatMap: sub =>
-          api(lattice.key(sub)).let { (e: Api.Entity) => scala.List((e, lattice.distance(sub, sup))) }.or(scala.Nil)
+          def distance: Int = lattice.distance(sub, sup)
+          api(lattice.key(sub)).let { (e: Api.Entity) => scala.List((e, distance)) }.or(scala.Nil)
 
     // A requirement against what a given provides: a parameter of the requirement is bound to
     // the type the given names there (and must be bound alike wherever it recurs), or to the
@@ -147,25 +163,31 @@ object Applicables:
     // given stands for anything, a bounded one for its bound and what extends it; `Other`
     // matches anything.
     def unify(req: Shape, prov: Shape, binding: Binding): Option[Binding] = (req, prov) match
-      case (Shape.Other, _) | (_, Shape.Other) | (_, Shape.Param(_, Unset)) => Some(binding)
+      case (Shape.Other, _) | (_, Shape.Other) => Some(binding)
 
       case (Shape.Param(name, _), Shape.Named(key, _)) => binding.get(name) match
         case Some(bound) => if bound == key then Some(binding) else None
         case None        => Some(binding.updated(name, key))
 
       case (Shape.Param(name, _), Shape.Param(_, upper: Shape)) => upper.head match
-        case Unset     => Some(binding)
-
         case key: Text => binding.get(name) match
           case Some(bound) => if beneathKey(bound, key) then Some(binding) else None
           case None        => Some(binding.updated(name, key))
 
+        case _ => Some(binding)
+
       case (Shape.Named(k1, _), Shape.Param(_, upper: Shape)) =>
-        upper.head.lay(Some(binding)) { (key: Text) => if beneathKey(k1, key) then Some(binding) else None }
+        upper.head.lay(Some(binding)): (key: Text) =>
+          if beneathKey(k1, key) then Some(binding) else None
 
       case (Shape.Named(k1, a1), Shape.Named(k2, a2)) =>
         if k1 != k2 then None
-        else a1.stdlib.zip(a2.stdlib).foldLeft(Option(binding)) { (acc, pair) => acc.flatMap(unify(pair(0), pair(1), _)) }
+        else
+          a1.stdlib.zip(a2.stdlib).foldLeft(Option(binding)): (acc, pair) =>
+            acc.flatMap(unify(pair(0), pair(1), _))
+
+      // A given's parameter without a bound stands for anything.
+      case _ => Some(binding)
 
     // The parameters of a requirement which a given's own parameters stand for, paired.
     def paired(req: Shape, prov: Shape): scala.List[(Text, Text)] = (req, prov) match
@@ -177,14 +199,12 @@ object Applicables:
     // none at all when it cannot be satisfied; an empty list when nothing need satisfy it (a
     // type class the model has no given of, or a shape which is no type class). The answer
     // depends only on the requirement as bound, so it is kept by that.
-    val answers: scala.collection.mutable.HashMap[(Shape, Int), Option[scala.List[(Provider, Binding)]]] = scala.collection.mutable.HashMap()
+    val answers: scm.HashMap[(Shape, Int), Option[scala.List[(Provider, Binding)]]] = scm.HashMap()
 
     def satisfy(req: Shape, binding: Binding, depth: Int): Option[scala.List[(Provider, Binding)]] =
       val bound: Shape = substitute(req, binding)
 
-      // Not `getOrElseUpdate`: the answer recurs into `satisfy`, which must not update the map
-      // beneath itself.
-      val answer: Option[scala.List[(Provider, Binding)]] = answers.get((bound, depth)).getOrElse(bound match
+      def computed: Option[scala.List[(Provider, Binding)]] = bound match
         case Shape.Named(head, _) if byHead.contains(head) =>
           val found: scala.List[(Provider, Binding)] = byHead(head).flatMap: provider =>
             unify(bound, provider.provides, sci.Map()) match
@@ -195,32 +215,51 @@ object Applicables:
                 // requirement is left standing for a parameter of the given, what the given's
                 // own requirements bind that to (`[value: Textualizable] => value is Showable`
                 // is a `Showable` for each `Textualizable`) binds it too, one answer each.
-                val own: Option[Binding] = unify(provider.provides, substitute(bound, extended), sci.Map())
+                val own: Option[Binding] =
+                  unify(provider.provides, substitute(bound, extended), sci.Map())
 
                 own match
                   case None => scala.Nil
 
                   case Some(ownBinding) =>
                     val pairs: scala.List[(Text, Text)] =
-                      paired(bound, provider.provides).filter { (r, _) => !extended.contains(r) }
+                      paired(bound, provider.provides).filter: (r, _) => !extended.contains(r)
 
-                    // Every way the given's requirements can be met, as bindings of its parameters.
+                    // The bindings under which a requirement of the given is met, from one.
+                    def meet(r: Shape, b: Binding): scala.List[Binding] =
+                      satisfy(r, b, depth - 1) match
+                        case None                         => scala.Nil
+                        case Some(found) if found.isEmpty => scala.List(b)
+                        case Some(found)                  => found.map(_(1)).distinct
+
+                    // Every way the given's requirements can be met, as bindings of its
+                    // parameters.
                     val ways: Option[scala.List[Binding]] =
                       if depth <= 0 then Some(scala.List(ownBinding))
-                      else provider.declaration.requires.stdlib.foldLeft(Option(scala.List(ownBinding))): (acc, r) =>
-                        acc.flatMap: bindings =>
-                          val next: scala.List[scala.List[Binding]] = bindings.map { b => satisfy(r, b, depth - 1).map { found => if found.isEmpty then scala.List(b) else found.map(_(1)).distinct }.getOrElse(scala.Nil) }
-                          val flat: scala.List[Binding] = next.flatten
-                          if flat.isEmpty then None else Some(flat)
+                      else
+                        val requires: scala.List[Shape] = provider.declaration.requires.stdlib
+
+                        requires.foldLeft(Option(scala.List(ownBinding))): (acc, r) =>
+                          acc.flatMap: bindings =>
+                            val flat: scala.List[Binding] = bindings.flatMap(meet(r, _))
+                            if flat.isEmpty then None else Some(flat)
 
                     ways.getOrElse(scala.Nil).map: way =>
-                      val carried: Binding = pairs.foldLeft(extended) { (acc, pair) => way.get(pair(1)).map { k => acc.updated(pair(0), k) }.getOrElse(acc) }
+                      val carried: Binding = pairs.foldLeft(extended): (acc, pair) =>
+                        way.get(pair(1)).map { k => acc.updated(pair(0), k) }.getOrElse(acc)
+
                       (provider, carried)
+
                     . distinct
 
           if found.isEmpty then None else Some(found)
 
-        case _ => Some(scala.Nil))
+        case _ => Some(scala.Nil)
+
+      // Not `getOrElseUpdate`: the answer recurs into `satisfy`, which must not update the map
+      // beneath itself.
+      val answer: Option[scala.List[(Provider, Binding)]] =
+        answers.get((bound, depth)).getOrElse(computed)
 
       answers.update((bound, depth), answer)
       answer.map(_.map { (provider, extended) => (provider, binding ++ extended) })
@@ -231,9 +270,14 @@ object Applicables:
       case Shape.Other            => false
 
     // Every requirement satisfiable under the binding: the givens which satisfy each, in order.
-    def allSatisfied(requires: List[Shape], binding: Binding): Option[scala.List[scala.List[Provider]]] =
+    def allSatisfied(requires: List[Shape], binding: Binding)
+    :   Option[scala.List[scala.List[Provider]]] =
+
       requires.stdlib.foldLeft(Option(scala.List[scala.List[Provider]]())): (acc, r) =>
-        acc.flatMap { found => satisfy(r, binding, depth).map { more => found :+ more.map(_(0)) } }
+        for
+          found <- acc
+          more  <- satisfy(r, binding, depth)
+        yield found :+ more.map(_(0))
 
     val found: juc.ConcurrentHashMap[Text, scala.List[Api.Applicable]] = juc.ConcurrentHashMap()
 
@@ -249,9 +293,17 @@ object Applicables:
       val declaration: Api.Declaration = candidate.declaration
       val receiver: Shape = declaration.receiver.or(Shape.Other)
       val enclosing: Optional[Text] = candidate.within.let(_.key)
+      val from: Optional[Text] = candidate.importFrom
 
-      def extension(target: Api.Entity, tier: Int, distance: Int, via: Optional[Text]): Api.Applicable =
-        Api.Applicable(candidate.key, candidate.index, tier, distance, reach(candidate.importFrom, target), via, candidate.importFrom)
+      def extension(target: Api.Entity, tier: Int, distance: Int, via: Optional[Text])
+      :   Api.Applicable =
+
+        val nearness: Int = reach(from, target)
+        Api.Applicable(candidate.key, candidate.index, tier, distance, nearness, via, from)
+
+      // An extension of every value.
+      def everywhere(tier: Int, via: Optional[Text]): Api.Applicable =
+        Api.Applicable(candidate.key, candidate.index, tier, 0, 2, via, from)
 
       lazy val unconditional: Boolean = allSatisfied(declaration.requires, sci.Map()).isDefined
 
@@ -267,7 +319,9 @@ object Applicables:
             allSatisfied(declaration.requires, binding).foreach: givens =>
               // The given which satisfies a requirement of the parameter, where one does.
               val via: Optional[Text] = enclosing.or:
-                declaration.requires.stdlib.zip(givens).collectFirst { case (r, gs) if gs.nonEmpty && mentions(r, name) => gs.head.key }.getOrElse(Unset)
+                declaration.requires.stdlib.zip(givens)
+                . collectFirst { case (r, gs) if gs.nonEmpty && mentions(r, name) => gs.head.key }
+                . getOrElse(Unset)
 
               add(target.key, extension(target, 4, distance, via))
 
@@ -278,26 +332,35 @@ object Applicables:
             case Some(first) =>
               // Each given of the first bounding requirement says which type the parameter is:
               // the type it is for, or any type.
-              val narrowing: Option[scala.List[(Provider, Binding)]] = satisfy(first, sci.Map(), depth)
+              val narrowing: Option[scala.List[(Provider, Binding)]] =
+                satisfy(first, sci.Map(), depth)
 
               narrowing.getOrElse(scala.Nil).foreach: (provider, binding) =>
-                val others: Boolean = allSatisfied(List.from(bounding.tail ++ rest), binding).isDefined
+                val others: Boolean =
+                  allSatisfied(List.from(bounding.tail ++ rest), binding).isDefined
+
+                val via: Optional[Text] = enclosing.or(provider.key)
 
                 // The given's nearness to the type orders it: one in the companion first.
                 if others then binding.get(name) match
-                  case Some(key) => api(key).let { (target: Api.Entity) => add(key, extension(target, 5, reach(keyOf(provider.entity.parent), target), enclosing.or(provider.key))) }
-                  case None      => add(any, Api.Applicable(candidate.key, candidate.index, 6, 0, 2, enclosing.or(provider.key), candidate.importFrom))
+                  case Some(key) =>
+                    api(key).let: (target: Api.Entity) =>
+                      val nearness: Int = reach(keyOf(provider.entity.parent), target)
+                      add(key, extension(target, 5, nearness, via))
+
+                  case None =>
+                    add(any, everywhere(6, via))
 
               // A requirement no given narrows (one the model sees no given of) leaves the
               // parameter unbounded.
-              if narrowing.exists(_.isEmpty) && allSatisfied(List.from(rest), sci.Map()).isDefined then
-                add(any, Api.Applicable(candidate.key, candidate.index, 7, 0, 2, enclosing, candidate.importFrom))
+              if narrowing.exists(_.isEmpty) && allSatisfied(List.from(rest), sci.Map()).isDefined
+              then add(any, everywhere(7, enclosing))
 
             case None =>
-              if unconditional then add(any, Api.Applicable(candidate.key, candidate.index, 7, 0, 2, enclosing, candidate.importFrom))
+              if unconditional then add(any, everywhere(7, enclosing))
 
         case Shape.Named(_, _) =>
-          if unconditional then add(any, Api.Applicable(candidate.key, candidate.index, 7, 0, 2, enclosing, candidate.importFrom))
+          if unconditional then add(any, everywhere(7, enclosing))
 
         case Shape.Other => ()
 
@@ -308,14 +371,17 @@ object Applicables:
     providers.foreach: provider =>
       provider.provides match
         case Shape.Named(head, args) =>
-          // A given for a bounded parameter (`[text <: Text] => text is Showable`) is for its bound.
+          // A given for a bounded parameter (`[text <: Text] => text is Showable`) is for its
+          // bound.
           def named(shape: Shape): scala.List[Text] = shape match
             case Shape.Named(key, _)          => scala.List(key)
             case Shape.Param(_, upper: Shape) => named(upper)
             case _                            => scala.Nil
 
           val targets: scala.List[Text] = head :: args.stdlib.flatMap(named)
-          targets.distinct.foreach { target => givens.merge(target, scala.List(provider), (a, b) => a.nn ++ b.nn) }
+
+          targets.distinct.foreach: target =>
+            givens.merge(target, scala.List(provider), (a, b) => a.nn ++ b.nn)
 
         case _ => ()
 
@@ -325,22 +391,31 @@ object Applicables:
       if api(any).present || !found.containsKey(any) then api.entities
       else
         val scalaKey: Text = t"scala"
-        val base: sci.Map[Text, Api.Entity] =
-          if api(scalaKey).present then api.entities
-          else api.entities.updated(scalaKey, Api.Entity(Unset, scalaKey, false, Api.Declaration(Api.Kind.Package)))
+        val pkg: Api.Entity = Api.Entity(Unset, scalaKey, false, Api.Declaration(Api.Kind.Package))
 
-        base.updated(any, Api.Entity(Designator.Top(scalaKey), t"Any", false, Unset, Api.Declaration(Api.Kind.Class, List(t"abstract"))))
+        val base: sci.Map[Text, Api.Entity] =
+          if api(scalaKey).present then api.entities else api.entities.updated(scalaKey, pkg)
+
+        val anyClass: Api.Declaration = Api.Declaration(Api.Kind.Class, List(t"abstract"))
+        base.updated(any, Api.Entity(Designator.Top(scalaKey), t"Any", false, Unset, anyClass))
 
     val decorated: sci.Map[Text, Api.Entity] = withAny.map: (key, entity) =>
       val extensions: List[Api.Applicable] =
         val all: scala.List[Api.Applicable] = Optional(found.get(key)).or(scala.Nil)
         // One satisfied by several givens is listed once, by the nearest.
-        val sorted: scala.List[Api.Applicable] = all.sortBy { e => (e.tier, e.distance, e.reach, e.importFrom.or(t"").s, e.via.or(t"").s, e.key.s) }
+
+        val sorted: scala.List[Api.Applicable] = all.sortBy: e =>
+          (e.tier, e.distance, e.reach, e.importFrom.or(t"").s, e.via.or(t"").s, e.key.s)
+
         List.from(sorted.distinctBy { e => (e.key, e.index) })
 
       val known: List[Text] =
         val all: scala.List[Provider] = Optional(givens.get(key)).or(scala.Nil)
-        List.from(all.distinctBy(_.key).sortBy { p => (reach(keyOf(p.entity.parent), entity), p.key.s) }.map(_.key))
+
+        val sorted: scala.List[Provider] =
+          all.distinctBy(_.key).sortBy: p => (reach(keyOf(p.entity.parent), entity), p.key.s)
+
+        List.from(sorted.map(_.key))
 
       (key, entity.copy(extensions = extensions, givens = known))
 

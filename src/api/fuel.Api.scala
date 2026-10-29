@@ -34,7 +34,7 @@ package fuel
 
 import scala.collection.immutable as sci
 
-import soundness.{Language as _, Token as _, *}
+import soundness.*
 
 import stenography.{Designator, Syntax}
 
@@ -49,7 +49,8 @@ object Api:
   // entity too, a member of the type form of what it parameterises (`quux.foo#bar`,
   // `quux.Box#T`), so that an overlay documents it as it does any member.
   enum Kind:
-    case Package, Object, Class, CaseClass, Trait, Enum, Case, Type, Def, Val, Var, Given, Extension, Param, TypeParam
+    case Package, Object, Class, CaseClass, Trait, Enum, Case, Type
+    case Def, Val, Var, Given, Extension, Param, TypeParam
 
     def keyword: Text = this match
       case Package   => t"package"
@@ -108,13 +109,15 @@ object Api:
       result:      Optional[Syntax] = Unset,
       parents:     List[Syntax]     = Nil,
       group:       List[Syntax]     = Nil,
-      overrides:   Boolean          = false,   // implements or overrides an inherited member, which documents it
+      // Whether it implements or overrides an inherited member, which documents it.
+      overrides:   Boolean          = false,
       receiver:    Optional[Shape]  = Unset,
       requires:    List[Shape]      = Nil,
       provides:    Optional[Shape]  = Unset,
       aliasOf:     Optional[Shape]  = Unset,
       aliasParams: List[Text]       = Nil,
-      exported:    Boolean          = false,    // an export forwarder, which what it forwards to documents
+      // Whether it is an export forwarder, which what it forwards to documents.
+      exported:    Boolean          = false,
       returns:     Optional[Shape]  = Unset,
       accepts:     List[Shape]      = Nil,
       parentShapes: List[Shape]     = Nil )
@@ -171,7 +174,8 @@ object Api:
       location:   Optional[Location]    = Unset,
       doc:        Optional[Entry]       = Unset,
       removed:    Boolean               = false,
-      alias:      Optional[Designator]  = Unset,   // an export forwarder's target, whose page is this one's
+      // An export forwarder's target, whose page is this one's.
+      alias:      Optional[Designator]  = Unset,
       bases:      List[Text]            = Nil,
       extensions: List[Applicable]      = Nil,
       givens:     List[Text]            = Nil ):
@@ -182,11 +186,17 @@ object Api:
 
     // The designator of this entity as a term, and as a type: a member's parent is one or the
     // other.
-    def term: Designator = parent.lay(Designator.Top(name)) { (parent: Designator) => Designator.Term(parent, name) }
-    def tpe: Designator = parent.lay(Designator.Top(name)) { (parent: Designator) => Designator.Type(parent, name) }
+    def term: Designator =
+      parent.lay(Designator.Top(name)): (parent: Designator) => Designator.Term(parent, name)
+
+    def tpe: Designator =
+      parent.lay(Designator.Top(name)): (parent: Designator) => Designator.Type(parent, name)
 
     def isPackage: Boolean = definition.let(_.kind == Kind.Package).or(false)
-    def declarations: List[Declaration] = definition.let(List(_)).or(Nil) + template.let(List(_)).or(Nil) + overloads
+
+    def declarations: List[Declaration] =
+      definition.let(List(_)).or(Nil) + template.let(List(_)).or(Nil) + overloads
+
     def hidden: Boolean = doc.let(_.hidden).or(false)
 
     // A parameter, which its parent's page lists apart from its members.
@@ -195,7 +205,7 @@ object Api:
   // The key of an entity: its parent's qualified name, the separator its parent's kind gives
   // (`#` after a type, `.` after a term or a package), and its name.
   def key(parent: Optional[Designator], name: Text): Text =
-    parent.lay(name) { (parent: Designator) => t"${parent.qualified}${separator(parent)}$name" }
+    parent.lay(name): (parent: Designator) => t"${parent.qualified}${separator(parent)}$name"
 
   def key(designator: Designator): Text = key(designator.parent, designator.name)
 
@@ -206,7 +216,9 @@ object Api:
   // The path of an entity's page, beneath `/api/`: as its key, with `~` for `#` and every name
   // URL-encoded, so that a symbolic name travels.
   def path(parent: Optional[Designator], name: Text): Text =
-    parent.lay(encode(name)) { (parent: Designator) => t"${path(parent.parent, parent.name)}${if separator(parent) == t"#" then t"~" else t"."}${encode(name)}" }
+    parent.lay(encode(name)): (parent: Designator) =>
+      val mark: Text = if separator(parent) == t"#" then t"~" else t"."
+      t"${path(parent.parent, parent.name)}$mark${encode(name)}"
 
   private def encode(name: Text): Text = Text(java.net.URLEncoder.encode(name.s, "UTF-8").nn)
   private def decode(name: Text): Text = Text(java.net.URLDecoder.decode(name.s, "UTF-8").nn)
@@ -215,8 +227,9 @@ object Api:
   def unpath(path: Text): Designator =
     def recur(index: Int, start: Int, designator: Optional[Designator]): Designator =
       def next: Text = decode(path.s.substring(start, index).nn.tt)
+
       def extend(isType: Boolean): Designator =
-        designator.lay(Designator.Top(next)) { (parent: Designator) => parent.child(next, isType) }
+        designator.lay(Designator.Top(next)): (parent: Designator) => parent.child(next, isType)
 
       if index >= path.s.length then extend(false)
       else path.s.charAt(index) match
@@ -237,7 +250,9 @@ case class Api(entities: sci.Map[Text, Api.Entity]):
 
   def has(designator: Designator): Boolean = entities.contains(Api.key(designator))
   def locate(path: Text): Optional[Api.Entity] = apply(Api.key(Api.unpath(path)))
-  def children(entity: Api.Entity): List[Api.Entity] = entity.members.bind { (key: Text) => apply(key).let(List(_)).or(Nil) }
+
+  def children(entity: Api.Entity): List[Api.Entity] =
+    entity.members.bind: (key: Text) => apply(key).let(List(_)).or(Nil)
 
   def roots: List[Api.Entity] =
     List.from(entities.values.filter(_.parent.absent).toList.sortBy(_.name.s))
@@ -246,7 +261,8 @@ case class Api(entities: sci.Map[Text, Api.Entity]):
   // designator written with `.` may name a type (`gossamer.Text`), so both are tried.
   def find(designator: Designator): Optional[Api.Entity] =
     apply(Api.key(designator)).or:
-      designator.parent.let { (parent: Designator) => apply(Api.key(parent.companionType, designator.name)) }
+      designator.parent.let: (parent: Designator) =>
+        apply(Api.key(parent.companionType, designator.name))
 
   // Every entity of a simple name, for a reference to be resolved among and for search.
   lazy val byName: sci.Map[Text, List[Api.Entity]] =
@@ -260,15 +276,19 @@ case class Api(entities: sci.Map[Text, Api.Entity]):
     case Api.Shape.Named(key, args) =>
       val expanded: List[Api.Shape] = args.map(expand(_, depth))
       val entity: Optional[Api.Entity] = apply(key)
-      val alias: Optional[Api.Declaration] = entity.let(_.template).let { (d: Api.Declaration) => if d.aliasOf.present then d else Unset }
+
+      val alias: Optional[Api.Declaration] =
+        entity.let(_.template).let: (d: Api.Declaration) => if d.aliasOf.present then d else Unset
 
       // An export forwarder's page is its target's, so its name is the target's.
       val exported: Optional[Text] = entity.let(_.alias).let(Api.key(_))
 
-      if alias.absent && exported.present && depth > 0 then expand(Api.Shape.Named(exported.or(key), expanded), depth - 1)
+      if alias.absent && exported.present && depth > 0
+      then expand(Api.Shape.Named(exported.or(key), expanded), depth - 1)
       else alias.lay(Api.Shape.Named(key, expanded)): (d: Api.Declaration) =>
         if depth <= 0 then Api.Shape.Other else
-          val binding: sci.Map[Text, Api.Shape] = sci.Map.from(d.aliasParams.stdlib.zip(expanded.stdlib))
+          val binding: sci.Map[Text, Api.Shape] =
+            sci.Map.from(d.aliasParams.stdlib.zip(expanded.stdlib))
 
           def over(shape: Api.Shape): Api.Shape = shape match
             case Api.Shape.Param(name, _)   => binding.getOrElse(name, shape)
@@ -291,25 +311,36 @@ case class Api(entities: sci.Map[Text, Api.Entity]):
   def merge(other: Api): Api =
     val combined: sci.Map[Text, Api.Entity] = other.entities.foldLeft(entities): (acc, pair) =>
       val (key, entity) = pair
+
       acc.get(key) match
         case Some(existing) =>
           val merged: Api.Entity =
             if entity.own && !existing.own then entity.copy(doc = existing.doc.or(entity.doc))
-            else existing.copy(definition = existing.definition.or(entity.definition), template = existing.template.or(entity.template), overloads = existing.overloads + entity.overloads)
+            else
+              existing.copy
+                ( definition = existing.definition.or(entity.definition),
+                  template   = existing.template.or(entity.template),
+                  overloads  = existing.overloads + entity.overloads )
+
           acc.updated(key, merged)
+
         case None => acc.updated(key, entity)
 
     Api(combined).relinked
 
   // Every entity's `members`, from the parents its children name, sorted by name.
   def relinked: Api =
-    val children: sci.Map[Text, scala.List[Api.Entity]] =
-      entities.values.toList.flatMap { e => e.parent.let { (p: Designator) => scala.List((Api.key(p), e)) }.or(scala.Nil) }.groupMap(_(0))(_(1))
+    def parented(entity: Api.Entity): scala.List[(Text, Api.Entity)] =
+      entity.parent.let { (p: Designator) => scala.List((Api.key(p), entity)) }.or(scala.Nil)
 
-    Api(entities.map { (key, entity) =>
+    val children: sci.Map[Text, scala.List[Api.Entity]] =
+      entities.values.toList.flatMap(parented).groupMap(_(0))(_(1))
+
+    val linked: sci.Map[Text, Api.Entity] = entities.map: (key, entity) =>
       val known: scala.List[Api.Entity] = children.getOrElse(key, scala.Nil)
       (key, entity.copy(members = List.from(known.sortBy(_.name.s).map(_.key))))
-    })
+
+    Api(linked)
 
   def update(key: Text)(change: Api.Entity => Api.Entity): Api =
-    apply(key).lay(this) { (entity: Api.Entity) => add(change(entity)) }
+    apply(key).lay(this): (entity: Api.Entity) => add(change(entity))

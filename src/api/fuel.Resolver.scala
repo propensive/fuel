@@ -34,9 +34,9 @@ package fuel
 
 import java.util.concurrent as juc
 
-import soundness.{Language as _, Token as _, *}
+import soundness.{Token as _, *}
 
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 import pyrocosm.{Inline, Purview, Token}
 import stenography.{Designator, Syntax}
 
@@ -46,12 +46,13 @@ import stenography.{Designator, Syntax}
 // written, then under each enclosing entity, then under each import; one entity found is the
 // link, several are an ambiguity, none is plain text.
 object Scope:
-  val standard: List[Designator] = List(Designator(t"scala"), Designator(t"scala.Predef"), Designator(t"java.lang"))
+  val standard: List[Designator] =
+    List(Designator(t"scala"), Designator(t"scala.Predef"), Designator(t"java.lang"))
 
   // An entity's scope: itself and its parents, with the imports its overlay gives it.
   def of(entity: Api.Entity, imports: List[Text]): Scope =
     def parents(designator: Optional[Designator]): List[Designator] =
-      designator.lay(Nil: List[Designator]) { (d: Designator) => List(d) + parents(d.parent) }
+      designator.lay(Nil: List[Designator]): (d: Designator) => List(d) + parents(d.parent)
 
     Scope(List(entity.term, entity.tpe) + parents(entity.parent), imports.map(Designator(_)))
 
@@ -89,7 +90,7 @@ class Resolver(api: Api, scope0: Scope, page: Optional[Text] = Unset) extends Li
 
   def define(anchor: Text, names: List[(Text, Linker.Kind)]): Unit =
     val latest: List[(Text, Linker.Kind, Text)] =
-      names.reverse.map { (entry: (Text, Linker.Kind)) => (entry(0), entry(1), anchor) }
+      names.reverse.map: (entry: (Text, Linker.Kind)) => (entry(0), entry(1), anchor)
 
     defined = latest + defined
 
@@ -99,8 +100,11 @@ class Resolver(api: Api, scope0: Scope, page: Optional[Text] = Unset) extends Li
     page.let: (url: Text) =>
       val leaf: Text = Text(name.s.takeWhile { c => c != '.' && c != '#' })
 
-      defined.seek { (entry: (Text, Linker.Kind, Text)) => entry(0) == leaf && kind.lay(true)(_ == entry(1)) }.let:
-        (entry: (Text, Linker.Kind, Text)) => Inline.Destination.Local(url, entry(2))
+      def matches(entry: (Text, Linker.Kind, Text)): Boolean =
+        entry(0) == leaf && kind.lay(true)(_ == entry(1))
+
+      defined.seek(matches).let: (entry: (Text, Linker.Kind, Text)) =>
+        Inline.Destination.Local(url, entry(2))
 
   // Whether an entity is what a sigil says: for `#`, a type, or a member of a type; for `.`, a
   // term, or a member of a term. A type and its companion, one entity, answer to either; a
@@ -111,13 +115,20 @@ class Resolver(api: Api, scope0: Scope, page: Optional[Text] = Unset) extends Li
       case _                     => false
 
     kind match
-      case Linker.Kind.Type => ofType || entity.template.present || entity.definition.let(_.kind.isType).or(false)
+      case Linker.Kind.Type =>
+        ofType || entity.template.present || entity.definition.let(_.kind.isType).or(false)
+
       case Linker.Kind.Term =>
-        val ofTerm: Boolean = entity.parent.let { (p: Designator) => api(Api.key(p)).let(!_.isPackage).or(false) }.or(false)
+        val ofTerm: Boolean =
+          entity.parent.lay(false): (p: Designator) => api(Api.key(p)).let(!_.isPackage).or(false)
+
         !ofType && (entity.definition.present || ofTerm)
 
   def ambiguities: List[Text] =
-    List.from(scala.jdk.CollectionConverters.IteratorHasAsScala(ambiguous.iterator.nn).asScala.toList.distinct)
+    val all: scala.collection.Iterator[Text] =
+      scala.jdk.CollectionConverters.IteratorHasAsScala(ambiguous.iterator.nn).asScala
+
+    List.from(all.toList.distinct)
 
   // `import a.b.*`, `import a.b.C` and `import a.b.{C, D as E}`: the package or object itself
   // for a wildcard, else the named members' parent (which is enough to resolve their leaves).
@@ -129,14 +140,14 @@ class Resolver(api: Api, scope0: Scope, page: Optional[Text] = Unset) extends Li
       cleaned.cut(t",").bind: (clause: Text) =>
         val path: Text = clause.trim.cut(t" ").head
         val segments: List[Text] = path.cut(t".").filter(_ != t"")
-        val prefix: List[Text] = if segments.reverse.head.let(_ == t"*").or(false) then segments.keep(segments.size - 1) else segments.keep(segments.size - 1)
+        val prefix: List[Text] = segments.keep(segments.size - 1)
         if prefix.nil then Nil else List(Designator(prefix.join(t".")))
 
     scope = scope.copy(imports = (scope.imports + learned).distinct)
 
   // The entity a designator written in prose names: through an exported alias to its target.
   private def entity(designator: Designator): Optional[Api.Entity] =
-    api.find(designator).let { (found: Api.Entity) => found.alias.let(api.find).or(found) }
+    api.find(designator).let: (found: Api.Entity) => found.alias.let(api.find).or(found)
 
   // A designator rebased under a prefix: its first segment becomes a child of the prefix.
   private def under(prefix: Designator, designator: Designator): Designator = designator match
@@ -151,19 +162,25 @@ class Resolver(api: Api, scope0: Scope, page: Optional[Text] = Unset) extends Li
   // `Doc#title` through the enclosing tier, and `#Doc` under an import finds the type.
   private def candidates(designator: Designator, kind: Optional[Linker.Kind]): List[Api.Entity] =
     def fit(entities: List[Api.Entity]): List[Api.Entity] =
-      kind.lay(entities) { (kind: Linker.Kind) => entities.filter(suits(_, kind)) }
+      kind.lay(entities): (kind: Linker.Kind) => entities.filter(suits(_, kind))
 
     def tier(prefixes: List[Designator]): List[Api.Entity] =
-      fit(prefixes.bind { (prefix: Designator) => entity(under(prefix, designator)).let(List(_)).or(Nil) }.distinct)
+      val found: List[Api.Entity] = prefixes.bind: (prefix: Designator) =>
+        entity(under(prefix, designator)).let(List(_)).or(Nil)
+
+      fit(found.distinct)
+
+    val own: List[Api.Entity] = fit(entity(designator).let(List(_)).or(Nil))
 
     val tiers: List[List[Api.Entity]] =
-      List(fit(entity(designator).let(List(_)).or(Nil)), tier(scope.enclosing), tier(scope.imports), tier(Scope.standard))
+      List(own, tier(scope.enclosing), tier(scope.imports), tier(Scope.standard))
 
     tiers.seek(!_.nil).or(Nil)
 
   // The page of an entity, by the name it is written with; a type member is a page of its own,
   // as a term member is.
-  private def destination(entity: Api.Entity): Inline.Destination = Inline.Destination.Local(entity.url)
+  private def destination(entity: Api.Entity): Inline.Destination =
+    Inline.Destination.Local(entity.url)
 
   def link(reference: Text): Optional[Inline.Destination] = resolve(reference, true)
 
@@ -183,7 +200,8 @@ class Resolver(api: Api, scope0: Scope, page: Optional[Text] = Unset) extends Li
       case Linker.Kind.Type => Token.Accent.Typal
       case Linker.Kind.Term => Token.Accent.Term
 
-    def accented(token: Token): Token = accent.lay(token) { (accent: Token.Accent) => token.copy(accent = accent) }
+    def accented(token: Token): Token =
+      accent.lay(token): (accent: Token.Accent) => token.copy(accent = accent)
 
     val qualified: Boolean = name.s.indexOf('.') > 0 || name.s.indexOf('#') > 0
 
@@ -222,15 +240,16 @@ class Resolver(api: Api, scope0: Scope, page: Optional[Text] = Unset) extends Li
     val kind: Optional[Linker.Kind] = Linker.kind(text)
     val name: Text = if kind.present then text.skip(1) else text
 
-    def plausible: Boolean =
-      !name.s.isEmpty && !name.s.contains(" ") && !name.s.contains("(") && !name.s.contains("[") && !name.s.contains("\"")
-      && name.s.forall { c => c.isLetterOrDigit || c == '.' || c == '#' || c == '_' || c == '$' || c == '`' }
+    // Every character a name may hold; a space, a bracket or a quote is none of them.
+    def legal(char: Char): Boolean = char.isLetterOrDigit || ".#_$`".indexOf(char) >= 0
+
+    def plausible: Boolean = !name.s.isEmpty && name.s.forall(legal)
 
     if !plausible then Unset else fenced(name, kind).or:
       candidates(Designator(name), kind) match
         case one :: Nil => destination(one)
         case Nil        => Unset
-        case many       =>
+        case many =>
           // The same page reached by several routes is no ambiguity.
           if many.map(_.key).distinct.size == 1 then many.head.let(destination) else
             if record then ambiguous.add(text)

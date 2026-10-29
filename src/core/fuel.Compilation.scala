@@ -35,7 +35,7 @@ package fuel
 import soundness.*
 
 import dysasymptotics.linearSize
-import pyrocosm.{Block, Inline, Tone}
+import pyrocosm.{Block, Tone}
 
 // The compile step: every `*.md` beneath a document directory, read, parsed and converted.
 object Compilation:
@@ -72,9 +72,9 @@ object Compilation:
 
     . or(Nil)
 
-  def section(root: Text, checker: Checker = Checker.tokenized, regime: Regime = Regime()): Corpus.Section =
-    import filesystemBackends.javaBaseFilesystem
-    import filesystemOptions.dereferenceSymlinks
+  def section(root: Text, checker: Checker = Checker.tokenized, regime: Regime = Regime())
+  :   Corpus.Section =
+
     import charsets.utf8Charset
     import textSanitizers.skipSanitizer
 
@@ -97,12 +97,15 @@ object Compilation:
 
         text match
           case text: Text =>
+            val within: Text = relative(path)
+            val linker: Linker = regime.linker(name(root), within)
+
             val doc: Doc =
               Doc.parse
-                ( relative(path), text, checker, regime.session, fixture(path),
-                  regime.linker(name(root), relative(path)), regime.cache, regime.base(relative(path)),
-                  name(root), regime.glossary )
-            regime.progress(relative(path), doc)
+                ( within, text, checker, regime.session, fixture(path), linker, regime.cache,
+                  regime.base(within), name(root), regime.glossary )
+
+            regime.progress(within, doc)
             recur(tail, docs + List(doc), skipped)
 
           case _ =>
@@ -116,8 +119,9 @@ object Compilation:
   // One document, by its path, compiled as a section's would be, with its fixture if the
   // regime names a directory holding one, in a section named by its directory; `Unset` if the
   // file cannot be read.
-  def document(path: Text, checker: Checker = Checker.tokenized, regime: Regime = Regime()): Optional[Doc] =
-    import filesystemBackends.javaBaseFilesystem
+  def document(path: Text, checker: Checker = Checker.tokenized, regime: Regime = Regime())
+  :   Optional[Doc] =
+
     import charsets.utf8Charset
     import textSanitizers.skipSanitizer
 
@@ -133,13 +137,18 @@ object Compilation:
 
     safely(path.as[Path on Linux]).let { (file: Path on Linux) => safely(file.read[Text]) }.let:
       (text: Text) =>
+        val linker: Linker = regime.linker(section, path)
+
         Doc.parse
-          ( path, text, checker, regime.session, fixture, regime.linker(section, path), regime.cache,
-            regime.base(path), section, regime.glossary )
+          ( path, text, checker, regime.session, fixture, linker, regime.cache, regime.base(path),
+            section, regime.glossary )
 
   // A file that could not be read or parsed, as a diagnostic.
   def unreadable(path: Text): Block =
-    Block.Diagnostic(Tone.Failure, Block.Location(path), List(Block.paragraph(t"The file could not be read.")))
+    val message: Block = Block.paragraph(t"The file could not be read.")
+    Block.Diagnostic(Tone.Failure, Block.Location(path), List(message))
 
-  def corpus(roots: List[Text], checker: Checker = Checker.tokenized, regime: Regime = Regime()): Corpus =
+  def corpus(roots: List[Text], checker: Checker = Checker.tokenized, regime: Regime = Regime())
+  :   Corpus =
+
     Corpus(roots.map(section(_, checker, regime)))

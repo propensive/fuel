@@ -32,14 +32,16 @@
                                                                                                   */
 package fuel
 
-import soundness.{Language as _, Token as _, *}
+import soundness.*
 
 import pyrocosm.{Block, Tone}
 
 object Doc:
   // The URL of a document on the site: its section and its path, each segment encoded.
   def url(section: Text, path: Text): Text =
-    def encode(text: Text): Text = Text(java.net.URLEncoder.encode(text.s, "UTF-8").nn.replace("+", "%20").nn)
+    def encode(text: Text): Text =
+      Text(java.net.URLEncoder.encode(text.s, "UTF-8").nn.replace("+", "%20").nn)
+
     t"/doc/${encode(section)}/${path.cut(t"/").map(encode).join(t"/")}"
 
   // Parses and converts one document, its Scala fragments checked by `checker` — in one
@@ -80,12 +82,17 @@ object Doc:
     val markdown: Markdown of Layout = if unclosed.present then Parser.parse(text) else parsed
 
     val open: List[Block] = unclosed.let: (line: Int) =>
-      List(Block.Diagnostic(Tone.Failure, Block.Location(path, line), List(Block.paragraph(t"This fence is not closed.")), Excerpts.plain(text, line, Block.Note.Style.Erroneous)))
+      val message: Block = Block.paragraph(t"This fence is not closed.")
+      val excerpt: List[Block] = Excerpts.plain(text, line, Block.Note.Style.Erroneous)
+      List(Block.Diagnostic(Tone.Failure, Block.Location(path, line), List(message), excerpt))
+
     . or(Nil)
 
     cache match
       case cache: Cache =>
-        kept(path, text, markdown, checker, session, fixture, linker, cache, base, page, glossary, open)
+        kept
+          ( path, text, markdown, checker, session, fixture, linker, cache, base, page, glossary,
+            open )
 
       case _ =>
         val context: Blocks.Context = Blocks.Context(linker, page, glossary)
@@ -93,7 +100,8 @@ object Doc:
         val embeddings: List[Embedding] = List(scala, Embedding.JavaCode)
         val blocks: List[Block] = Blocks.of(markdown, embeddings, context)
         val problems: List[Block] = scala.problems + ambiguous(path, linker) + open
-        Doc(path, Blocks.title(blocks).or(filename(path)), blocks, problems, context.references, context.anchors, text)
+        val title: Text = Blocks.title(blocks).or(filename(path))
+        Doc(path, title, blocks, problems, context.references, context.anchors, text)
 
   // A reference which named several entities is a caution: it is shown unlinked.
   private def ambiguous(path: Text, linker: Linker): List[Block] =
@@ -128,22 +136,33 @@ object Doc:
     // What each Scala fence will define, and under which anchor, as text: part of the prose's
     // key, since a reference resolves through them.
     val declared: List[Text] =
-      val scala: List[Blocks.Fence] = fences.filter { (fence: Blocks.Fence) => fence.info.head == t"scala" || fence.info.has(t"fuel") }
+      val scala: List[Blocks.Fence] = fences.filter: (fence: Blocks.Fence) =>
+        fence.info.head == t"scala" || fence.info.has(t"fuel")
 
       scala.indexed.bind: (fence: Blocks.Fence, index: Ordinal) =>
-        Embedding.scan(fence.info, fence.content, index.n1).let: (scanned: (Text, List[(Text, Linker.Kind)])) =>
-          List(t"${scanned(0)}=${scanned(1).map { (name: Text, kind: Linker.Kind) => t"$name:${kind.toString.tt}" }.join(t",")}")
+        val scanned: Optional[(Text, List[(Text, Linker.Kind)])] =
+          Embedding.scan(fence.info, fence.content, index.n1)
+
+        scanned.let: (anchor: Text, definitions: List[(Text, Linker.Kind)]) =>
+          val named: List[Text] = definitions.map: (name: Text, kind: Linker.Kind) =>
+            t"$name:${kind.toString.tt}"
+
+          List(t"$anchor=${named.join(t",")}")
+
         . or(Nil)
 
-    val unlinked: List[Block] = Blocks.of(markdown, List(Blocks.sentinels()), Blocks.Context(Linker.none, page, glossary))
+    val bare: Blocks.Context = Blocks.Context(Linker.none, page, glossary)
+    val unlinked: List[Block] = Blocks.of(markdown, List(Blocks.sentinels()), bare)
     val shape: Text = Hashes.of(Output.Prose.encode(Output.Prose(unlinked, Nil)))
-    val key: Text = Hashes.of(base, t"prose", page.let(_.url).or(t""), shape, imports.join(t"\n"), declared.join(t"\n"))
+    val url: Text = page.let(_.url).or(t"")
+    val key: Text = Hashes.of(base, t"prose", url, shape, imports.join(t"\n"), declared.join(t"\n"))
 
     val prose: Output.Prose = cache.prose(key).or:
       linker.learn(imports)
       val context: Blocks.Context = Blocks.Context(linker, page, glossary)
       val blocks: List[Block] = Blocks.of(markdown, List(Blocks.sentinels(linker)), context)
-      val prose: Output.Prose = Output.Prose(blocks, ambiguous(path, linker), context.references, context.anchors)
+      val problems: List[Block] = ambiguous(path, linker)
+      val prose: Output.Prose = Output.Prose(blocks, problems, context.references, context.anchors)
       cache.prose(key, prose)
       prose
 
@@ -154,7 +173,9 @@ object Doc:
       Blocks.fence(fence.info, fence.content, fence.line, embeddings)
 
     val blocks: List[Block] = Blocks.fill(prose.blocks, outputs)
-    Doc(path, Blocks.title(blocks).or(filename(path)), blocks, scala.problems + prose.problems + open, prose.references, prose.anchors, text)
+    val title: Text = Blocks.title(blocks).or(filename(path))
+    val problems: List[Block] = scala.problems + prose.problems + open
+    Doc(path, title, blocks, problems, prose.references, prose.anchors, text)
 
   // The last segment of a path, without a `.md` extension.
   def filename(path: Text): Text =

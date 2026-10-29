@@ -99,18 +99,19 @@ object Embedding:
 
     // The kept fragments' units, entered before a fence is compiled after them.
     private def flush(): Unit =
-      pending.reverse.each { (name: Text, unit: Text) => checker.enter(name, unit) }
+      pending.reverse.each: (name: Text, unit: Text) => checker.enter(name, unit)
       pending = Nil
 
     // What a fragment left to the session, as `history` grew from `before`: whether it joined
     // it as an object, with the names it defines, and the imports it left.
     private def left(before: List[Joined]): (Boolean, List[Text], List[Text]) =
       val none: List[Text] = Nil
+      val grew: Boolean = history.size == before.size + 1
 
       history match
-        case Joined.Object(_, defined, imports) :: rest if rest.size == before.size => (true, defined, imports)
-        case Joined.Imports(lines) :: rest if rest.size == before.size              => (false, none, lines)
-        case _                                                                      => (false, none, none)
+        case Joined.Object(_, defined, imports) :: _ if grew => (true, defined, imports)
+        case Joined.Imports(lines) :: _ if grew              => (false, none, lines)
+        case _                                               => (false, none, none)
 
     // A kept fragment's effect on the session, as if it had been compiled: its object, whose
     // unit is entered when a later fence is compiled, or its imports.
@@ -118,7 +119,8 @@ object Embedding:
       if session then
         if fragment.joined then
           history = Joined.Object(objectName(index), fragment.defined, fragment.imports) :: history
-          if checker.compiles then pending = (t"${objectName(index)}.scala", unit(fragment.follow)) :: pending
+          val entry: (Text, Text) = (t"${objectName(index)}.scala", unit(fragment.follow))
+          if checker.compiles then pending = entry :: pending
         else if !fragment.imports.nil then
           history = Joined.Imports(fragment.imports) :: history
 
@@ -182,7 +184,7 @@ object Embedding:
       val inner: List[Text] =
         objects.indexed.map: (entry: (Text, List[Text]), index: Ordinal) =>
           val later: List[Text] = objects.skip(index.n0 + 1).bind(_(1))
-          val hidden: List[Text] = entry(1).filter(later.has(_)).map { (name: Text) => t"$name as _" }
+          val hidden: List[Text] = entry(1).filter(later.has(_)).map: (name: Text) => t"$name as _"
           val selectors: Text = (hidden + List(t"*", t"given")).join(t", ")
           t"import ${entry(0)}.{$selectors}"
 
@@ -196,7 +198,8 @@ object Embedding:
       ( preamble: Preamble, context: Optional[harlequin.Scala.Context], wrapper: Int )
     :   Framing =
 
-      if !session then Framing(preamble.follows.map(fragment(_)).join(t"", t"\n", t"\n"), t"", wrapper, context)
+      if !session then
+        Framing(preamble.follows.map(fragment(_)).join(t"", t"\n", t"\n"), t"", wrapper, context)
       else
         val followed: List[Text] = preamble.follows.map(fragment(_))
         val (fileScope, inner) = replayed
@@ -208,7 +211,7 @@ object Embedding:
         val opening: Text = t"object ${objectName(count)} {\n"
         val body: Text = (inner + followed).map { (text: Text) => t"$text\n" }.join(t"")
 
-        val (open, close): (Text, Text) = context match
+        val (open, close) = context match
           case harlequin.Scala.Context.Term => (t"val x${count.show} = {\n", t"\n}")
           case harlequin.Scala.Context.Type => (t"type X${count.show} =\n", t"")
           case _                            => (t"", t"")
@@ -235,52 +238,76 @@ object Embedding:
             compileFixture(fixturePath, text, framed)
             val (joined, defined, imports) = left(Nil)
             val raised: List[Block] = problems0.keep(problems0.size - before.size).reverse
-            cache.let(_.fragment(chain, Output.Fragment(Nil, raised, joined, defined, imports, text, 0)))
+
+            val fragment: Output.Fragment =
+              Output.Fragment(Nil, raised, joined, defined, imports, text, 0)
+
+            cache.let(_.fragment(chain, fragment))
 
     private def compileFixture(fixturePath: Text, text: Text, framed: Framing): Unit =
-          highlight(t"scala", text, framed, Preamble.Mode.Typecheck, checker.compiles) match
-            case source: SourceCode =>
-              val errors: List[harlequin.Diagnostic] =
-                source.diagnostics.filter(_.importance == harlequin.Diagnostic.Importance.Error)
+      highlight(t"scala", text, framed, Preamble.Mode.Typecheck, checker.compiles) match
+        case source: SourceCode =>
+          val errors: List[harlequin.Diagnostic] =
+            source.diagnostics.filter(_.importance == harlequin.Diagnostic.Importance.Error)
 
-              if errors.nil && checker.enter(t"${objectName(0)}.scala", framed.unit(text))
-              then history = List(Joined.Object(objectName(0), defined(text), imported(text)))
-              else if errors.nil then report(Block.Location(fixturePath), t"The fixture could not be entered into the session.")
-              else
-                errors.each: (diagnostic: harlequin.Diagnostic) =>
-                  val from: Int = (diagnostic.span.offset.let(_.n0).or(0) - framed.shift).max(0)
-                  val note: Block.Note = Notes.of(text, from, from, Block.Note.Style.Erroneous)
-                  report(Block.Location(fixturePath, note.line + 1, note.start + 1), diagnostic.message)
+          if errors.nil && checker.enter(t"${objectName(0)}.scala", framed.unit(text))
+          then history = List(Joined.Object(objectName(0), defined(text), imported(text)))
+          else if errors.nil then
+            val message: Text = t"The fixture could not be entered into the session."
+            report(Block.Location(fixturePath), message)
+          else
+            errors.each: (diagnostic: harlequin.Diagnostic) =>
+              val from: Int = (diagnostic.span.offset.let(_.n0).or(0) - framed.shift).max(0)
+              val note: Block.Note = Notes.of(text, from, from, Block.Note.Style.Erroneous)
+              report(Block.Location(fixturePath, note.line + 1, note.start + 1), diagnostic.message)
 
-            case error: Throwable =>
-              report(Block.Location(fixturePath), t"The fixture could not be compiled: ${error.toString.tt}")
+        case error: Throwable =>
+          val message: Text = t"The fixture could not be compiled: ${error.toString.tt}"
+          report(Block.Location(fixturePath), message)
 
-            case _ =>
-              ()
+        case _ =>
+          ()
 
     // A fragment joins the session when it compiled as its preamble asked, at full depth, and
     // stands alone; one which failed leaves only its imports, so the names they bring stay in
     // scope for what follows, as a checker which runs fragments does.
-    private def join(code: Text, framing: Framing, failed: Boolean, preamble: Preamble, mode: Preamble.Mode): Unit =
-      if session && mode != Preamble.Mode.Parse && preamble.errors == Preamble.Errors.Fail && preamble.scalaContext.absent then
-        if !failed && (!checker.compiles || checker.enter(t"${objectName(count)}.scala", framing.unit(code)))
+    private def join
+      ( code: Text, framing: Framing, failed: Boolean, preamble: Preamble, mode: Preamble.Mode )
+    :   Unit =
+
+      val joinable: Boolean =
+        session && mode != Preamble.Mode.Parse && preamble.errors == Preamble.Errors.Fail &&
+          preamble.scalaContext.absent
+
+      if joinable then
+        def entered: Boolean = checker.enter(t"${objectName(count)}.scala", framing.unit(code))
+
+        if !failed && (!checker.compiles || entered)
         then history = Joined.Object(objectName(count), defined(code), imported(code)) :: history
         else
           val imports: List[Text] = code.cut(t"\n").filter(_.trim.starts(t"import "))
+
           if !imports.nil then history = Joined.Imports(imports) :: history
 
     // The lines of a fragment marked as not compiling, which are compiled alone, each in its
     // place, and must fail.
     private val negative: java.util.regex.Pattern =
-      java.util.regex.Pattern.compile("""//\s*(?:does\s+not|doesn't|will\s+not|won't|cannot|can't)\s+compile\b""", java.util.regex.Pattern.CASE_INSENSITIVE).nn
+      val pattern: String =
+        """//\s*(?:does\s+not|doesn't|will\s+not|won't|cannot|can't)\s+compile\b"""
+
+      java.util.regex.Pattern.compile(pattern, java.util.regex.Pattern.CASE_INSENSITIVE).nn
 
     private def negatives(code: Text): List[Int] =
-      code.cut(t"\n").indexed.filter { (line: Text, index: Ordinal) => negative.matcher(line.s).nn.find() }.map(_(1).n0)
+      val marked: List[(Text, Ordinal)] = code.cut(t"\n").indexed.filter:
+        (line: Text, index: Ordinal) => negative.matcher(line.s).nn.find()
+
+      marked.map(_(1).n0)
 
     // The code with the marked lines blanked — their numbering kept — but for `except`.
     private def blank(code: Text, marked: List[Int], except: Optional[Int]): Text =
       code.cut(t"\n").indexed.map: (line: Text, index: Ordinal) =>
         if marked.has(index.n0) && !except.let(_ == index.n0).or(false) then t"" else line
+
       . join(t"\n")
 
     def embed(info: List[Text], content: Text, fence: Int): Optional[List[Block]] =
@@ -297,7 +324,7 @@ object Embedding:
 
         // The file's line, counted from one, on which the code begins: after the fence and
         // the preamble with its `##`.
-        val preambleLines: Int = header.lay(0) { (text: Text) => text.cut(t"\n").size + 1 }
+        val preambleLines: Int = header.lay(0): (text: Text) => text.cut(t"\n").size + 1
         val start: Int = fence + 2 + preambleLines
 
         // A preamble that is not TEL is reported at its place, and the fence read as if it
@@ -337,77 +364,82 @@ object Embedding:
         before:   List[Block] )
     :   List[Block] =
 
-        if preamble.restart then history = Nil
-        features = features + preamble.features.filter { (feature: Text) => !features.has(feature) }
+      if preamble.restart then history = Nil
+      features = features + preamble.features.filter: (feature: Text) => !features.has(feature)
 
-        val id: Text = preamble.id.or(t"fragment-${count.show}")
-        val context: Optional[harlequin.Scala.Context] = preamble.scalaContext
-        val language: Text = preamble.language.or(info.head.or(t"scala"))
-        val mode: Preamble.Mode = preamble.mode.or(Preamble.Mode.Typecheck)
+      val id: Text = preamble.id.or(t"fragment-${count.show}")
+      val context: Optional[harlequin.Scala.Context] = preamble.scalaContext
+      val language: Text = preamble.language.or(info.head.or(t"scala"))
+      val mode: Preamble.Mode = preamble.mode.or(Preamble.Mode.Typecheck)
 
-        val wrapper: Int = context match
-          case harlequin.Scala.Context.Term => 10  // `val x = {\n`
-          case harlequin.Scala.Context.Type => 9   // `type X =\n`
-          case _                            => 0
+      val wrapper: Int = context match
+        case harlequin.Scala.Context.Term => 10  // `val x = {\n`
+        case harlequin.Scala.Context.Type => 9   // `type X =\n`
+        case _                            => 0
 
-        val checked: Boolean = checker.compiles && preamble.errors != Preamble.Errors.Ignore
-        val framed: Framing = framing(preamble, context, wrapper)
+      val checked: Boolean = checker.compiles && preamble.errors != Preamble.Errors.Ignore
+      val framed: Framing = framing(preamble, context, wrapper)
 
-        // The preamble's frames which have code: one without its `code` child is a problem
-        // at its line in the file — the nth `frame` line of the preamble, since a TEL node
-        // does not know its line — and is dropped.
-        val frameLines: List[Int] =
-          header.lay(Nil) { (text: Text) => text.cut(t"\n").indexed.filter(_(0).starts(t"frame")).map(_(1).n0) }
+      // The preamble's frames which have code: one without its `code` child is a problem
+      // at its line in the file — the nth `frame` line of the preamble, since a TEL node
+      // does not know its line — and is dropped.
+      val frameLines: List[Int] = header.lay(Nil): (text: Text) =>
+        text.cut(t"\n").indexed.filter(_(0).starts(t"frame")).map(_(1).n0)
 
-        val described: List[Preamble.Frame] =
-          preamble.frames.indexed.bind: (frame: Preamble.Frame, index: Ordinal) =>
-            if frame.code.present then List(frame) else
-              val location = Block.Location(path, fence + 2 + frameLines.at(index).or(0))
-              report(location, t"Frame ${(index.n0 + 1).toString.tt} has no `code`.")
-              Nil
+      val described: List[Preamble.Frame] =
+        preamble.frames.indexed.bind: (frame: Preamble.Frame, index: Ordinal) =>
+          if frame.code.present then List(frame) else
+            val location = Block.Location(path, fence + 2 + frameLines.at(index).or(0))
+            report(location, t"Frame ${(index.n0 + 1).toString.tt} has no `code`.")
+            Nil
 
-        // An animated fence: its frames, then the code after `##` as the last if there is any.
-        val frames: List[Preamble.Frame] =
-          if preamble.frames.nil then Nil
-          else if code.trim == t"" then described
-          else described + List(Preamble.Frame(code))
+      // An animated fence: its frames, then the code after `##` as the last if there is any.
+      val frames: List[Preamble.Frame] =
+        if preamble.frames.nil then Nil
+        else if code.trim == t"" then described
+        else described + List(Preamble.Frame(code))
 
-        def compile(): List[Block] =
-          if !frames.nil then animated(frames, preamble, language, framed, mode, checked, id, start)
-          else if language == t"scala" then embedPlain(code, preamble, framed, mode, checked, id, start)
-          else
-            val shown: List[Block.Line] = highlight(language, code, Framing(t"", t"", 0, Unset), mode, false) match
-              case source: SourceCode => linked(source)
-              case _                  => lines(code)
+      def compile(): List[Block] =
+        if !frames.nil then animated(frames, preamble, language, framed, mode, checked, id, start)
+        else if language == t"scala"
+        then embedPlain(code, preamble, framed, mode, checked, id, start)
+        else
+          val bare: Framing = Framing(t"", t"", 0, Unset)
 
-            List(Block.Code(Language(language), shown, notes(code, preamble.marks), start, Unset, id))
+          val shown: List[Block.Line] = highlight(language, code, bare, mode, false) match
+            case source: SourceCode => linked(source)
+            case _                  => lines(code)
 
-        // The fence's key: in a session, chained from the fence before it; outside one, with
-        // the text of what it follows. Its line is not part of it, since its output moves.
-        val key: Text =
-          val own: Text = info.join(t" ")
-          if session then Hashes.of(chain, own, content)
-          else Hashes.of(base, own, content, preamble.follows.map(fragment(_)).join(t"\u0000"))
+          List(Block.Code(Language(language), shown, notes(code, preamble.marks), start, Unset, id))
 
-        if session then chain = key
+      // The fence's key: in a session, chained from the fence before it; outside one, with
+      // the text of what it follows. Its line is not part of it, since its output moves.
+      val key: Text =
+        val own: Text = info.join(t" ")
 
-        cache.let(_.fragment(key)) match
-          case kept: Output.Fragment =>
-            val delta: Int = fence - kept.line
-            problems0 = Relocation.shift(kept.problems, path, delta).reverse + before
-            fragments = (id, kept.follow) :: fragments
-            rejoin(kept, framed.unit, count)
-            Relocation.shift(kept.blocks, path, delta)
+        if session then Hashes.of(chain, own, content)
+        else Hashes.of(base, own, content, preamble.follows.map(fragment(_)).join(t"\u0000"))
 
-          case _ =>
-            flush()
-            val history0: List[Joined] = history
-            val blocks: List[Block] = compile()
-            val (joined, defined, imports) = left(history0)
-            val raised: List[Block] = problems0.keep(problems0.size - before.size).reverse
-            val record = Output.Fragment(blocks, raised, joined, defined, imports, fragment(id), fence)
-            cache.let(_.fragment(key, record))
-            blocks
+      if session then chain = key
+
+      cache.let(_.fragment(key)) match
+        case kept: Output.Fragment =>
+          val delta: Int = fence - kept.line
+          problems0 = Relocation.shift(kept.problems, path, delta).reverse + before
+          fragments = (id, kept.follow) :: fragments
+          rejoin(kept, framed.unit, count)
+          Relocation.shift(kept.blocks, path, delta)
+
+        case _ =>
+          flush()
+          val history0: List[Joined] = history
+          val blocks: List[Block] = compile()
+          val (joined, defined, imports) = left(history0)
+          val raised: List[Block] = problems0.keep(problems0.size - before.size).reverse
+          val follow: Text = fragment(id)
+          val record = Output.Fragment(blocks, raised, joined, defined, imports, follow, fence)
+          cache.let(_.fragment(key, record))
+          blocks
 
     // One fragment highlighted in a language: Scala through the checker (in its framing, as
     // far as its mode asks, when checking), Java through harlequin alone, another language
@@ -467,9 +499,13 @@ object Embedding:
           val scala: Boolean = own == t"scala"
           val number: Text = (index.n0 + 1).toString.tt
 
-          val frameLines: List[Block.Line] = highlight(own, code, framing, mode, checked && scala) match
+          val highlighted: Optional[SourceCode | Throwable] =
+            highlight(own, code, framing, mode, checked && scala)
+
+          val frameLines: List[Block.Line] = highlighted match
             case error: Throwable =>
-              report(Block.Location(path, start), t"Frame $number could not be highlighted: ${error.toString.tt}")
+              val message: Text = t"Frame $number could not be highlighted: ${error.toString.tt}"
+              report(Block.Location(path, start), message)
               lines(code)
 
             case source: SourceCode =>
@@ -493,8 +529,10 @@ object Embedding:
 
           (frameLines, detail)
 
-      val followed: Text =
-        frames.reverse.seek { (frame: Preamble.Frame) => frame.language.or(language) == t"scala" }.let(_.code).or(t"")
+      val last: Optional[Preamble.Frame] = frames.reverse.seek: (frame: Preamble.Frame) =>
+        frame.language.or(language) == t"scala"
+
+      val followed: Text = last.let(_.code).or(t"")
 
       fragments = (id, followed) :: fragments
       linker.define(id, Embedding.definitions(followed))
@@ -504,9 +542,12 @@ object Embedding:
       val details: List[Block.Slide.Detail] = built.map(_(1))
 
       val animation: Block.Animation =
-        Block.Animation.of(frameLines, details).copy(autoplay = preamble.autoplay, loop = preamble.loop)
+        Block.Animation.of(frameLines, details)
+        . copy(autoplay = preamble.autoplay, loop = preamble.loop)
 
-      List(Block.Code(Language(language), frameLines.head.or(Nil), details.head.lay(Nil)(_.notes), start, animation, id))
+      val first: List[Block.Line] = frameLines.head.or(Nil)
+      val marks: List[Block.Note] = details.head.lay(Nil)(_.notes)
+      List(Block.Code(Language(language), first, marks, start, animation, id))
 
     private def embedPlain
       ( code:     Text,
@@ -518,36 +559,42 @@ object Embedding:
         start:    Int )
     :   List[Block] =
 
-        // The lines marked as not compiling are blanked out of the fragment proper, so that
-        // it compiles without them, and compiled alone, each in its place, after it; a
-        // fragment which is only parsed cannot judge them, so they stay as they are.
-        val marked: List[Int] = if checked && mode != Preamble.Mode.Parse then negatives(code) else Nil
-        val positive: Text = if marked.nil then code else blank(code, marked, Unset)
+      // The lines marked as not compiling are blanked out of the fragment proper, so that
+      // it compiles without them, and compiled alone, each in its place, after it; a
+      // fragment which is only parsed cannot judge them, so they stay as they are.
+      val marked: List[Int] =
+        if checked && mode != Preamble.Mode.Parse then negatives(code) else Nil
 
-        // A fragment the highlighter cannot handle (harlequin overflows on an expression
-        // nested ten deep, propensive/soundness#2284) is shown plain, with a diagnostic, and
-        // the rest of the document goes on.
-        val attempt: Optional[SourceCode | Throwable] = highlight(t"scala", positive, framing, mode, checked)
+      val positive: Text = if marked.nil then code else blank(code, marked, Unset)
 
-        fragments = (id, positive) :: fragments
-        linker.define(id, Embedding.definitions(positive))
+      // A fragment the highlighter cannot handle (harlequin overflows on an expression
+      // nested ten deep, propensive/soundness#2284) is shown plain, with a diagnostic, and
+      // the rest of the document goes on.
+      val attempt: Optional[SourceCode | Throwable] =
+        highlight(t"scala", positive, framing, mode, checked)
 
-        attempt match
-          case error: Throwable =>
-            report(Block.Location(path, start), t"The fragment could not be highlighted: ${error.toString.tt}")
-            List(Block.Code(Language.Scala, lines(code), Nil, start, Unset, id))
+      fragments = (id, positive) :: fragments
+      linker.define(id, Embedding.definitions(positive))
 
-          case source: SourceCode =>
-            val (block, reports, failed) = embedSource(source, positive, framing, checked, preamble, start, id)
-            join(positive, framing, failed, preamble, mode)
+      attempt match
+        case error: Throwable =>
+          val message: Text = t"The fragment could not be highlighted: ${error.toString.tt}"
+          report(Block.Location(path, start), message)
+          List(Block.Code(Language.Scala, lines(code), Nil, start, Unset, id))
 
-            val restored: Block.Code = marked.fold(block): (block: Block.Code, index: Int) =>
-              negativeLine(block, code, marked, index, framing, mode, start)
+        case source: SourceCode =>
+          val (block, reports, failed) =
+            embedSource(source, positive, framing, checked, preamble, start, id)
 
-            restored :: reports
+          join(positive, framing, failed, preamble, mode)
 
-          case _ =>
-            List(Block.Code(Language.Scala, lines(code), Nil, start, Unset, id))
+          val restored: Block.Code = marked.fold(block): (block: Block.Code, index: Int) =>
+            negativeLine(block, code, marked, index, framing, mode, start)
+
+          restored :: reports
+
+        case _ =>
+          List(Block.Code(Language.Scala, lines(code), Nil, start, Unset, id))
 
     // One line marked as not compiling, compiled in its place: it must fail, and its first
     // error is a note on it, in the block whose line is now taken from that run, so that its
@@ -567,18 +614,24 @@ object Embedding:
       val count: Int = code.cut(t"\n").size
 
       def replaced(line: Block.Line): List[Block.Line] =
-        block.lines.indexed.map { (old: Block.Line, position: Ordinal) => if position.n0 == index then line else old }
+        block.lines.indexed.map: (old: Block.Line, position: Ordinal) =>
+          if position.n0 == index then line else old
 
       highlight(t"scala", restored, framing, mode, true) match
         case source: SourceCode =>
-          val line: Block.Line = framing.own(linked(source), count).skip(index).head.or(Block.Line(List(Token.plain(text))))
-          val error: Optional[harlequin.Diagnostic] = source.diagnostics.seek(_.importance == harlequin.Diagnostic.Importance.Error)
+          val fallback: Block.Line = Block.Line(List(Token.plain(text)))
+          val line: Block.Line = framing.own(linked(source), count).skip(index).head.or(fallback)
+
+          val error: Optional[harlequin.Diagnostic] =
+            source.diagnostics.seek(_.importance == harlequin.Diagnostic.Importance.Error)
 
           error.lay(block.copy(lines = replaced(line))): (diagnostic: harlequin.Diagnostic) =>
             val from: Int = diagnostic.span.offset.let(_.n0).or(0) - framing.shift
             val length: Int = diagnostic.span.length.or(0)
             val caption: List[Inline] = Inline.text(diagnostic.message)
-            val placed: Block.Note = Notes.of(restored, from.max(0), from.max(0) + length, Block.Note.Style.Erroneous, caption)
+            val style: Block.Note.Style = Block.Note.Style.Erroneous
+            val at: Int = from.max(0)
+            val placed: Block.Note = Notes.of(restored, at, at + length, style, caption)
 
             val note: Block.Note =
               if from >= 0 && placed.line == index then placed
@@ -588,7 +641,8 @@ object Embedding:
 
           . also:
             if error.absent then
-              report(Block.Location(path, start + index), t"This line is marked `// does not compile`, but it compiled.")
+              val message: Text = t"This line is marked `// does not compile`, but it compiled."
+              report(Block.Location(path, start + index), message)
 
         case _ =>
           block
@@ -610,7 +664,9 @@ object Embedding:
       // located in the file, with the lines around it.
       val reported: List[(Block.Note, Block, Boolean)] =
         if !checked then Nil else
-          source.diagnostics.bind[List[(Block.Note, Block, Boolean)], (Block.Note, Block, Boolean), List[(Block.Note, Block, Boolean)]]:
+          type Reported = (Block.Note, Block, Boolean)
+
+          source.diagnostics.bind[List[Reported], Reported, List[Reported]]:
             (diagnostic: harlequin.Diagnostic) =>
               val from: Int = diagnostic.span.offset.let(_.n0).or(0) - framing.shift
               val length: Int = diagnostic.span.length.or(0)
@@ -638,35 +694,47 @@ object Embedding:
 
       preamble.errors match
         case Preamble.Errors.Fail =>
-          errors.each { (error: Block) => problems0 = error :: problems0 }
+          errors.each: (error: Block) => problems0 = error :: problems0
 
         case Preamble.Errors.Show =>
           if checked && errors.nil then
-            report(Block.Location(path, start), t"This fragment is marked `errors show`, but it compiled.")
+            val message: Text = t"This fragment is marked `errors show`, but it compiled."
+            report(Block.Location(path, start), message)
 
         case _ =>
           ()
 
-      val block: Block.Code = Block.Code(Language.Scala, lines, reported.map(_(0)) + notes(code, preamble.marks), start, Unset, id)
+      val marks: List[Block.Note] = reported.map(_(0)) + notes(code, preamble.marks)
+      val block: Block.Code = Block.Code(Language.Scala, lines, marks, start, Unset, id)
+
       (block, reported.map(_(1)), !errors.nil)
 
   object JavaCode extends Embedding:
     def embed(info: List[Text], content: Text, fence: Int): Optional[List[Block]] =
-      if info.head == t"java"
-      then List(Block.Code(Language.Java, modelLines(harlequin.Java.highlight(trimmed(content))), Nil, fence + 2))
-      else Unset
+      if info.head != t"java" then Unset else
+        val lines: List[Block.Line] = modelLines(harlequin.Java.highlight(trimmed(content)))
+        List(Block.Code(Language.Java, lines, Nil, fence + 2))
 
   // The top-level definitions of a fragment, by their declarations — what a later fragment
   // defining one of them again hides from its import, and what a reference in prose names —
   // each a type (a class, trait, enum or type) or a term.
   private val declaration: java.util.regex.Pattern =
-    java.util.regex.Pattern.compile("""^(?:(?:final|lazy|private|protected|inline|transparent|opaque|infix|open|case|abstract|sealed|override|implicit)\s+)*(val|var|def|object|class|trait|type|enum|given)\s+(?:\[[^\]]*\]\s*)?([A-Za-z_][\w$]*|`[^`]+`)""").nn
+    val modifiers: String =
+      """(?:final|lazy|private|protected|inline|transparent|opaque|infix|open|case|abstract|""" +
+        """sealed|override|implicit)"""
+
+    val keywords: String = """(val|var|def|object|class|trait|type|enum|given)"""
+    val name: String = """(?:\[[^\]]*\]\s*)?([A-Za-z_][\w$]*|`[^`]+`)"""
+    java.util.regex.Pattern.compile(s"^(?:$modifiers\\s+)*$keywords\\s+$name").nn
 
   def definitions(code: Text): List[(Text, Linker.Kind)] =
     code.cut(t"\n").bind: (line: Text) =>
       val matcher = declaration.matcher(line.s).nn
+
       if !matcher.find() then Nil else
-        val kind: Linker.Kind = matcher.group(1).nn match
+        val keyword: String = matcher.group(1).nn
+
+        val kind: Linker.Kind = keyword match
           case "class" | "trait" | "type" | "enum" => Linker.Kind.Type
           case _                                   => Linker.Kind.Term
 
@@ -676,9 +744,13 @@ object Embedding:
   // it is compiled: its anchor — the preamble's `id`, else its number — and the definitions of
   // its code (the last Scala frame's, of an animation), which a document's prose is linked
   // against before its fences are compiled.
-  def scan(info: List[Text], content: Text, count: Int): Optional[(Text, List[(Text, Linker.Kind)])] =
+  def scan(info: List[Text], content: Text, count: Int)
+  :   Optional[(Text, List[(Text, Linker.Kind)])] =
+
     if info.head != t"scala" && !info.has(t"fuel") then Unset else
-      val (header, code0) = if info.has(t"fuel") then Preamble.split(content) else (Unset, content)
+      val (header, code0) =
+        if info.has(t"fuel") then Preamble.split(content) else (Unset, content)
+
       val code: Text = trimmed(code0)
 
       val preamble: Preamble = header.lay(Preamble.empty): (text: Text) =>
@@ -692,8 +764,14 @@ object Embedding:
       val source: Text =
         if preamble.frames.nil then code
         else
-          val frames: List[Preamble.Frame] = if code.trim == t"" then preamble.frames else preamble.frames + List(Preamble.Frame(code))
-          frames.reverse.seek { (frame: Preamble.Frame) => frame.language.or(language) == t"scala" }.let(_.code).or(Unset).or(t"")
+          val frames: List[Preamble.Frame] =
+            if code.trim == t"" then preamble.frames
+            else preamble.frames + List(Preamble.Frame(code))
+
+          val last: Optional[Preamble.Frame] = frames.reverse.seek: (frame: Preamble.Frame) =>
+            frame.language.or(language) == t"scala"
+
+          last.let(_.code).or(Unset).or(t"")
 
       (id, if language == t"scala" || !preamble.frames.nil then definitions(source) else Nil)
 
@@ -702,7 +780,8 @@ object Embedding:
 
   // The fallback: the content line by line, as unparsed tokens, numbered from the file.
   def plain(info: List[Text], content: Text, fence: Int): Block =
-    Block.Code(info.head.lay(Language.Plain) { (name: Text) => Language(name) }, lines(content), Nil, fence + 2)
+    val language: Language = info.head.lay(Language.Plain): (name: Text) => Language(name)
+    Block.Code(language, lines(content), Nil, fence + 2)
 
   def lines(content: Text): List[Block.Line] =
     trimmed(content).cut(t"\n").map: (line: Text) => Block.Line(List(Token.plain(line)))
@@ -736,6 +815,7 @@ object Notes:
       def recur(rest: List[Text], index: Int, consumed: Int): (Int, Int) = rest match
         case line :: tail =>
           val end: Int = consumed + line.length
+
           if offset <= end || tail.nil then (index, (offset - consumed).max(0).min(line.length))
           else recur(tail, index + 1, end + 1)
 

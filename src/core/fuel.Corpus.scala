@@ -35,9 +35,8 @@ package fuel
 // Excluded from the umbrella: `Compilation`, anthology's, which would outrank fuel's own.
 import soundness.{Compilation as _, *}
 
-import pyrocosm.Block
-
 import dysasymptotics.linearSize
+import pyrocosm.Block
 
 object Corpus:
   // `skipped` lists the files which could not be read or parsed, which the command reports in
@@ -58,4 +57,4 @@ case class Corpus(sections: List[Corpus.Section]):
   def problems: List[Block] =
     sections.bind[List[Block], Block, List[Block]]: (section: Corpus.Section) =>
       section.skipped.map(Compilation.unreadable) +
-        section.docs.bind[List[Block], Block, List[Block]] { (doc: Doc) => doc.problems }
+        section.docs.bind[List[Block], Block, List[Block]]: (doc: Doc) => doc.problems

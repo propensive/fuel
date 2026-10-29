@@ -59,27 +59,38 @@ object Workspace:
     // The file's directory is `.pyrocosm/fuel`, so the root is three levels up.
     val root: Text =
       Fuel.repoFile(directory).lay(directory): (file: Path on Linux) =>
-        val pyrocosm: Optional[Path on Linux] = file.parent.let { (dir: Path on Linux) => dir.parent }
-        val project: Optional[Path on Linux] = pyrocosm.let { (dir: Path on Linux) => dir.parent }
-        project.lay(directory) { (dir: Path on Linux) => dir.encode }
+        val pyrocosm: Optional[Path on Linux] = file.parent.let: (dir: Path on Linux) => dir.parent
+        val project: Optional[Path on Linux] = pyrocosm.let: (dir: Path on Linux) => dir.parent
+        project.lay(directory): (dir: Path on Linux) => dir.encode
 
     def entries(setting: Optional[Text]): List[Text] =
-      val split: List[Text] = setting.lay(Nil: List[Text]) { (text: Text) => text.cut(t":").filter(_ != t"") }
-      split.map { (entry: Text) => if entry.starts(t"/") then entry else t"$root/$entry" }
+      val split: List[Text] =
+        setting.lay(Nil: List[Text]): (text: Text) => text.cut(t":").filter(_ != t"")
+
+      split.map: (entry: Text) => if entry.starts(t"/") then entry else t"$root/$entry"
 
     val options: List[Text] =
-      ui.ScalacOption().lay(Nil: List[Text]) { (text: Text) => text.cut(t":").filter(_ != t"") }
+      ui.ScalacOption().lay(Nil: List[Text]): (text: Text) => text.cut(t":").filter(_ != t"")
 
     val fixtures: Optional[Text] =
-      ui.Fixtures().let { (entry: Text) => if entry.starts(t"/") then entry else t"$root/$entry" }
+      ui.Fixtures().let: (entry: Text) => if entry.starts(t"/") then entry else t"$root/$entry"
 
     val imports: List[Text] =
-      ui.Imports().lay(Nil: List[Text]) { (text: Text) => text.cut(t":").filter(_ != t"") }
+      ui.Imports().lay(Nil: List[Text]): (text: Text) => text.cut(t":").filter(_ != t"")
 
     val output: Optional[Text] =
-      ui.Output().let { (entry: Text) => if entry.starts(t"/") then entry else t"$root/$entry" }
+      ui.Output().let: (entry: Text) => if entry.starts(t"/") then entry else t"$root/$entry"
 
     Config
-      ( root, entries(ui.Classpath()), entries(ui.Document()), options, ui.Session().or(false), fixtures,
-        entries(ui.Source()), entries(ui.Overlay()), imports, output, entries(ui.Glossary()),
+      ( root,
+        entries(ui.Classpath()),
+        entries(ui.Document()),
+        options,
+        ui.Session().or(false),
+        fixtures,
+        entries(ui.Source()),
+        entries(ui.Overlay()),
+        imports,
+        output,
+        entries(ui.Glossary()),
         ui.CheckLinks().or(false) )

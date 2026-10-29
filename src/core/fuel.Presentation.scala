@@ -32,7 +32,7 @@
                                                                                                   */
 package fuel
 
-import soundness.{Language as _, Token as _, *}
+import soundness.*
 
 import codepages.utf8Codepage
 import dysasymptotics.{linearAccess, linearSize}
@@ -246,7 +246,7 @@ object Presentation:
 
       val code: List[Block] = fenced.filter:
         case Block.Code(_, _, _, _, _, _) => true
-        case _                         => false
+        case _                            => false
 
       Block.Leaf(unnumbered(code))
 

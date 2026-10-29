@@ -34,6 +34,8 @@ package fuel
 
 import java.util.concurrent as juc
 
+import scala.collection.immutable as sci
+
 import soundness.*
 
 import pyrocosm.Block
@@ -55,7 +57,7 @@ object Server:
 
   @scala.caps.unsafe.untrackedCaptures
   @volatile
-  private var pages0: scala.collection.immutable.Map[Text, List[Block]] = scala.collection.immutable.Map()
+  private var pages0: sci.Map[Text, List[Block]] = sci.Map()
 
   @scala.caps.unsafe.untrackedCaptures
   @volatile
@@ -70,10 +72,10 @@ object Server:
 
   def publish
     ( corpus:   Corpus,
-      api:      Api                                              = Api.empty,
-      pages:    scala.collection.immutable.Map[Text, List[Block]] = scala.collection.immutable.Map(),
-      imports:  List[Text]                                       = Nil,
-      glossary: List[Block]                                      = Nil )
+      api:      Api                        = Api.empty,
+      pages:    sci.Map[Text, List[Block]] = sci.Map(),
+      imports:  List[Text]                 = Nil,
+      glossary: List[Block]                = Nil )
   :   Unit =
 
     corpus0 = corpus
@@ -107,9 +109,11 @@ object Server:
 
     if !java.nio.file.Files.isRegularFile(path) then Hashes.path(entry) else
       val modified: Long = java.nio.file.Files.getLastModifiedTime(path).nn.toMillis
-      hashes.computeIfAbsent((entry, java.nio.file.Files.size(path), modified), _ => Hashes.path(entry)).nn
+      val key: (Text, Long, Long) = (entry, java.nio.file.Files.size(path), modified)
+      hashes.computeIfAbsent(key, _ => Hashes.path(entry)).nn
 
   // A jar's model, walked once per version of the jar.
   def jar(path: Text, shadowed: List[Text] = Nil)(walk: => Api): Api =
-    val modified: Long = java.nio.file.Files.getLastModifiedTime(java.nio.file.Path.of(path.s)).nn.toMillis
+    val file: java.nio.file.Path = java.nio.file.Path.of(path.s).nn
+    val modified: Long = java.nio.file.Files.getLastModifiedTime(file).nn.toMillis
     jars.computeIfAbsent((t"$path ${shadowed.join(t",")}", modified), _ => walk).nn

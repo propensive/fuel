@@ -32,7 +32,7 @@
                                                                                                   */
 package fuel
 
-import soundness.{Language as _, *}
+import soundness.*
 
 import pyrocosm.Block
 
