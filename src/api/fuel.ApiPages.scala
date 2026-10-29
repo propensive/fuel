@@ -88,7 +88,8 @@ object ApiPages:
     // not (its anchors are its own).
     def row(member: Api.Entity, d: Api.Declaration, anchored: Boolean): Block.Row =
       val kind: List[Inline] = List(Inline.Toned(Tone.Muted, Inline.text(d.kind.keyword)))
-      val name: List[Inline] = List(Inline.Strong(List(Inline.Link(Inline.Destination.Local(member.url), Inline.text(member.name)))))
+      val accent: Token.Accent = if d.kind.isType then Token.Accent.Typal else Token.Accent.Term
+      val name: List[Inline] = List(Inline.Strong(List(Signatures.code(List(Token(member.name, accent, Unset, Inline.Destination.Local(member.url)))))))
       val signature: List[Inline] = List(Signatures.code(Signatures.tokens(Syntax0.of(d), api, scope)))
       val info: List[Inline] = member.doc.let(_.info).let(Blocks.inline(_, resolver)).or(Nil)
       val tone: Optional[Tone] = if member.removed then Tone.Muted else Unset
