@@ -83,6 +83,12 @@ object Server:
     glossary0 = glossary
     edition0.incrementAndGet()
 
+    // The search index is built now, apart, rather than at the first keystroke.
+    val runnable: Runnable = () => { api.search; () }
+    val warm: java.lang.Thread = java.lang.Thread(runnable)
+    warm.setDaemon(true)
+    warm.start()
+
   def corpus: Optional[Corpus] = corpus0
   def api: Api = api0
   def imports: List[Text] = imports0

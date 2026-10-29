@@ -48,6 +48,38 @@ import stenography.Designator
 // given) and the givens of it and for it; then its Markdown detail, what it refers to, and —
 // for an entity nothing declares any more — the notice of its removal and what replaces it.
 object ApiPages:
+  // A declaration's row in a table of members; a member's own rows are anchored by its name,
+  // another page's are not (its anchors are its own). A `qualified` row, in a list drawn from
+  // across the API, says where the member is before its name.
+  def row(member: Api.Entity, d: Api.Declaration, anchored: Boolean, api: Api, scope: Scope, resolver: Resolver, qualified: Boolean = false): Block.Row =
+    val kind: List[Inline] = List(Inline.Toned(Tone.Muted, Inline.text(d.kind.keyword)))
+    val accent: Token.Accent = if d.kind.isType then Token.Accent.Typal else Token.Accent.Term
+    val where: List[Inline] =
+      if !qualified then Nil
+      else List(Inline.Toned(Tone.Muted, Inline.text(Text(member.key.s.substring(0, member.key.s.length - member.name.s.length).nn))))
+    val name: List[Inline] = where + List(Inline.Strong(List(Signatures.code(List(Token(member.name, accent, Unset, Inline.Destination.Local(member.url)))))))
+    val signature: List[Inline] = List(Signatures.code(Signatures.tokens(Syntax0.of(d), api, scope)))
+    val info: List[Inline] = member.doc.let(_.info).let(Blocks.inline(_, resolver)).or(Nil)
+    val tone: Optional[Tone] = if member.removed then Tone.Muted else Unset
+    Block.Row(List(Block.Cell(kind), Block.Cell(name), Block.Cell(signature), Block.Cell(info)), tone, Unset, if anchored then member.name else Unset)
+
+  def table(heading: Text, signature: Text, rows: List[Block.Row]): List[Block] =
+    val columns: List[Block.Column] =
+      List(Block.Column(Inline.text(t"")), Block.Column(Inline.text(heading)), Block.Column(Inline.text(signature)), Block.Column(Inline.text(t"Description")))
+
+    if rows.nil then Nil else List(Block.Table(columns, rows, Unset))
+
+  // The results of a search, as a page: what was asked, what could be said of it, and a table
+  // of the declarations found, each a row like a member's, said where it is.
+  def search(api: Api, text: Text, outcome: Search.Outcome, resolver: Resolver, scope: Scope): List[Block] =
+    val count: Int = outcome.hits.size
+    val summary: Text = if count == 1 then t"1 result for " else t"${count.toString.tt} results for "
+    val heading: Block = Block.Heading(1, Inline.text(t"Search"))
+    val asked: Block = Block.Paragraph(Inline.text(summary) + List(Inline.Snippet(Language.Scala, List(Token(text, Token.Accent.Unparsed)))))
+    val notices: List[Block] = outcome.notices.map { (notice: Text) => Block.Notice(Tone.Warning, Unset, List(Block.paragraph(notice))) }
+    val rows: List[Block.Row] = outcome.hits.map { (hit: Search.Hit) => row(hit.entity, hit.declaration, false, api, scope, resolver, qualified = true) }
+    List(heading, asked) + notices + table(t"Name", t"Signature", rows)
+
   def page(api: Api, entity: Api.Entity, resolver: Resolver, scope: Scope, embeddings: List[Embedding]): List[Block] =
     val doc: Optional[Api.Entry] = entity.doc
 
@@ -84,25 +116,11 @@ object ApiPages:
     val children: List[Api.Entity] = api.children(entity).filter(!_.hidden)
     val (parameters, others) = children.partition(_.isParameter)
 
-    // A declaration's row; a member's own rows are anchored by its name, another page's are
-    // not (its anchors are its own).
     def row(member: Api.Entity, d: Api.Declaration, anchored: Boolean): Block.Row =
-      val kind: List[Inline] = List(Inline.Toned(Tone.Muted, Inline.text(d.kind.keyword)))
-      val accent: Token.Accent = if d.kind.isType then Token.Accent.Typal else Token.Accent.Term
-      val name: List[Inline] = List(Inline.Strong(List(Signatures.code(List(Token(member.name, accent, Unset, Inline.Destination.Local(member.url)))))))
-      val signature: List[Inline] = List(Signatures.code(Signatures.tokens(Syntax0.of(d), api, scope)))
-      val info: List[Inline] = member.doc.let(_.info).let(Blocks.inline(_, resolver)).or(Nil)
-      val tone: Optional[Tone] = if member.removed then Tone.Muted else Unset
-      Block.Row(List(Block.Cell(kind), Block.Cell(name), Block.Cell(signature), Block.Cell(info)), tone, Unset, if anchored then member.name else Unset)
+      ApiPages.row(member, d, anchored, api, scope, resolver)
 
     def rows(members: List[Api.Entity]): List[Block.Row] = members.bind: (member: Api.Entity) =>
       member.declarations.map(row(member, _, true))
-
-    def table(heading: Text, signature: Text, rows: List[Block.Row]): List[Block] =
-      val columns: List[Block.Column] =
-        List(Block.Column(Inline.text(t"")), Block.Column(Inline.text(heading)), Block.Column(Inline.text(signature)), Block.Column(Inline.text(t"Description")))
-
-      if rows.nil then Nil else List(Block.Table(columns, rows, Unset))
 
     // The parameters belong to the signature of the type, where there is one, since a class's
     // are its constructor's; else to the term's.

@@ -33,7 +33,7 @@
 package fuel
 
 // Excluded from the umbrella: `Compilation`, anthology's, which would outrank fuel's own.
-import soundness.{Compilation as _, Language as _, Token as _, *}
+import soundness.{Compilation as _, Language as _, Token as _, Query as _, *}
 
 import dysasymptotics.{linearAccess, linearSize}
 import scala.jdk.CollectionConverters.*
@@ -1056,6 +1056,278 @@ extension (doc: Doc) def titled: String = doc.title
         (marks(t"sample"), marks(t"sample.Doc"))
       . assert(_ == ( List(Inline.Import(t"/api/sample", t"sample"), Inline.Bookmark(t"/api/sample", t"sample")),
                       List(Inline.Bookmark(t"/api/sample.Doc", t"sample.Doc")) ))
+
+    suite(m"Search"):
+      import Query.{Form, Name, TypeQuery}
+      import Api.Kind
+
+      // An unparseable query is the empty one, which no assertion below expects.
+      def query(text: Text): Query = Query.read(text) match
+        case query: Query => query
+        case _            => Query()
+
+      def fails(text: Text): Boolean = Query.read(text) match
+        case error: Query.Error => true
+        case _                  => false
+      def tq(name: Text, args: TypeQuery*): TypeQuery = TypeQuery(name, List(args*))
+
+      // The sample with its dependencies, as the daemon models a project: the standard library
+      // gives `String` its alias and `List` its subtypes.
+      val full: Api =
+        val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
+        val jar: Text = t"$here/out/fuel/launcher/assembly.dest/out.jar"
+
+        val dependencies: Api | Throwable =
+          Checking.session(classpath, Nil): (checker: Checker) =>
+            checker.context.lay[Api | Throwable](Api.empty) { (context: dotty.tools.dotc.core.Contexts.Context) => Inspection.classpath(List(jar), context) }
+
+        dependencies match
+          case api: Api => api.merge(api0)
+          case _        => api0
+
+      // The keys of the sample's hits, in order, each once.
+      def keys(text: Text): List[Text] =
+        List.from(full.search(query(text)).hits.stdlib.map(_.entity.key).filter(_.starts(t"sample.")).distinct)
+
+      def count(text: Text): Int = full.search(query(text)).hits.stdlib.count(_.entity.key.starts(t"sample."))
+
+      suite(m"Parsing"):
+        test(m"+List"):
+          query(t"+List")
+        . assert(_ == Query(results = List(tq(t"List"))))
+
+        test(m"+List[Int]"):
+          query(t"+List[Int]")
+        . assert(_ == Query(results = List(tq(t"List", tq(t"Int")))))
+
+        test(m"-Either[Int, String]"):
+          query(t"-Either[Int, String]")
+        . assert(_ == Query(parameters = List(tq(t"Either", tq(t"Int"), tq(t"String")))))
+
+        test(m"+List[Int] -String"):
+          query(t"+List[Int] -String")
+        . assert(_ == Query(results = List(tq(t"List", tq(t"Int"))), parameters = List(tq(t"String"))))
+
+        test(m"a tuple is a TupleN"):
+          query(t"+(Int, Double, String) -String")
+        . assert(_ == Query(results = List(tq(t"scala.Tuple3", tq(t"Int"), tq(t"Double"), tq(t"String"))), parameters = List(tq(t"String"))))
+
+        test(m"a function is a FunctionN, and a context function a ContextFunctionN"):
+          query(t"+List[String => Int] -(Int ?=> Int)")
+        . assert(_ == Query(results = List(tq(t"List", tq(t"scala.Function1", tq(t"String"), tq(t"Int")))), parameters = List(tq(t"scala.ContextFunction1", tq(t"Int"), tq(t"Int")))))
+
+        test(m"a bare word is a fuzzy name"):
+          query(t"testing +String -Int")
+        . assert(_ == Query(names = List(Name(t"testing", false)), results = List(tq(t"String")), parameters = List(tq(t"Int"))))
+
+        test(m"# is a type member"):
+          query(t"#testing +String -Int")
+        . assert(_ == Query(form = Form.Type, names = List(Name(t"testing", false)), results = List(tq(t"String")), parameters = List(tq(t"Int"))))
+
+        test(m". is a term member, glued or not"):
+          (query(t".testing"), query(t". testing"))
+        . assert(_ == (Query(form = Form.Term, names = List(Name(t"testing", false))), Query(form = Form.Term, names = List(Name(t"testing", false)))))
+
+        test(m"/ is a package, dotted, spaced or not"):
+          (query(t"/my.package.name #Testing"), query(t"/ mypackage"))
+        . assert(_ == (Query(packages = List(t"my.package.name"), form = Form.Type, names = List(Name(t"Testing", false))), Query(packages = List(t"mypackage"))))
+
+        test(m"trailing space is nothing"):
+          query(t"/my.package.name #Testing +List[String => Int] -Int ")
+        . assert(_ == Query(packages = List(t"my.package.name"), form = Form.Type, names = List(Name(t"Testing", false)), results = List(tq(t"List", tq(t"scala.Function1", tq(t"String"), tq(t"Int")))), parameters = List(tq(t"Int"))))
+
+        test(m"backticks are an exact name"):
+          query(t"`parse`")
+        . assert(_ == Query(names = List(Name(t"parse", true))))
+
+        test(m"backticks make a symbol a name"):
+          query(t"`+` `::`")
+        . assert(_ == Query(names = List(Name(t"+", true), Name(t"::", true))))
+
+        test(m"backticks make a keyword a name"):
+          query(t"`type`")
+        . assert(_ == Query(names = List(Name(t"type", true))))
+
+        test(m"a kind keyword"):
+          query(t"def parse")
+        . assert(_ == Query(kinds = scala.collection.immutable.Set(Kind.Def), names = List(Name(t"parse", false))))
+
+        test(m"case class is one keyword; case alone is a case"):
+          (query(t"case class").kinds, query(t"case").kinds)
+        . assert(_ == (scala.collection.immutable.Set(Kind.CaseClass), scala.collection.immutable.Set(Kind.Case)))
+
+        test(m"a modifier keyword"):
+          query(t"inline def")
+        . assert(_ == Query(kinds = scala.collection.immutable.Set(Kind.Def), modifiers = scala.collection.immutable.Set(t"inline")))
+
+        test(m"? is given and ~ is extension"):
+          (query(t"?").kinds, query(t"given").kinds, query(t"~").kinds)
+        . assert(_ == (scala.collection.immutable.Set(Kind.Given), scala.collection.immutable.Set(Kind.Given), scala.collection.immutable.Set(Kind.Extension)))
+
+        test(m"type is a type or a type parameter"):
+          query(t"type").kinds
+        . assert(_ == scala.collection.immutable.Set(Kind.Type, Kind.TypeParam))
+
+        test(m"private warns"):
+          query(t"private").warnings.size
+        . assert(_ == 1)
+
+        test(m"an unterminated backtick fails"):
+          fails(t"`parse")
+        . assert(_ == true)
+
+        test(m"an unterminated bracket fails"):
+          fails(t"+List[Int")
+        . assert(_ == true)
+
+        test(m"a bare symbol fails"):
+          fails(t"::")
+        . assert(_ == true)
+
+        test(m"a sigil without a type fails"):
+          fails(t"+")
+        . assert(_ == true)
+
+      suite(m"Lattice"):
+        val lattice: Lattice = full.lattice
+        def sub(a: Text, b: Text): Boolean = lattice.isSubtype(lattice.id(a).or(-1), lattice.id(b).or(-1))
+
+        test(m"Doc is a Shape"):
+          sub(t"sample.Doc", t"sample.Shape")
+        . assert(_ == true)
+
+        test(m"Doc is Any and AnyRef, not AnyVal"):
+          (sub(t"sample.Doc", t"scala.Any"), sub(t"sample.Doc", t"scala.AnyRef"), sub(t"sample.Doc", t"scala.AnyVal"))
+        . assert(_ == (true, true, false))
+
+        test(m"Int is AnyVal, not AnyRef"):
+          (sub(t"scala.Int", t"scala.AnyVal"), sub(t"scala.Int", t"scala.AnyRef"))
+        . assert(_ == (true, false))
+
+        test(m"Nothing is beneath everything; Null beneath references only"):
+          (sub(t"scala.Nothing", t"sample.Doc"), sub(t"scala.Null", t"sample.Doc"), sub(t"scala.Null", t"scala.Int"))
+        . assert(_ == (true, true, false))
+
+        test(m"String is a CharSequence"):
+          sub(t"java.lang.String", t"java.lang.CharSequence")
+        . assert(_ == true)
+
+        test(m"Predef.String expands to java.lang.String"):
+          full.expand(Api.Shape.Named(t"scala.Predef.String"))
+        . assert(_ == Api.Shape.Named(t"java.lang.String"))
+
+        test(m"Pair[Int] expands to a tuple"):
+          full.expand(Api.Shape.Named(t"sample.Util.Pair", List(Api.Shape.Named(t"scala.Int"))))
+        . assert(_ == Api.Shape.Named(t"scala.Tuple2", List(Api.Shape.Named(t"scala.Int"), Api.Shape.Named(t"scala.Int"))))
+
+      suite(m"Results"):
+        test(m"+Shape finds what returns a Doc"):
+          keys(t"+Shape")
+        . assert(_ == List(t"sample.Doc.parse"))
+
+        test(m"+Shape[Int] finds a Doc through its parent; +Shape[String] does not"):
+          (keys(t"+Shape[Int]"), keys(t"+Shape[String]"))
+        . assert(_ == (List(t"sample.Doc.parse"), Nil))
+
+        test(m"+Doc"):
+          keys(t"+Doc")
+        . assert(_ == List(t"sample.Doc.parse"))
+
+        test(m"+Double"):
+          keys(t"+Double")
+        . assert(_ == List(t"sample.Doc#area", t"sample.Shape#area"))
+
+        test(m"+AnyVal finds the value-typed"):
+          keys(t"+AnyVal")
+        . assert(_ == List(t"sample.Doc#area", t"sample.Doc#size", t"sample.Shape#area", t"sample.Util.limit"))
+
+        test(m"+Any finds everything with a result"):
+          keys(t"+Any").size
+        . assert(_ >= 8)
+
+        test(m"+String is java.lang.String"):
+          (keys(t"+String"), keys(t"+java.lang.String"))
+        . assert { (a, b) => a == b && a == List(t"sample.Doc#shout", t"sample.Doc#title", t"sample.Util.twice") }
+
+        test(m"+Ordering[Doc] finds the given"):
+          keys(t"+Ordering[Doc]")
+        . assert(_ == List(t"sample.Util.given_Ordering_Doc"))
+
+        test(m"a type nothing is called says so"):
+          full.search(query(t"+Nonesuch99")).notices.size
+        . assert(_ == 1)
+
+        test(m"+List is every List"):
+          full.search(query(t"+List")).hits.size > 100
+        . assert(_ == true)
+
+      suite(m"Parameters"):
+        test(m"-String finds what takes a String, a receiver among them"):
+          keys(t"-String")
+        . assert(_ == List(t"sample.Doc", t"sample.Doc.parse", t"sample.Util.twice"))
+
+        test(m"-CharSequence finds nothing taking a String, a String being beneath it"):
+          keys(t"-CharSequence")
+        . assert(_ == Nil)
+
+        test(m"-Int finds the overload with a size"):
+          (keys(t"-Int"), count(t"-Int"))
+        . assert(_ == (List(t"sample.Doc", t"sample.Doc.parse"), 2))
+
+        test(m"-Nothing finds every parameterised declaration; -Any only what takes Any"):
+          (keys(t"-Nothing"), keys(t"-Any"))
+        . assert(_ == (List(t"sample.Doc", t"sample.Doc.parse", t"sample.Util.twice"), Nil))
+
+        test(m"-Shape finds nothing in the sample, but something takes Any"):
+          (keys(t"-Shape"), full.search(query(t"-Shape")).hits.size > 0)
+        . assert(_ == (Nil, true))
+
+      suite(m"Names and criteria"):
+        test(m"an exact name"):
+          (keys(t"`parse`"), count(t"`parse`"))
+        . assert(_ == (List(t"sample.Doc.parse"), 2))
+
+        test(m"a fuzzy name, at radius one"):
+          keys(t"pars")
+        . assert(_ == List(t"sample.Doc.parse"))
+
+        test(m"a name differing in case is exact"):
+          full.search(query(t"Parse")).hits.stdlib.filter(_.entity.key.starts(t"sample.")).forall(_.exact)
+        . assert(_ == true)
+
+        test(m"inline finds nothing; private finds nothing and warns"):
+          (count(t"inline"), count(t"private"), full.search(query(t"private")).notices.size)
+        . assert(_ == (0, 0, 1))
+
+        test(m"/sample.Util -String"):
+          keys(t"/sample.Util -String")
+        . assert(_ == List(t"sample.Util.twice"))
+
+        test(m"# and . choose the type or the term"):
+          (full.search(query(t"/sample #Doc")).hits.map(_.declaration.kind), full.search(query(t"/sample .Doc")).hits.map(_.declaration.kind))
+        . assert(_ == (List(Kind.CaseClass), List(Kind.Object)))
+
+        test(m"? finds the given and ~ the extension"):
+          (keys(t"/sample ?"), keys(t"/sample ~"))
+        . assert(_ == (List(t"sample.Util.given_Ordering_Doc"), List(t"sample.Util.twice")))
+
+        test(m"+Doc -Int is one overload"):
+          count(t"+Doc -Int")
+        . assert(_ == 1)
+
+        test(m"type Pair"):
+          keys(t"type Pair")
+        . assert(_ == List(t"sample.Util.Pair"))
+
+        test(m"val"):
+          keys(t"/sample val")
+        . assert(_ == List(t"sample.Doc#size", t"sample.Doc#title", t"sample.Util.limit"))
+
+        test(m"the search builds quickly and widely"):
+          val start: Long = java.lang.System.nanoTime
+          val count: Int = full.search(query(t"+Any")).hits.size
+          ((java.lang.System.nanoTime - start)/1000000L < 2000L, count > 1000)
+        . assert(_ == (true, true))
 
     suite(m"Overlays"):
       val overlay: Text = t"""base sample
