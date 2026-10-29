@@ -1225,6 +1225,120 @@ extension (doc: Doc) def titled: String = doc.title
           full.expand(Api.Shape.Named(t"sample.Util.Pair", List(Api.Shape.Named(t"scala.Int"))))
         . assert(_ == Api.Shape.Named(t"scala.Tuple2", List(Api.Shape.Named(t"scala.Int"), Api.Shape.Named(t"scala.Int"))))
 
+        test(m"a type's written parents, in order, and the types which name it"):
+          val doc: Int = lattice.id(t"sample.Doc").or(-1)
+          val shape: Int = lattice.id(t"sample.Shape").or(-1)
+          (lattice.parents(doc), lattice.children(shape).contains(doc), lattice.primaryParent(doc), lattice.parents(shape))
+        . assert(_ == (scala.List(lattice.id(t"sample.Shape").or(-1)), true, lattice.id(t"sample.Shape").or(-1), scala.Nil))
+
+      suite(m"Hierarchy"):
+        import Hierarchy.{Edge, Graph, Node, Role}
+
+        def node(key: Text, role: Role): Node =
+          val name: Text = Text(key.s.substring(key.s.lastIndexOf('.') + 1).nn)
+          Node(key, name, Text(key.s.substring(0, (key.s.length - name.s.length - 1).max(0)).nn), key, role)
+
+        def laid(graph: Graph): Hierarchy.Layout = Hierarchy.layout(graph).or(Hierarchy.Layout(Nil, Nil, Nil, 0, 0))
+        def box(layout: Hierarchy.Layout, key: Text): Hierarchy.Box = layout.boxes.stdlib.find(_.node.key == key).get
+
+        val chain: Graph =
+          Graph(List(node(t"sample.A", Role.Current), node(t"sample.B", Role.Ancestor), node(t"scala.Any", Role.Universal)),
+                List(Edge(t"sample.A", t"sample.B"), Edge(t"sample.B", t"scala.Any")), t"sample.A")
+
+        test(m"a chain is one column, Any on top"):
+          val layout: Hierarchy.Layout = laid(chain)
+          val (a, b, any) = (box(layout, t"sample.A"), box(layout, t"sample.B"), box(layout, t"scala.Any"))
+          (layout.boxes.size, any.y < b.y && b.y < a.y, a.centre == b.centre && b.centre == any.centre)
+        . assert(_ == (3, true, true))
+
+        val diamond: Graph =
+          Graph(List(node(t"d.D", Role.Current), node(t"d.B", Role.Ancestor), node(t"d.C", Role.Ancestor), node(t"d.A", Role.Ancestor)),
+                List(Edge(t"d.D", t"d.B"), Edge(t"d.D", t"d.C"), Edge(t"d.B", t"d.A"), Edge(t"d.C", t"d.A")), t"d.D")
+
+        test(m"a diamond's middle shares a layer without overlap, and its ends align"):
+          val layout: Hierarchy.Layout = laid(diamond)
+          val (a, b, c, d) = (box(layout, t"d.A"), box(layout, t"d.B"), box(layout, t"d.C"), box(layout, t"d.D"))
+          val apart: Boolean = b.x + b.w <= c.x || c.x + c.w <= b.x
+          (b.y == c.y, apart, (a.centre - d.centre).abs <= 1)
+        . assert(_ == (true, true, true))
+
+        val traits: Graph =
+          Graph(List(node(t"t.T", Role.Current), node(t"t.P", Role.Ancestor), node(t"t.Q", Role.Ancestor), node(t"t.R", Role.Ancestor)),
+                List(Edge(t"t.T", t"t.P"), Edge(t"t.T", t"t.Q"), Edge(t"t.T", t"t.R")), t"t.T")
+
+        test(m"a type with three parents sits beneath their middle"):
+          val layout: Hierarchy.Layout = laid(traits)
+          val parents: scala.List[Hierarchy.Box] = scala.List(box(layout, t"t.P"), box(layout, t"t.Q"), box(layout, t"t.R"))
+          val mean: Int = parents.map(_.centre).sum/3
+          (parents.map(_.y).distinct.size, (box(layout, t"t.T").centre - mean).abs <= 1, layout.stems.size)
+        . assert(_ == (1, true, 3))
+
+        val skipping: Graph =
+          Graph(List(node(t"s.A", Role.Current), node(t"s.B", Role.Ancestor), node(t"s.C", Role.Ancestor)),
+                List(Edge(t"s.A", t"s.C"), Edge(t"s.A", t"s.B"), Edge(t"s.B", t"s.C")), t"s.A")
+
+        test(m"a long edge passes its intermediate layer clear of the box there"):
+          val layout: Hierarchy.Layout = laid(skipping)
+          val long: Hierarchy.Route = layout.routes.stdlib.find(_.edge == Edge(t"s.A", t"s.C")).get
+          val b: Hierarchy.Box = box(layout, t"s.B")
+          val through: Int = long.points(2)._1
+          (long.points.length >= 5, through < b.x || through > b.x + b.w)
+        . assert(_ == (true, true))
+
+        // A parent with five children, hand-built, for peers and the note of more.
+        val family: Api =
+          def entity(name: Text, parent: Optional[Text]): Api.Entity =
+            val shapes: List[Api.Shape] = parent.let { (p: Text) => List(Api.Shape.Named(p)) }.or(Nil)
+            Api.Entity(stenography.Designator.Top(t"p"), name, true, template = Api.Declaration(Api.Kind.Class, parentShapes = shapes), bases = parent.let(List(_)).or(Nil))
+
+          val all: scala.List[Api.Entity] = entity(t"P", Unset) :: entity(t"Lone", Unset) :: scala.List(t"C1", t"C2", t"C3", t"C4", t"C5").map(entity(_, t"p.P"))
+          Api(all.map { e => e.key -> e }.toMap)
+
+        val sibling: Optional[Graph] = family(t"p.C1").let { (e: Api.Entity) => Hierarchy.of(family, e, Scope.document(Nil)) }
+
+        test(m"three peers are drawn, and the rest noted"):
+          sibling.let { (g: Graph) => (g.nodes.stdlib.count(_.role == Role.Peer), g.nodes.stdlib.filter(_.role == Role.More).map(_.name)) }
+        . assert(_ == (3, scala.List(t"…and 1 more")))
+
+        test(m"the parent's children are peers under it, and the drawing says so"):
+          sibling.let(Hierarchy.alt(_))
+        . assert(_ == t"C1 extends P; a sibling of C2, C3, C4 and …and 1 more under P.")
+
+        test(m"the SVG links each box in-app, by a relative path, with nothing honeycomb rejects"):
+          val svg: Text = sibling.let { (g: Graph) => Hierarchy.layout(g).let(Hierarchy.svg(_)) }.or(t"")
+          val digits: Boolean = svg.s.matches("(?s).*\\s[A-Za-z-]*[0-9][A-Za-z0-9-]*=\".*")
+          (svg.contains(t"pyro-locate"), svg.contains(t"""href="p.C2""""), svg.contains(t"<line"), svg.contains(t"xlink"), digits, svg.contains(t"font-family: var(--pyro-font-mono)"))
+        . assert(_ == (true, true, false, false, false, true))
+
+        test(m"a name with angle brackets is escaped"):
+          val graph: Graph = Graph(List(node(t"x.Foo<Bar>", Role.Current), node(t"x.Base", Role.Ancestor)), List(Edge(t"x.Foo<Bar>", t"x.Base")), t"x.Foo<Bar>")
+          Hierarchy.layout(graph).let(Hierarchy.svg(_)).or(t"").contains(t"Foo&lt;Bar&gt;")
+        . assert(_ == true)
+
+        def figures(key: Text): List[Block.Figure] =
+          api0(key).let: (entity: Api.Entity) =>
+            val scope: Scope = Scope.of(entity, Nil)
+            ApiPages.page(api0, entity, Resolver(api0, scope), scope, Nil).bind { case figure: Block.Figure => List(figure); case _ => Nil }
+          . or(Nil)
+
+        test(m"Doc's page draws its hierarchy after its signature, naming its parent as written"):
+          api0(t"sample.Doc").let: (entity: Api.Entity) =>
+            val scope: Scope = Scope.of(entity, Nil)
+            val page: List[Block] = ApiPages.page(api0, entity, Resolver(api0, scope), scope, Nil)
+            val at: Int = page.stdlib.indexWhere { case _: Block.Figure => true; case _ => false }
+            val after: Boolean = at > 0 && page.stdlib(at - 1).isInstanceOf[Block.Code]
+            (after, figures(t"sample.Doc").map { f => Blocks.plain(f.figure.alt) })
+        . assert(_ == (true, List(t"Doc extends Shape[Int].")))
+
+        test(m"Shape's page names the type which extends it"):
+          figures(t"sample.Shape").map { f => Blocks.plain(f.figure.alt) }
+        . assert(_ == List(t"Shape; extended by Doc."))
+
+        test(m"an object, and a class with nothing but AnyRef above it, draw nothing"):
+          val lone: Optional[Graph] = family(t"p.Lone").let { (e: Api.Entity) => Hierarchy.of(family, e, Scope.document(Nil)) }
+          (figures(t"sample.Util").size, lone.present)
+        . assert(_ == (0, false))
+
       suite(m"Results"):
         test(m"+Shape finds what returns a Doc"):
           keys(t"+Shape")

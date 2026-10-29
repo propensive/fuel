@@ -45,7 +45,9 @@ import soundness.{Language as _, Token as _, *}
 // are predicates rather than rows (`Any` and `Matchable` are above everything; `AnyRef` and
 // `java.lang.Object` above every type that is not a value type; `AnyVal` above the primitives
 // and the classes whose bases say so; `Nothing` beneath everything, `Null` beneath every
-// reference type), so no row is the length of the model. Java classes have no TASTy, so their
+// reference type), so no row is the length of the model. Besides the linearisation, each type
+// keeps its *direct* parents as written (`parents`), and so its direct `children`, which a
+// hierarchy is drawn from. Java classes have no TASTy, so their
 // supertypes are known only where `Lattice.javaTypes` says them; any other Java key is a leaf
 // beneath `AnyRef`.
 object Lattice:
@@ -118,6 +120,10 @@ object Lattice:
 
     val entities: scala.List[Api.Entity] = api.entities.values.toList
 
+    // Each template's direct parents, as written, by the id of the type; `java.lang.Object` is
+    // `AnyRef`.
+    val written: scm.HashMap[Int, scala.List[Int]] = scm.HashMap()
+
     entities.foreach: entity =>
       if entity.template.present || entity.declarations.exists(_.kind.isType) then id(entity.key)
       entity.bases.stdlib.foreach(id)
@@ -126,6 +132,13 @@ object Lattice:
         heads(declaration.returns.let(scala.List(_)).or(scala.Nil))
         heads(declaration.accepts.stdlib)
         heads(declaration.parentShapes.stdlib)
+
+      entity.template.let: template =>
+        val parents: scala.List[Int] =
+          template.parentShapes.stdlib.flatMap { shape => head(api.expand(shape)).let(scala.List(_)).or(scala.Nil) }
+          . map { key => if key == obj then anyRef else key }.map(id).distinct
+
+        if parents.nonEmpty then written(id(entity.key)) = parents
 
     val size: Int = keys.length
     val supers: scala.Array[scala.Array[Int]] = new scala.Array(size)
@@ -152,31 +165,43 @@ object Lattice:
         distances(index) = scala.Array.empty[Int]
       index += 1
 
-    // The inversion, by counting each type's subtypes before placing them.
-    val counts: scala.Array[Int] = new scala.Array(size)
-    supers.foreach(_.foreach { base => counts(base) += 1 })
-    val subs: scala.Array[scala.Array[Int]] = scala.Array.tabulate(size) { base => new scala.Array[Int](counts(base)) }
-    val filled: scala.Array[Int] = new scala.Array(size)
+    // An inversion, by counting each type's subtypes before placing them.
+    def invert(rows: scala.Array[scala.Array[Int]]): scala.Array[scala.Array[Int]] =
+      val counts: scala.Array[Int] = new scala.Array(size)
+      rows.foreach(_.foreach { base => counts(base) += 1 })
+      val inverted: scala.Array[scala.Array[Int]] = scala.Array.tabulate(size) { base => new scala.Array[Int](counts(base)) }
+      val filled: scala.Array[Int] = new scala.Array(size)
 
-    index = 0
-    while index < size do
-      supers(index).foreach: base =>
-        subs(base)(filled(base)) = index
-        filled(base) += 1
-      index += 1
+      var index: Int = 0
+      while index < size do
+        rows(index).foreach: base =>
+          inverted(base)(filled(base)) = index
+          filled(base) += 1
+        index += 1
+
+      inverted
+
+    val subs: scala.Array[scala.Array[Int]] = invert(supers)
+
+    val directSupers: scala.Array[scala.Array[Int]] =
+      scala.Array.tabulate(size) { i => written.get(i).map(_.toArray).getOrElse(scala.Array.empty[Int]) }
+
+    val directSubs: scala.Array[scala.Array[Int]] = invert(directSupers).map(_.sortBy(keys(_).s))
 
     val anyValId: Int = id(anyVal)
     val value: scala.Array[Boolean] = scala.Array.tabulate(size) { i => primitives.contains(keys(i)) || _root_.java.util.Arrays.binarySearch(supers(i), anyValId) >= 0 }
 
-    new Lattice(ids.toMap, keys.toArray, supers, distances, subs, value)
+    new Lattice(ids.toMap, keys.toArray, supers, distances, subs, directSupers, directSubs, value)
 
 final class Lattice private
   ( ids:    sci.Map[Text, Int],
     keys:   scala.Array[Text],
     supers:    scala.Array[scala.Array[Int]],
-    distances: scala.Array[scala.Array[Int]],
-    subs:      scala.Array[scala.Array[Int]],
-    value:     scala.Array[Boolean] ):
+    distances:    scala.Array[scala.Array[Int]],
+    subs:         scala.Array[scala.Array[Int]],
+    directSupers: scala.Array[scala.Array[Int]],
+    directSubs:   scala.Array[scala.Array[Int]],
+    value:        scala.Array[Boolean] ):
 
   private val anyId: Int = ids(Lattice.any)
   private val matchableId: Int = ids(Lattice.matchable)
@@ -187,6 +212,12 @@ final class Lattice private
   private val nullId: Int = ids(Lattice.nul)
 
   def size: Int = keys.length
+
+  // A type's direct parents, as written, and the types which name it as one; the universal
+  // types are nobody's written parent.
+  def parents(id: Int): scala.List[Int] = directSupers(id).iterator.toList
+  def children(id: Int): scala.List[Int] = directSubs(id).iterator.toList
+  def primaryParent(id: Int): Optional[Int] = directSupers(id).iterator.nextOption().getOrElse(Unset)
   def id(key: Text): Optional[Int] = ids.get(key).getOrElse(Unset)
   def key(id: Int): Text = keys(id)
 
