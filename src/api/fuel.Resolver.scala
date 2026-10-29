@@ -37,7 +37,7 @@ import java.util.concurrent as juc
 import soundness.{Language as _, Token as _, *}
 
 import dysasymptotics.{linearAccess, linearSize}
-import pyrocosm.{Inline, Token}
+import pyrocosm.{Inline, Purview, Token}
 import stenography.{Designator, Syntax}
 
 // The scope a page's references resolve in: the entity it is about and those enclosing it (so
@@ -58,12 +58,19 @@ object Scope:
   // A document's scope: no enclosing entity, and the project's imports.
   def document(imports: List[Text]): Scope = Scope(Nil, imports.map(Designator(_)))
 
+  // The imports as a reader's starting purview: each is the page of the package or object it
+  // names, which is where a renderer elides them from, and what a reader may toggle.
+  def purview(imports: List[Text]): Purview =
+    Purview(imports.map { (name: Text) => Purview.Entry(t"/api/$name", name) })
+
 case class Scope(enclosing: List[Designator], imports: List[Designator]):
   def all: List[Designator] = enclosing + imports + Scope.standard
 
   // Whether a designator's members may be named by their leaf in this scope, which is what
-  // decides how a signature elides a qualifier.
-  def has(designator: Designator): Boolean = all.has(designator)
+  // decides how a signature elides a qualifier. The imports resolve a reference but do not
+  // elide: a page is rendered once and read under each reader's purview (Pyrocosm's), which
+  // begins as these imports and is what elides them, so a signature writes them in full.
+  def has(designator: Designator): Boolean = (enclosing + Scope.standard).has(designator)
 
 // `page` is the URL of the page the references are on, which a name the page's own fragments
 // define leads to.

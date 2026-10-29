@@ -37,7 +37,7 @@ import soundness.{Compilation as _, Language as _, Token as _, *}
 
 import dysasymptotics.{linearAccess, linearSize}
 import scala.jdk.CollectionConverters.*
-import pyrocosm.{Block, Inline, Language, TerminalRenderer, Token, Tone}
+import pyrocosm.{Block, Inline, Language, Purview, TerminalRenderer, Token, Tone}
 import systems.javaBaseSystem
 
 object Tests extends Suite(m"Fuel tests"):
@@ -1045,6 +1045,18 @@ extension (doc: Doc) def titled: String = doc.title
         . or(Nil)
       . assert(_.has(t"extension (text: String)"))
 
+      test(m"a package's heading carries its import toggle and bookmark; a type's, its bookmark alone"):
+        def marks(key: Text): List[Inline] =
+          api0(key).let: (entity: Api.Entity) =>
+            val scope: Scope = Scope.of(entity, Nil)
+            val page: List[Block] = ApiPages.page(api0, entity, Resolver(api0, scope), scope, Nil)
+            page.bind { case Block.Heading(1, content, _) => content.filter { case Inline.Import(_, _) | Inline.Bookmark(_, _) => true; case _ => false }; case _ => Nil }
+          . or(Nil)
+
+        (marks(t"sample"), marks(t"sample.Doc"))
+      . assert(_ == ( List(Inline.Import(t"/api/sample", t"sample"), Inline.Bookmark(t"/api/sample", t"sample")),
+                      List(Inline.Bookmark(t"/api/sample.Doc", t"sample.Doc")) ))
+
     suite(m"Overlays"):
       val overlay: Text = t"""base sample
 import scala
@@ -1201,12 +1213,22 @@ entry .Doc   a document
         (r.link(t"Doc", doc).present, r.link(t"x", doc).present)
       . assert(_ == (true, false))
 
-      test(m"a signature is tokens, its designators linked and elided by the scope"):
+      test(m"a signature is tokens, its designators linked, and written in full under an import"):
         val api: Api = Tests.this.api0
         val parse: Api.Declaration = api(t"sample.Doc.parse").let(_.definition).or(Api.Declaration(Api.Kind.Def))
         val tokens = Signatures.declaration(t"parse", parse, api, Scope.document(List(t"sample")))
         (tokens.map(_.text).join(t""), tokens.seek(_.text == t"Doc").let(_.link))
-      . assert(_ == (t"def parse(text: String): Doc", Inline.Destination.Local(t"/api/sample.Doc")))
+      . assert(_ == (t"def parse(text: String): sample.Doc", Inline.Destination.Local(t"/api/sample.Doc")))
+
+      test(m"a signature is elided by the enclosing scope alone"):
+        val api: Api = Tests.this.api0
+        val parse: Api.Declaration = api(t"sample.Doc.parse").let(_.definition).or(Api.Declaration(Api.Kind.Def))
+        api(t"sample.Doc").let { (doc: Api.Entity) => Signatures.declaration(t"parse", parse, api, Scope.of(doc, Nil)).map(_.text).join(t"") }
+      . assert(_ == t"def parse(text: String): Doc")
+
+      test(m"the project's imports are a reader's starting purview, one entry per page"):
+        Scope.purview(List(t"sample", t"scala.Predef")).imports
+      . assert(_ == List(Purview.Entry(t"/api/sample", t"sample"), Purview.Entry(t"/api/scala.Predef", t"scala.Predef")))
 
       val qualifiedSample: List[(Text, Optional[Text], Boolean)] =
         List
