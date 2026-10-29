@@ -46,7 +46,8 @@ import dysasymptotics.{linearAccess, linearSize}
 import interpreters.posixInterpreter
 import palettes.solarizedDarkGaugePalette
 import probates.cancelProbate
-import pyrocosm.{Block, Inline, TerminalRenderer, Tone, Tool}
+import pyrocosm.{Block, Inline, TerminalRenderer, Tone, Tool, Board}
+import pyrocosm.Boards.{show as showBoard}
 import tableStyles.thickTableStyle
 import textMetrics.uniformMetric
 import threads.platformThreads
@@ -130,7 +131,7 @@ val Fuel: Tool =
 // tracked, so each arm seals them once with `unsafeAssumePure` — they outlive the command they
 // drive — before calling the body.
 private inline def ambient[result <: Termination: scala.Precise]
-  ( inline body: (Stdio, Environment, WorkingDirectory) ?=> result )
+  ( inline body: (Stdio, Console, Environment, WorkingDirectory) ?=> result )
   ( using Cli )
   ( using result is Status.Admissible )
 :   Execution to result =
@@ -138,6 +139,7 @@ private inline def ambient[result <: Termination: scala.Precise]
   execute:
     (erased effectful: Effectful) ?=> (invocation: Invocation) ?=>
       given Stdio = caps.unsafe.unsafeAssumePure(invocation.stdio)
+      given Console = caps.unsafe.unsafeAssumePure(summon[Console])
       given Environment = caps.unsafe.unsafeAssumePure(invocation.environment)
       given WorkingDirectory = caps.unsafe.unsafeAssumePure(invocation.workingDirectory)
       body
@@ -266,7 +268,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
     case ui.Compile() :: _ =>
       val config: Workspace.Config = Workspace.load(directory)
       val force: Boolean = ui.Force().present
-      ambient(compile(config, force))
+      ambient(compile(config, force, tty))
 
     case _ =>
       ambient:
@@ -288,7 +290,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
 private def width(using Environment): Int =
   safely(Environment.columns[Text].s.toInt).lay(120)(_.min(160))
 
-private def compile(config: Workspace.Config, force: Boolean)(using Stdio, Environment)
+private def compile(config: Workspace.Config, force: Boolean, tty: Boolean)(using Stdio, Console, Environment)
 :   Exit | NoDocuments.type | CompileFailed.type =
 
   if config.documents.nil then
@@ -296,6 +298,39 @@ private def compile(config: Workspace.Config, force: Boolean)(using Stdio, Envir
     Out.println(t"fuel: add `document <dir>` to .pyrocosm/fuel/config.tel")
     NoDocuments
   else
+    // On a terminal the compile runs behind a board: a gauge of the work, and each problem as
+    // it is found; the report follows once the board has closed. Elsewhere the problems are
+    // printed as they are found, and the gauge is nothing.
+    val board: Optional[Board] = if tty then Board(t"fuel: compile") else Unset
+    val progress: Progress = Progress(board, width)
+
+    def work(): Exit | CompileFailed.type = compiling(config, force, progress)
+
+    val result: Exit | CompileFailed.type =
+      board.lay(work()): (board: Board) =>
+        unsafely:
+          supervise:
+            recover:
+              case Terminal.Error() => work()
+            . protect(board.showBoard()(work()))
+
+    if board.let(_.aborted).or(false) then Out.println(t"fuel: the compile was abandoned")
+
+    // Every diagnostic, rendered as the terminal renders them: at its place, with its excerpt —
+    // unless each was printed as it was found.
+    if !progress.streamed then
+      val renderer = TerminalRenderer()
+      renderer.blocks(progress.problems, width).each: (line: Teletype) => Out.println(line)
+
+    result
+
+// The compile itself, its problems and its progress reported as it goes.
+private def compiling(config: Workspace.Config, force: Boolean, progress: Progress)(using Stdio, Environment)
+:   Exit | CompileFailed.type =
+
+  import Progress.Phase
+
+  locally:
     // Fragments are compiled only against a configured classpath: without one there is
     // nothing to compile them against, and they are highlighted alone.
     // A classpath entry that does not exist is reported once, and nothing is compiled against
@@ -303,11 +338,24 @@ private def compile(config: Workspace.Config, force: Boolean)(using Stdio, Envir
     def exists(entry: Text): Boolean = java.nio.file.Files.exists(java.nio.file.Path.of(entry.s))
     val missing: List[Text] = config.classpath.filter(!exists(_))
 
-    @scala.caps.unsafe.untrackedCaptures
-    var failures: List[Block] =
-      missing.map: (entry: Text) =>
-        val text: Text = t"This classpath entry does not exist, so no fragment was compiled."
-        Block.Diagnostic(Tone.Failure, Block.Location(entry), List(Block.paragraph(text)))
+    missing.each: (entry: Text) =>
+      val text: Text = t"This classpath entry does not exist, so no fragment was compiled."
+      progress.report(Block.Diagnostic(Tone.Failure, Block.Location(entry), List(Block.paragraph(text))))
+
+    // The work there is, counted before it starts: the documents of every root, the dependency
+    // jars, the sources; the pages are guessed from the sources until the API says.
+    val documents: Int = config.documents.stdlib.map(root => Compilation.files(root).stdlib.size).sum
+    val jars: Int = config.classpath.filter(_.ends(t".jar")).stdlib.size
+    progress.plan(Phase.Documents, documents)
+    progress.plan(Phase.Links, 1)
+
+    if !config.classpath.nil && missing.nil then
+      progress.plan(Phase.Jars, jars)
+      if !config.sources.nil then
+        progress.plan(Phase.Build, 1)
+        progress.plan(Phase.Inspect, 1)
+        progress.plan(Phase.Pages, config.sources.stdlib.size*8)
+      if !config.overlays.nil then progress.plan(Phase.Overlays, 1)
 
     // A session that fails to open or to compile is a diagnostic of its own, and the documents
     // are then compiled without it (tokenized, unchecked): the documents are still produced.
@@ -322,6 +370,7 @@ private def compile(config: Workspace.Config, force: Boolean)(using Stdio, Envir
 
     // The glossary first, since every document's prose may name its terms.
     val (glossary, glossaryProblems) = glossaries(config)
+    progress.reports(glossaryProblems)
 
     // The key of everything a document or a page depends on beyond its own text: Fuel's
     // version, the classpath, the project's sources, the compiler's options, whether documents
@@ -336,12 +385,14 @@ private def compile(config: Workspace.Config, force: Boolean)(using Stdio, Envir
           config.imports.join(t"\n"), entities, glossary.definitions )
 
     def regime(environment: Text, linker: (Text, Text) -> Linker): Compilation.Regime =
-      // Each document is reported as it is done, since a corpus can take a long while.
+      // Each document is reported as it is done, with its problems, since a corpus can take a
+      // long while.
       Compilation.Regime
         ( config.session,
           config.fixtures,
-          (path: Text, problems: Int) =>
-            Out.println(t"fuel: $path: ${problems.show} ${if problems == 1 then t"problem" else t"problems"}"),
+          (path: Text, doc: Doc) =>
+            progress.reports(doc.problems)
+            progress.step(Phase.Documents),
           linker,
           store,
           (path: Text) => Hashes.of(environment, path),
@@ -350,22 +401,18 @@ private def compile(config: Workspace.Config, force: Boolean)(using Stdio, Envir
     // The API first, since the documents link to it: the sources compiled and saved, their
     // output and the dependencies walked, the overlays merged, and the pages of the project's
     // own entities rendered with their examples compiled.
-    @scala.caps.unsafe.untrackedCaptures
-    var apiProblems: List[Block] = Nil
-
     val outcome: Optional[(Corpus, Api, sci.Map[Text, List[Block]], Text)] =
       if !checked then Unset else
         try Checking.session(config.classpath, config.options): (checker: Checker) =>
-          val (api, problems, sources) = model(config, checker)
+          val (api, sources) = model(config, checker, progress)
           val key: Text = environment(sources, api)
-          val (pages, pageProblems) = rendered(api, checker, store, key)
-          apiProblems = problems + pageProblems
+          val pages: sci.Map[Text, List[Block]] = rendered(api, checker, store, key, progress)
           val linker: (Text, Text) -> Linker =
             (section: Text, path: Text) => Resolver(api, Scope.document(config.imports), Doc.url(section, path))
 
           (Compilation.corpus(config.documents, checker, regime(key, linker)), api, pages, key)
         catch case error: Throwable =>
-          failures = failed(t"The fragments could not be compiled", error) :: failures
+          progress.report(failed(t"The fragments could not be compiled", error))
           Unset
 
     val unchecked: Text = environment(t"", Api.empty)
@@ -374,13 +421,15 @@ private def compile(config: Workspace.Config, force: Boolean)(using Stdio, Envir
       outcome.let(_(0)).or:
         try Compilation.corpus(config.documents, Checker.tokenized, regime(unchecked, (_: Text, _: Text) => Linker.none))
         catch case error: Throwable =>
-          failures = failed(t"The documents could not be highlighted", error) :: failures
+          progress.report(failed(t"The documents could not be highlighted", error))
           Corpus(Nil)
 
     val api: Api = outcome.let(_(1)).or(Api.empty)
 
     // Every link, now that every target is known.
     val links: List[Block] = Links.check(corpus, api, glossary, config.checkLinks)
+    progress.reports(links)
+    progress.finish(Phase.Links)
 
     val glossaryPage: List[Block] =
       if glossary.terms.nil then Nil else glossary.page(Resolver(api, Scope.document(config.imports), t"/glossary"))
@@ -413,15 +462,11 @@ private def compile(config: Workspace.Config, force: Boolean)(using Stdio, Envir
       val rendered: Int = Inspection.rendered.getAndSet(0)
       if unrendered > 0 then Out.println(t"api: ${unrendered.show} of ${rendered.show} types could not be rendered, and are shown as `?`")
 
-    // Every diagnostic, rendered as the terminal renders them: at its place, with its excerpt.
-    val problems: List[Block] = failures.reverse + glossaryProblems + apiProblems + corpus.problems + links
-    val renderer = TerminalRenderer()
-    renderer.blocks(problems, width).each: (line: Teletype) => Out.println(line)
-
     if config.classpath.nil
     then Out.println(t"fuel: no classpath is configured, so no fragment was compiled")
 
-    if problems.nil then Exit.Ok else CompileFailed
+    val result: Exit | CompileFailed.type = if progress.problems.nil then Exit.Ok else CompileFailed
+    result
 
 // The glossaries the configuration names, read and combined, with the problems: a file which
 // cannot be read or is not TEL, and what `Glossary.merge` finds.
@@ -447,13 +492,12 @@ private def glossaries(config: Workspace.Config): (Glossary, List[Block]) =
 // dependency jar walked (a jar once per version, kept by the daemon), the overlays read and
 // merged, and the pages of the project's own documented entities rendered — their examples
 // compiled as a document's are — with every problem found on the way.
-private def model(config: Workspace.Config, checker: Checker)(using Stdio)
-:   (Api, List[Block], Text) =
+private def model(config: Workspace.Config, checker: Checker, progress: Progress)(using Stdio)
+:   (Api, Text) =
 
-  @scala.caps.unsafe.untrackedCaptures
-  var problems: List[Block] = Nil
+  import Progress.Phase
 
-  def report(block: Block): Unit = problems = block :: problems
+  def report(block: Block): Unit = progress.report(block)
 
   val cache: Text =
     val xdg: String | Null = java.lang.System.getenv("XDG_CACHE_HOME")
@@ -500,6 +544,7 @@ private def model(config: Workspace.Config, checker: Checker)(using Stdio)
               report(failed(t"The dependency $jar could not be inspected", error))
               Api.empty
 
+    progress.step(Phase.Jars)
     acc.merge(walked)
 
 
@@ -521,21 +566,33 @@ private def model(config: Workspace.Config, checker: Checker)(using Stdio)
           case Importance.Warning => Tone.Warning
           case _                  => Tone.Info
 
-        // The notice names its file as the compiler does, by its name alone or its path; the
-        // line is counted from the offset in the file's text.
+        val style: Block.Note.Style = if tone == Tone.Failure then Block.Note.Style.Erroneous else Block.Note.Style.Caution
+
+        // The notice names its file as the compiler does, by its name alone or its path; its
+        // place is found from the offset in the file's text, which is excerpted around it.
         val source: Option[(Text, Text)] =
           texts.find { (path, _) => path == notice.file || path.ends(t"/${notice.file}") }
 
-        val line: Optional[Int] = notice.span.let(_.offset).let: (offset: Ordinal) =>
-          source.map { (_, text) => text.s.substring(0, offset.n0.min(text.s.length)).nn.count(_ == '\n') + 1 }.getOrElse(Unset)
+        val noBlocks: List[Block] = Nil
+        val nowhere: Optional[(Int, Int)] = Unset
+        val unplaced: (Optional[(Int, Int)], List[Block]) = (nowhere, noBlocks)
+
+        val placed: (Optional[(Int, Int)], List[Block]) = notice.span.lay(unplaced): (span: Span) =>
+          val from: Int = span.offset.let(_.n0).or(0)
+          val length: Int = span.length.or(0)
+          source.map { (_, text) => Excerpts.scala(text, from, from + length, style) }.getOrElse(unplaced)
+
+        val location: Block.Location =
+          Block.Location(source.map(_(0)).getOrElse(notice.file), placed(0).let(_(0)), placed(0).let(_(1)))
 
         // The compiler's own summary ("3 warnings found") is no diagnostic.
         val summary: Boolean = notice.message.s.matches("\\d+ (warnings?|errors?) found")
 
         if tone != Tone.Info && !summary then
-          report(Block.Diagnostic(tone, Block.Location(source.map(_(0)).getOrElse(notice.file), line), List(Block.paragraph(notice.message))))
+          report(Block.Diagnostic(tone, location, List(Block.paragraph(notice.message)), placed(1)))
 
       Out.println(t"fuel: compiled ${sources.size.show} sources (${notices.filter(_.importance == Importance.Error).size.show} errors)")
+      progress.finish(Phase.Build)
       notices.filter(_.importance == Importance.Error).nil
 
   // The project's own output, from the inspector over what the build saved.
@@ -546,6 +603,7 @@ private def model(config: Workspace.Config, checker: Checker)(using Stdio)
         report(failed(t"The project's own code could not be inspected", error))
         Api.empty
 
+  progress.finish(Phase.Inspect)
   val inspected: Api = dependencies.merge(own)
 
   Inspection.failures() match
@@ -581,23 +639,21 @@ private def model(config: Workspace.Config, checker: Checker)(using Stdio)
 
   // What applies to each type beyond its members, over the whole model.
   val api: Api = Applicables.decorate(merged)
+  progress.finish(Phase.Overlays)
 
   if !overlays.nil then Out.println(t"fuel: ${overlays.size.show} overlays")
 
   // The sources, as one hash: their paths and their texts.
   val hashed: Text = Hashes.of(sources.bind { (path: Text, text: Text) => List(path, text) }*)
 
-  (api, problems.reverse, hashed)
+  (api, hashed)
 
 // The pages of the project's own entities, each rendered — its examples compiled as a
 // document's are, its references resolved in its own scope — unless the output keeps it under
 // the key of its inputs: everything the compile depends on (`environment`), the entity, and the
 // members its page lists. Their problems are kept with them.
-private def rendered(api: Api, checker: Checker, store: Optional[Store], environment: Text)
-:   (sci.Map[Text, List[Block]], List[Block]) =
-
-  @scala.caps.unsafe.untrackedCaptures
-  var problems: List[Block] = Nil
+private def rendered(api: Api, checker: Checker, store: Optional[Store], environment: Text, progress: Progress)
+:   sci.Map[Text, List[Block]] =
 
   def render(entity: Api.Entity): (List[Block], List[Block]) =
     val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Nil))
@@ -613,6 +669,7 @@ private def rendered(api: Api, checker: Checker, store: Optional[Store], environ
     (blocks, scala.problems + ambiguous)
 
   val own: scala.List[Api.Entity] = api.entities.values.filter(_.own).toList.sortBy(_.key.s)
+  progress.plan(Progress.Phase.Pages, own.size)
 
   val pages: scala.List[(Text, List[Block])] = own.map: (entity: Api.Entity) =>
     val (blocks, raised) = store.lay(render(entity)): (store: Store) =>
@@ -621,10 +678,11 @@ private def rendered(api: Api, checker: Checker, store: Optional[Store], environ
       val page: Output.Page = store.page(key, entity.key, entity.path)(render(entity))
       (page.blocks, page.problems)
 
-    problems = raised.reverse + problems
+    progress.reports(raised)
+    progress.step(Progress.Phase.Pages)
     (entity.key, blocks)
 
-  (sci.Map.from(pages), problems.reverse)
+  sci.Map.from(pages)
 
 // One document set in the terminal: its blocks at the terminal's width, paragraphs justified
 // and hyphenated, code highlighted, an animated block as its steps in sequence; its problems

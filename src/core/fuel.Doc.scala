@@ -80,12 +80,12 @@ object Doc:
     val markdown: Markdown of Layout = if unclosed.present then Parser.parse(text) else parsed
 
     val open: List[Block] = unclosed.let: (line: Int) =>
-      List(Block.Diagnostic(Tone.Failure, Block.Location(path, line), List(Block.paragraph(t"This fence is not closed."))))
+      List(Block.Diagnostic(Tone.Failure, Block.Location(path, line), List(Block.paragraph(t"This fence is not closed.")), Excerpts.plain(text, line, Block.Note.Style.Erroneous)))
     . or(Nil)
 
     cache match
       case cache: Cache =>
-        kept(path, markdown, checker, session, fixture, linker, cache, base, page, glossary, open)
+        kept(path, text, markdown, checker, session, fixture, linker, cache, base, page, glossary, open)
 
       case _ =>
         val context: Blocks.Context = Blocks.Context(linker, page, glossary)
@@ -93,7 +93,7 @@ object Doc:
         val embeddings: List[Embedding] = List(scala, Embedding.JavaCode)
         val blocks: List[Block] = Blocks.of(markdown, embeddings, context)
         val problems: List[Block] = scala.problems + ambiguous(path, linker) + open
-        Doc(path, Blocks.title(blocks).or(filename(path)), blocks, problems, context.references, context.anchors)
+        Doc(path, Blocks.title(blocks).or(filename(path)), blocks, problems, context.references, context.anchors, text)
 
   // A reference which named several entities is a caution: it is shown unlinked.
   private def ambiguous(path: Text, linker: Linker): List[Block] =
@@ -107,6 +107,7 @@ object Doc:
   // and its fences, each kept by `ScalaCode`; then the prose filled with the fences' output.
   private def kept
     ( path:     Text,
+      text:     Text,
       markdown: Markdown of Layout,
       checker:  Checker,
       session:  Boolean,
@@ -153,7 +154,7 @@ object Doc:
       Blocks.fence(fence.info, fence.content, fence.line, embeddings)
 
     val blocks: List[Block] = Blocks.fill(prose.blocks, outputs)
-    Doc(path, Blocks.title(blocks).or(filename(path)), blocks, scala.problems + prose.problems + open, prose.references, prose.anchors)
+    Doc(path, Blocks.title(blocks).or(filename(path)), blocks, scala.problems + prose.problems + open, prose.references, prose.anchors, text)
 
   // The last segment of a path, without a `.md` extension.
   def filename(path: Text): Text =
@@ -163,11 +164,13 @@ object Doc:
 // One Markdown document, compiled: its path relative to the directory it was found under, its
 // title (the first level-one heading, else its filename), its blocks, the problems its
 // fragments had (each a diagnostic at its place), the links it makes, for the check which runs
-// once every document is compiled, and the anchors on it, which such a link may name.
+// once every document is compiled, and the anchors on it, which such a link may name; and its
+// text, for a problem found later (a link which leads nowhere) to show its line.
 case class Doc
   ( path:       Text,
     title:      Text,
     blocks:     List[Block],
     problems:   List[Block]     = Nil,
-    references: List[Linkage] = Nil,
-    anchors:    List[Text]      = Nil )
+    references: List[Linkage]   = Nil,
+    anchors:    List[Text]      = Nil,
+    text:       Text            = t"" )

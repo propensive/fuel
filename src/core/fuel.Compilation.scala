@@ -49,7 +49,7 @@ object Compilation:
   case class Regime
     ( session:  Boolean                  = false,
       fixtures: Optional[Text]           = Unset,
-      progress: (Text, Int) => Unit      = (_, _) => (),
+      progress: (Text, Doc) => Unit      = (_, _) => (),
       linker:   (Text, Text) => Linker   = (_: Text, _: Text) => Linker.none,
       cache:    Optional[Cache]          = Unset,
       base:     Text => Text             = (_: Text) => t"",
@@ -58,20 +58,27 @@ object Compilation:
   // A section's name is its directory's last segment.
   def name(root: Text): Text = root.cut(t"/").filter(_ != t"").reverse.head.or(root)
 
-  def section(root: Text, checker: Checker = Checker.tokenized, regime: Regime = Regime()): Corpus.Section =
+  // The Markdown files beneath a root, in order: what a section compiles, and so what there is
+  // to do, which a compile may count before it starts.
+  def files(root: Text): List[Text] =
     import filesystemBackends.javaBaseFilesystem
     import filesystemOptions.dereferenceSymlinks
     import sortingAlgorithms.timsort
     import galilei.glob
+
+    safely:
+      val base: Path on Linux = root.as[Path on Linux]
+      base.glob(Glob.parse(t"**/*.md")).map(_.encode).order: (path: Text) => path.s
+
+    . or(Nil)
+
+  def section(root: Text, checker: Checker = Checker.tokenized, regime: Regime = Regime()): Corpus.Section =
+    import filesystemBackends.javaBaseFilesystem
+    import filesystemOptions.dereferenceSymlinks
     import charsets.utf8Charset
     import textSanitizers.skipSanitizer
 
-    val files: List[Text] =
-      safely:
-        val base: Path on Linux = root.as[Path on Linux]
-        base.glob(Glob.parse(t"**/*.md")).map(_.encode).order: (path: Text) => path.s
-
-      . or(Nil)
+    val files: List[Text] = this.files(root)
 
     def relative(path: Text): Text = path.skip(root.length + 1)
 
@@ -95,7 +102,7 @@ object Compilation:
                 ( relative(path), text, checker, regime.session, fixture(path),
                   regime.linker(name(root), relative(path)), regime.cache, regime.base(relative(path)),
                   name(root), regime.glossary )
-            regime.progress(relative(path), doc.problems.size)
+            regime.progress(relative(path), doc)
             recur(tail, docs + List(doc), skipped)
 
           case _ =>

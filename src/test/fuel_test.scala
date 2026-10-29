@@ -1448,6 +1448,57 @@ extension (doc: Doc) def titled: String = doc.title
           ((java.lang.System.nanoTime - start)/1000000L < 2000L, count > 1000)
         . assert(_ == (true, true))
 
+    suite(m"Reporting"):
+      val text: Text = t"# Title\n\nSee [the guide](other.md) here.\n\n```scala\nval x = 1\n"
+
+      def codes(blocks: List[Block]): List[Block.Code] = blocks.bind { case code: Block.Code => List(code); case _ => Nil }
+
+      test(m"a plain excerpt numbers the line and its neighbours, underlining the span"):
+        val code: Block.Code = codes(Excerpts.plain(text, 3, Block.Note.Style.Erroneous, 5, 11)).stdlib.head
+        (code.start, code.lines.size, code.notes.map { n => (n.line, n.start, n.end) })
+      . assert(_ == (2, 3, List((1, 4, 15))))
+
+      test(m"an excerpt at a target underlines its occurrence, or the whole line without one"):
+        val found: Block.Code = codes(Excerpts.plainAt(text, 3, t"other.md", Block.Note.Style.Caution)).stdlib.head
+        val whole: Block.Code = codes(Excerpts.plainAt(text, 3, t"nowhere", Block.Note.Style.Caution)).stdlib.head
+        (found.notes.map { n => (n.start, n.end) }, whole.notes.map { n => (n.start, n.end) })
+      . assert(_ == (List((16, 24)), List((0, 31))))
+
+      test(m"a Scala excerpt is highlighted and placed by line and column"):
+        val source: Text = t"object A:\n  val x: Int = \"no\"\n"
+        val (place, blocks) = Excerpts.scala(source, 25, 29, Block.Note.Style.Erroneous)
+        (place, codes(blocks).stdlib.head.lines.stdlib.exists(_.tokens.stdlib.exists(_.accent == Token.Accent.Keyword)))
+      . assert(_ == ((2, 16), true))
+
+      // A fence left open is told apart from one which simply ends the file by the glossary's
+      // definitions, which follow the text and which an open fence swallows.
+      val glossary: Glossary = Glossary(List(Glossary.Term(t"guide", t"A guide.", Unset, t"glossary.tel", 1)))
+
+      test(m"a document keeps its text, and an unclosed fence shows its line"):
+        val doc: Doc = Doc.parse(t"guide.md", text, Checker.tokenized, false, Unset, Linker.none, Unset, t"", t"docs", glossary)
+        (doc.text == text, doc.problems.bind { case Block.Diagnostic(_, location, message, excerpt, _) => List((location.let(_.text), Blocks.plain(message.bind { case Block.Paragraph(c) => c; case _ => Nil }), codes(excerpt).map(_.start))); case _ => Nil })
+      . assert(_ == (true, List((t"guide.md:5", t"This fence is not closed.", List(4)))))
+
+      test(m"a broken link's problem shows the line it is on, the link underlined"):
+        val doc: Doc = Doc.parse(t"guide.md", text, Checker.tokenized, false, Unset, Linker.none, Unset, t"", t"docs", Glossary.none)
+        val corpus: Corpus = Corpus(List(Corpus.Section(t"docs", t"/docs", List(doc), Nil)))
+        Links.check(corpus, Api.empty, Glossary.none).bind { case Block.Diagnostic(_, _, _, excerpt, _) => codes(excerpt).bind(_.notes.map { n => (n.start, n.end) }); case _ => Nil }
+      . assert(_ == List((16, 24)))
+
+      test(m"progress is the weight done over the weight planned, and a phase may be finished whole"):
+        import stdios.fileDescriptorStdio
+        import termcapDefinitions.basicTermcap
+        val progress: Progress = Progress(Unset, 80)
+        progress.plan(Progress.Phase.Documents, 2)
+        progress.plan(Progress.Phase.Links, 1)
+        val start: Double = progress.fraction
+        progress.step(Progress.Phase.Documents)
+        val half: Double = progress.fraction
+        progress.step(Progress.Phase.Documents)
+        progress.finish(Progress.Phase.Links)
+        (start, (half*100).round, progress.fraction, progress.streamed)
+      . assert(_ == (0.0, 43L, 1.0, true))
+
     suite(m"Overlays"):
       val overlay: Text = t"""base sample
 import scala
