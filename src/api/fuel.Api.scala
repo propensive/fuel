@@ -96,7 +96,11 @@ object Api:
   // `requires` of an extension or a given (the shape of each of its `using` parameter, a
   // context bound among them, and for an extension declared in a class or trait, an instance of
   // it), a given's `provides` (the shape of its type), and a type alias's `aliasOf` (the shape
-  // it stands for, over its `aliasParams`; an opaque type stands for nothing).
+  // it stands for, over its `aliasParams`; an opaque type stands for nothing). For search, the
+  // shape of what a declaration `returns` (a term's type, a class not being a result), what it
+  // `accepts` (every term parameter, `using` ones included, and for an extension the one it
+  // extends) and, for a template, its `parentShapes` (its direct parents, as written, so that
+  // `Doc extends Shape[Int]` is known to be a `Shape[Int]`).
   case class Declaration
     ( kind:        Kind,
       modifiers:   List[Text]       = Nil,
@@ -110,7 +114,10 @@ object Api:
       provides:    Optional[Shape]  = Unset,
       aliasOf:     Optional[Shape]  = Unset,
       aliasParams: List[Text]       = Nil,
-      exported:    Boolean          = false )   // an export forwarder, which what it forwards to documents
+      exported:    Boolean          = false,    // an export forwarder, which what it forwards to documents
+      returns:     Optional[Shape]  = Unset,
+      accepts:     List[Shape]      = Nil,
+      parentShapes: List[Shape]     = Nil )
 
   // An extension method applicable to an entity, as `Applicables` finds it: the `key` of the
   // extension and the `index` of the declaration among the entity's (an overloaded name's
@@ -246,6 +253,36 @@ case class Api(entities: sci.Map[Text, Api.Entity]):
     entities.values.toList.groupBy(_.name).map: (name, group) =>
       val sorted: List[Api.Entity] = List.from(group.sortBy(_.key.s))
       (name, sorted)
+
+  // A shape with every alias it names expanded to what the alias stands for, its parameters
+  // substituted, to a depth which ends a cycle; an export forwarder is followed to its target.
+  def expand(shape: Api.Shape, depth: Int = 8): Api.Shape = shape match
+    case Api.Shape.Named(key, args) =>
+      val expanded: List[Api.Shape] = args.map(expand(_, depth))
+      val entity: Optional[Api.Entity] = apply(key)
+      val alias: Optional[Api.Declaration] = entity.let(_.template).let { (d: Api.Declaration) => if d.aliasOf.present then d else Unset }
+
+      // An export forwarder's page is its target's, so its name is the target's.
+      val exported: Optional[Text] = entity.let(_.alias).let(Api.key(_))
+
+      if alias.absent && exported.present && depth > 0 then expand(Api.Shape.Named(exported.or(key), expanded), depth - 1)
+      else alias.lay(Api.Shape.Named(key, expanded)): (d: Api.Declaration) =>
+        if depth <= 0 then Api.Shape.Other else
+          val binding: sci.Map[Text, Api.Shape] = sci.Map.from(d.aliasParams.stdlib.zip(expanded.stdlib))
+
+          def over(shape: Api.Shape): Api.Shape = shape match
+            case Api.Shape.Param(name, _)   => binding.getOrElse(name, shape)
+            case Api.Shape.Named(k, as)     => Api.Shape.Named(k, as.map(over))
+            case other                      => other
+
+          expand(over(d.aliasOf.or(Api.Shape.Other)), depth - 1)
+
+    case other => other
+
+  // The subtyping of every type the model names, and the search over its declarations: each
+  // built once, on first use, and gone with this `Api`.
+  lazy val lattice: Lattice = Lattice.build(this)
+  lazy val search: Search = Search.build(this)
 
   def add(entity: Api.Entity): Api = Api(entities.updated(entity.key, entity))
 

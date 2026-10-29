@@ -143,6 +143,7 @@ object settings:
     "serpentine-core",           // paths
     "contingency-core",
     "gossamer-core",
+    "gossamer-lexicon",          // Lexicon: fuzzy name search
     "vacuous-core",
     "eucalyptus-core")           // logging.silentLogging
   . map(component(soundness))

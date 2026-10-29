@@ -39,7 +39,7 @@ import scala.collection.immutable as sci
 import scala.jdk.CollectionConverters.*
 
 // Excluded from the umbrella: `Compilation`, anthology's, which would outrank fuel's own.
-import soundness.{Compilation as _, *}
+import soundness.{Compilation as _, Query as _, *}
 
 import backstops.silentBackstop
 import dysasymptotics.{linearAccess, linearSize}
@@ -64,6 +64,7 @@ object ui:
   val Serve   = Subcommand("serve", "serve the compiled documents on the web until Ctrl+C")
   val Show    = Subcommand("show", "render one document in the terminal")
   val Present = Subcommand("present", "show a presentation's slides in a browser until Ctrl+C")
+  val Search  = Subcommand("search", "search the compiled API by name, kind, package, result or parameter type")
 
   // Each is read from the cascade every Pyrocosm tool shares: the flag, the `fuel.*` property,
   // the `FUEL_*` variable, the repository's `.pyrocosm/fuel/config.tel` and the user's. A
@@ -258,6 +259,11 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
       val operand: Optional[Text] = rest.map(_()).filter(!_.starts(t"-")).head
       ambient(show(config, directory, operand))
 
+    // `fuel search <query>`: the daemon's API, searched; `-Type` is a term of the query, so only
+    // a `--flag` is not.
+    case ui.Search() :: rest =>
+      ambient(search(rest.map(_()).filter(!_.starts(t"--")).join(t" ")))
+
     case ui.Compile() :: _ =>
       val config: Workspace.Config = Workspace.load(directory)
       val force: Boolean = ui.Force().present
@@ -269,6 +275,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
         Out.println(t"")
         Out.println(t"  compile    compile the configured directories of Markdown documents")
         Out.println(t"  show       render one document in the terminal")
+        Out.println(t"  search     search the API: fuel search 'parse -String +Doc /pkg'")
         Out.println(t"  present    show a presentation's slides in a browser until Ctrl+C")
         Out.println(t"  serve      serve the compiled documents on the web until Ctrl+C")
         Out.println(t"  about      show this tool's name, version and daemon")
@@ -651,6 +658,35 @@ private def show(config: Workspace.Config, directory: Text, operand: Optional[Te
             renderer.blocks(doc.problems, width).each: (line: Teletype) => Out.println(line)
 
           if doc.problems.nil then Exit.Ok else CompileFailed
+
+// Searches the API the daemon last compiled, printing each declaration found over its key and
+// its page.
+private def search(text: Text)(using Stdio): Exit | UsageError.type =
+  if text.trim == t"" then
+    Out.println(t"fuel: usage: fuel search <query>")
+    UsageError
+  else Query.read(text) match
+    case error: Query.Error =>
+      Out.println(t"fuel: ${error.message.text} (at ${error.offset.toString.tt})")
+      UsageError
+
+    case query: Query =>
+      val api: Api = Server.api
+
+      if api.entities.isEmpty then
+        Out.println(t"fuel: no API has been compiled; run fuel compile in a project")
+        Exit.Ok
+      else
+        val outcome: Search.Outcome = api.search(query)
+        val scope: Scope = Scope.document(Server.imports)
+        outcome.notices.each { (notice: Text) => Out.println(t"fuel: $notice") }
+
+        outcome.hits.each: (hit: Search.Hit) =>
+          Out.println(t"${hit.entity.key}  ${hit.entity.url}")
+          Out.println(t"    ${Signatures.declaration(hit.entity.name, hit.declaration, api, scope).map(_.text).join}")
+
+        Out.println(t"fuel: ${outcome.hits.size.toString.tt} results")
+        Exit.Ok
 
 private def blank: Teletype = e""
 

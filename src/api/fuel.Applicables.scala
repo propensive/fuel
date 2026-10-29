@@ -96,33 +96,8 @@ object Applicables:
   def decorate(api: Api): Api =
     val entities: scala.List[Api.Entity] = api.entities.values.toList
 
-    // A shape with every alias it names expanded to what the alias stands for, its parameters
-    // substituted, to a depth which ends a cycle.
-    def expand(shape: Shape, depth: Int = 8): Shape = shape match
-      case Shape.Named(key, args) =>
-        val expanded: List[Shape] = args.map(expand(_, depth))
-        val entity: Optional[Api.Entity] = api(key)
-        val alias: Optional[Api.Declaration] = entity.let(_.template).let { (d: Api.Declaration) => if d.aliasOf.present then d else Unset }
-
-        // An export forwarder's page is its target's, so its name is the target's.
-        val exported: Optional[Text] = entity.let(_.alias).let(Api.key(_))
-
-        if alias.absent && exported.present && depth > 0 then expand(Shape.Named(exported.or(key), expanded), depth - 1)
-        else alias.lay(Shape.Named(key, expanded)): (d: Api.Declaration) =>
-          if depth <= 0 then Shape.Other else
-            val binding: sci.Map[Text, Shape] = sci.Map.from(d.aliasParams.stdlib.zip(expanded.stdlib))
-
-            def over(shape: Shape): Shape = shape match
-              case Shape.Param(name, _)   => binding.getOrElse(name, shape)
-              case Shape.Named(k, as)     => Shape.Named(k, as.map(over))
-              case other                  => other
-
-            expand(over(d.aliasOf.or(Shape.Other)), depth - 1)
-
-      case other => other
-
     def expanded(declaration: Api.Declaration): Api.Declaration =
-      declaration.copy(receiver = declaration.receiver.let(expand(_)), requires = declaration.requires.map(expand(_)), provides = declaration.provides.let(expand(_)))
+      declaration.copy(receiver = declaration.receiver.let(api.expand(_)), requires = declaration.requires.map(api.expand(_)), provides = declaration.provides.let(api.expand(_)))
 
     // Every given, by the key of the type class it provides.
     val providers: scala.List[Provider] = entities.flatMap: entity =>

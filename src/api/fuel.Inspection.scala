@@ -324,10 +324,11 @@ object Inspection:
 
     private def parents(symbol: Symbol): List[Syntax] = List.from(parentTypes(symbol).map(syntax))
 
-    // The keys of every class a class extends, nearest first, the universal ones left out.
+    // The keys of every class a class extends, nearest first, the universal ones left out —
+    // except `AnyVal`, which tells search that a value class is a value type.
     private def bases(symbol: Symbol): List[Text] =
       try
-        val all: scala.List[Symbol] = symbol.typeRef.baseClasses.filter { base => base != symbol && !ignored.contains(base.name) }
+        val all: scala.List[Symbol] = symbol.typeRef.baseClasses.filter { base => base != symbol && (base.name == "AnyVal" || !ignored.contains(base.name)) }
         List.from(all.flatMap { base => designator(base).let { (d: Designator) => scala.List(Api.key(d)) }.or(scala.Nil) })
       catch case _: Throwable => Nil
 
@@ -363,8 +364,16 @@ object Inspection:
               case Api.Shape.Named(key, _) => Api.Shape.Named(key, List.from(args.map(shape)))
               case other                   => other
 
+        // A method's type parameter, or a type lambda's (a parameterised alias's right-hand
+        // side refers to its parameters so).
         case ParamRef(binder, index) => binder match
           case PolyType(names, bounds, _) =>
+            val upper: Optional[Api.Shape] = bounds(index) match
+              case TypeBounds(_, upper) => bound(upper)
+
+            Api.Shape.Param(names(index).tt, upper)
+
+          case TypeLambda(names, bounds, _) =>
             val upper: Optional[Api.Shape] = bounds(index) match
               case TypeBounds(_, upper) => bound(upper)
 
@@ -415,6 +424,11 @@ object Inspection:
         objectSelf(module).let { (self: TypeRepr) => Syntax.Infix(syntax(self), t"is", parent) }.or(parent)
 
     private def isContextual(param: Symbol): Boolean = param.isTerm && (param.flags.is(Flags.Given) || param.flags.is(Flags.Implicit))
+
+    // The shape of every term parameter, in order, `using` ones and an extension's receiver
+    // among them: what search matches a `-Type` criterion against.
+    private def accepts(symbol: Symbol): List[Api.Shape] =
+      List.from(symbol.paramSymss.flatten.filter(_.isTerm).map { p => shape(p.info.widenByName) })
 
     // What an extension extends — the one parameter of its first plain term clause — and what
     // it, or a given, requires: the type of each `using` parameter, a context bound being one.
@@ -598,8 +612,9 @@ object Inspection:
           val (receiver, requires): (Optional[Api.Shape], List[Api.Shape]) =
             if kind == Api.Kind.Def then (noShape, noShapes) else matching(symbol, kind == Api.Kind.Extension)
 
-          val provides: Optional[Api.Shape] = if kind == Api.Kind.Given then shape(result(symbol.info)) else Unset
-          val declaration: Api.Declaration = Api.Declaration(kind, modifiers(symbol), own0, syntax(result(symbol.info)), Nil, group, inherited, receiver, requires, provides, exported = flags.is(Flags.Exported))
+          val returns: Api.Shape = shape(result(symbol.info))
+          val provides: Optional[Api.Shape] = if kind == Api.Kind.Given then returns else Unset
+          val declaration: Api.Declaration = Api.Declaration(kind, modifiers(symbol), own0, syntax(result(symbol.info)), Nil, group, inherited, receiver, requires, provides, exported = flags.is(Flags.Exported), returns = returns, accepts = accepts(symbol))
           record(parent, name, own, declaration, false, where)
           parameters(typeForm(parent, name), symbol.paramSymss, own)
         else if symbol.isValDef then
@@ -627,7 +642,7 @@ object Inspection:
             else tpe
 
           val mods: List[Text] = if kind == Api.Kind.Given then modifiers(symbol).filter(_ != t"lazy") else modifiers(symbol)
-          record(parent, name, own, Api.Declaration(kind, mods, Nil, shownType, Nil, Nil, inherited, provides = provides, exported = flags.is(Flags.Exported)), false, where)
+          record(parent, name, own, Api.Declaration(kind, mods, Nil, shownType, Nil, Nil, inherited, provides = provides, exported = flags.is(Flags.Exported), returns = shape(result(symbol.info))), false, where)
 
     // An alias's right-hand side, a bound type's bounds, or nothing for an opaque type's
     // underlying (which is not the API).
@@ -657,7 +672,8 @@ object Inspection:
         else
           val kind: Api.Kind = templateKind(symbol)
           val constructor: List[Syntax] = if kind == Api.Kind.Trait && symbol.primaryConstructor.paramSymss.forall(_.isEmpty) then Nil else clauses(symbol.primaryConstructor)
-          record(parent, name, own, Api.Declaration(kind, modifiers(symbol), constructor, Unset, parents(symbol)), true, where, bases(symbol))
+          val parentShapes: List[Api.Shape] = List.from(parentTypes(symbol).map(shape))
+          record(parent, name, own, Api.Declaration(kind, modifiers(symbol), constructor, Unset, parents(symbol), accepts = accepts(symbol.primaryConstructor), parentShapes = parentShapes), true, where, bases(symbol))
           here.let { (here: Designator) => parameters(here, symbol.primaryConstructor.paramSymss, own) }
 
       // A member which cannot be read is left out, and the rest are still walked.
