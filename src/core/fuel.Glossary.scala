@@ -98,7 +98,13 @@ object Glossary:
       val shift: Int = -added(text)
       val raw: Block.Diagnostic = Block.Diagnostic.of(error, path, headed(text))
       val location = raw.location.let { (location: Block.Location) => location.copy(line = location.line.let(_ + shift)) }
-      raw.copy(location = location)
+
+      // The excerpt's lines are numbered as the file numbers them too.
+      val excerpt: List[Block] = raw.excerpt.map:
+        case code: Block.Code => code.copy(start = code.start.let(_ + shift))
+        case other            => other
+
+      raw.copy(location = location, excerpt = excerpt)
 
   // Every glossary as one, with the problems: a term defined twice (by its slug, so that two
   // spellings of one anchor are one term too), a name which cannot be a reference label (empty,

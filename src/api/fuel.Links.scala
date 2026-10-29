@@ -58,8 +58,18 @@ object Links:
       reference: Linkage )
   :   Optional[Block] =
 
+    // The link as it was written, as far as the model keeps it, to underline on its line.
+    val written: Text = reference.target match
+      case Linkage.Target.Document(_, path, _) => path
+      case Linkage.Target.Site(path, _)        => path
+      case Linkage.Target.Anchor(fragment)     => t"#$fragment"
+      case Linkage.Target.Url(url)             => url
+      case Linkage.Target.Sigil(text)          => text
+
     def report(tone: Tone, message: Text): Block =
-      Block.Diagnostic(tone, Block.Location(doc.path, reference.line), List(Block.paragraph(message)))
+      val style: Block.Note.Style = if tone == Tone.Failure then Block.Note.Style.Erroneous else Block.Note.Style.Caution
+      val excerpt: List[Block] = if doc.text == t"" then Nil else Excerpts.plainAt(doc.text, reference.line, written, style)
+      Block.Diagnostic(tone, Block.Location(doc.path, reference.line), List(Block.paragraph(message)), excerpt)
 
     def failure(message: Text): Block = report(Tone.Failure, message)
 
