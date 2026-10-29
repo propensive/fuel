@@ -63,7 +63,13 @@ object ApiPages:
       val above: List[Inline] = crumbs(entity.parent)
       if above.nil then Nil else List(Block.Paragraph(above))
 
-    val heading: Block = Block.Heading(1, Inline.text(entity.name))
+    // The heading carries the page's bookmark button and, for a package, the toggle which
+    // imports it into the reader's purview; both are the frontend's to answer.
+    val marks: List[Inline] =
+      val bookmark: Inline = Inline.Bookmark(entity.url, entity.key)
+      if entity.isPackage then List(Inline.Import(entity.url, entity.key), bookmark) else List(bookmark)
+
+    val heading: Block = Block.Heading(1, Inline.text(entity.name) + List(Inline.Textual(t" ")) + marks)
     val info: List[Block] = doc.let(_.info).let { (text: Text) => List(Block.Paragraph(Blocks.inline(text, resolver))) }.or(Nil)
 
     val removed: List[Block] = doc.let(_.until).lay(Nil: List[Block]): (until: Api.Until) =>

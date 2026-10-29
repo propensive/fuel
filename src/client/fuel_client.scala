@@ -643,7 +643,7 @@ private def show(config: Workspace.Config, directory: Text, operand: Optional[Te
 
         case doc: Doc =>
           import hyphenations.englishHyphenation
-          val renderer = TerminalRenderer(justify = true)
+          val renderer = TerminalRenderer(justify = true, purview = Scope.purview(config.imports))
           renderer.blocks(doc.blocks, width).each: (line: Teletype) => Out.println(line)
 
           if !doc.problems.nil then

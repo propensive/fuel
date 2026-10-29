@@ -135,7 +135,9 @@ final class Dashboard():
                 Panel.Role.Primary,
                 Unset,
                 content,
-                Panel.Priority.Essential ) ) )
+                Panel.Priority.Essential ) ),
+        // Every page is read under the reader's purview, which begins as the project's imports.
+        purview = Scope.purview(Server.imports) )
 
   // The target a path names: the first document for `/`, a document, an entity, or nothing.
   private def target(path: Text): Optional[Target] =
@@ -248,7 +250,7 @@ extension (dashboard: Dashboard.type)
   private def render(entity: Api.Entity): List[Block] =
     Checking.exclusive:
       val api: Api = Server.api
-      val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Server.imports))
+      val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Nil))
       val resolver: Resolver = Resolver(api, scope)
       val scala: Embedding.ScalaCode = Embedding.ScalaCode(Checker.tokenized, entity.key, false, Unset, resolver)
       ApiPages.page(api, entity, resolver, scope, List(scala, Embedding.JavaCode))
