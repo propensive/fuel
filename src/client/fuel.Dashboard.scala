@@ -34,11 +34,11 @@ package fuel
 
 import java.util.concurrent as juc
 
-import soundness.*
+import soundness.{Query as _, *}
 
 import dysasymptotics.{linearAccess, linearSize}
 
-import pyrocosm.{Action, Block, Event, Hints, Inline, Interface, Live, Panel, Tone, Tool, hints}
+import pyrocosm.{Action, Block, Control, Event, Hints, Inline, Input, Interface, Live, Panel, Tone, Tool, hints}
 
 // The documents and the API as the web front-end `Tool` serves from the daemon: launched once,
 // for as long as the daemon lives, when a config says `serve` (on its `port`, or 8060), and
@@ -46,6 +46,21 @@ import pyrocosm.{Action, Block, Event, Hints, Inline, Interface, Live, Panel, To
 // terminal. Every tab has a session of its own, since every page has a URL of its own:
 // `/doc/<section>/<path>` for a document, `/api/<entity>` for an entity.
 object Dashboard:
+  // The search field, one for every tab, which `handle` knows its events by.
+  val searchInput: Input = Input(t"search")
+
+  // The results of a search, as a page; or what is wrong with the query.
+  def searchPage(text: Text): List[Block] =
+    val api: Api = Server.api
+    val scope: Scope = Scope.document(Server.imports)
+
+    Query.read(text) match
+      case error: Query.Error =>
+        List(Block.Notice(Tone.Warning, Inline.text(t"Query"), List(Block.paragraph(error.message.text))))
+
+      case query: Query =>
+        ApiPages.search(api, text, api.search(query), Resolver(api, scope), scope)
+
   val web: Tool.Web = new Tool.Web:
     def port: Int = 8060
 
@@ -103,6 +118,7 @@ final class Dashboard():
     case Entity(key: Text)
     case Glossary()
     case Missing(path: Text)
+    case Search(query: Text)
 
   @scala.caps.unsafe.untrackedCaptures
   @volatile
@@ -117,6 +133,15 @@ final class Dashboard():
 
   val navigation: Live[List[Block]] = Live(Nil)
 
+  // The API search, typed into the navigation panel: a code field, so that the front-end offers
+  // its completions as it does Flame's; its text is coloured by the query's grammar.
+  val search: Control.Field =
+    Control.Field
+      ( Dashboard.searchInput,
+        Control.Field.Kind.Code(pyrocosm.Language.Scala),
+        notification = Control.Field.Notify.Keystrokes,
+        placeholder = t"Search the API: name, def, #Type, /pkg, +Result, -Param" )
+
   val content: Live[List[Block]] =
     Live(List(Block.paragraph(t"Run `fuel compile` in a project, and its documents appear here.")))
 
@@ -129,7 +154,8 @@ final class Dashboard():
                 Panel.Role.Navigation,
                 Inline.text(t"Documents"),
                 navigation,
-                Panel.Priority.Important ),
+                Panel.Priority.Important,
+                controls = List(search) ),
             Panel
               ( Panel.Id(t"content"),
                 Panel.Role.Primary,
@@ -163,6 +189,20 @@ final class Dashboard():
       show()
       refresh()
 
+    // Every keystroke searches; the decoration carries the version of the text it describes.
+    case Event.Edited(Dashboard.searchInput, text, caret, version) =>
+      search.decoration() = Control.Field.Decoration(Query.tokens(text), Server.api.search.completions(text, caret), false, version = version)
+      selected = if text.trim == t"" then first else Target.Search(text)
+      show()
+      refresh()
+
+    case Event.Submitted(Dashboard.searchInput, text) =>
+      search.decoration() = Control.Field.Decoration()
+      if text.trim != t"" then
+        selected = Target.Search(text)
+        show()
+        refresh()
+
     case _ =>
       ()
 
@@ -181,6 +221,7 @@ final class Dashboard():
         case Target.Entity(key)             => Server.api(key).present
         case Target.Glossary()              => true
         case Target.Missing(_)              => true
+        case Target.Search(_)               => true
         case _                              => false
 
       if !current then selected = first
@@ -204,6 +245,9 @@ final class Dashboard():
 
       case Target.Glossary() =>
         content() = Server.glossary
+
+      case Target.Search(text) =>
+        content() = Dashboard.searchPage(text)
 
       case Target.Missing(path) =>
         content() = List(Block.Notice(Tone.Warning, Inline.text(t"Not found"), List(Block.paragraph(t"There is no page at $path."))))

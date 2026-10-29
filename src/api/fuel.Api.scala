@@ -279,6 +279,11 @@ case class Api(entities: sci.Map[Text, Api.Entity]):
 
     case other => other
 
+  // The subtyping of every type the model names, and the search over its declarations: each
+  // built once, on first use, and gone with this `Api`.
+  lazy val lattice: Lattice = Lattice.build(this)
+  lazy val search: Search = Search.build(this)
+
   def add(entity: Api.Entity): Api = Api(entities.updated(entity.key, entity))
 
   // Two models as one: an entity in both keeps the project's own declaration, and its members
