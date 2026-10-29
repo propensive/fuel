@@ -351,7 +351,7 @@ object Hierarchy:
       val nameFill: Text = if current then t"var(--pyro-fg)" else if node.href.present then t"var(--pyro-link)" else t"var(--pyro-muted)"
       val mid: Text = box.centre.toString.tt
 
-      val rect: Text = t"""<rect x="${box.x.toString.tt}" y="${box.y.toString.tt}" width="${box.w.toString.tt}" height="${box.h.toString.tt}" rx="4" style="fill: var(--pyro-surface); $stroke"$dashes/>"""
+      val rect: Text = t"""<rect x="${box.x.toString.tt}" y="${box.y.toString.tt}" width="${box.w.toString.tt}" height="${box.h.toString.tt}" style="fill: var(--pyro-surface); $stroke"$dashes/>"""
       val pkg: Text = if node.pkg == t"" then t"" else t"""<text x="$mid" y="${(box.y + 14).toString.tt}" text-anchor="middle" style="$mono; font-size: var(--pyro-text-small); fill: var(--pyro-muted)">${escape(node.pkg)}</text>"""
       val name: Text = t"""<text x="$mid" y="${(box.y + 30).toString.tt}" text-anchor="middle" style="$mono; font-size: var(--pyro-text-inline); fill: $nameFill">${escape(node.name)}</text>"""
       val inner: Text = rect + pkg + name
@@ -371,7 +371,9 @@ object Hierarchy:
     val w: Text = layout.width.toString.tt
     val h: Text = layout.height.toString.tt
 
-    t"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 $w $h" width="$w" height="$h" role="img"><g>$edges$stems</g><g>$boxes</g><g>$labels</g></svg>"""
+    // Drawn at its own size where there is room, and scaled down to the width there is where
+    // there is not; the inline style outranks the stylesheet's sizing of a drawing.
+    t"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 $w $h" role="img" style="width: min(100%, ${w}px); height: auto"><g>$edges$stems</g><g>$boxes</g><g>$labels</g></svg>"""
 
   // The drawing in a sentence, for a reader without it.
   def alt(graph: Graph): Text =

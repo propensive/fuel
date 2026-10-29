@@ -62,6 +62,9 @@ make run
   @scala.caps.unsafe.untrackedCaptures
   var api0: Api = Api.empty
 
+  @scala.caps.unsafe.untrackedCaptures
+  var chainSvg: Text = t""
+
   def run(): Unit =
     suite(m"Markdown to blocks"):
       test(m"a heading, a paragraph and two fences become four blocks"):
@@ -1245,6 +1248,8 @@ extension (doc: Doc) def titled: String = doc.title
           Graph(List(node(t"sample.A", Role.Current), node(t"sample.B", Role.Ancestor), node(t"scala.Any", Role.Universal)),
                 List(Edge(t"sample.A", t"sample.B"), Edge(t"sample.B", t"scala.Any")), t"sample.A")
 
+        chainSvg = Hierarchy.layout(chain).let(Hierarchy.svg(_)).or(t"")
+
         test(m"a chain is one column, Any on top"):
           val layout: Hierarchy.Layout = laid(chain)
           val (a, b, any) = (box(layout, t"sample.A"), box(layout, t"sample.B"), box(layout, t"scala.Any"))
@@ -1338,6 +1343,78 @@ extension (doc: Doc) def titled: String = doc.title
           val lone: Optional[Graph] = family(t"p.Lone").let { (e: Api.Entity) => Hierarchy.of(family, e, Scope.document(Nil)) }
           (figures(t"sample.Util").size, lone.present)
         . assert(_ == (0, false))
+
+      suite(m"Rendering"):
+        import stenography.{Designator, Syntax}
+
+        def named(name: Text, tpe: Text, contextual: Boolean = false): Syntax = Syntax.Named(contextual, name, Syntax.Simple(Designator(tpe)))
+        def clause(items: Syntax*): Syntax = Syntax.Sequence('(', List(items*))
+        def ret(tpe: Text): Syntax = Syntax.Simple(Designator(tpe))
+        val scope: Scope = Scope.document(Nil)
+
+        def shown(name: Text, declaration: Api.Declaration, width: Int): List[Text] =
+          Signatures.block(name, declaration, Api.empty, scope, width).lines.map { (line: Block.Line) => line.tokens.map(_.text).join }
+
+        test(m"a short signature is one line"):
+          shown(t"short", Api.Declaration(Api.Kind.Def, clauses = List(clause()), result = ret(t"ReturnType")), 88)
+        . assert(_ == List(t"def short(): ReturnType"))
+
+        test(m"a long name breaks only before its result, after the hard space"):
+          shown(t"thisIsALongerMethodName", Api.Declaration(Api.Kind.Def, clauses = List(clause()), result = ret(t"ReturnType")), 30)
+        . assert(_ == List(t"def thisIsALongerMethodName()", t":   ReturnType"))
+
+        val multi: Api.Declaration =
+          Api.Declaration(Api.Kind.Def, clauses = List(clause(named(t"first", t"First")), clause(named(t"second", t"Second"), named(t"third", t"Third"))), result = ret(t"ReturnType"))
+
+        test(m"a second clause goes on its own line, padded within"):
+          shown(t"multiParams", multi, 40)
+        . assert(_ == List(t"def multiParams(first: First)", t"  ( second: Second, third: Third )", t":   ReturnType"))
+
+        val wide: Api.Declaration =
+          Api.Declaration(Api.Kind.Def, clauses = List(clause(named(t"first", t"First")), clause(named(t"second", t"Second"), named(t"third", t"Third"), named(t"fourth", t"Fourth"), named(t"fifth", t"Fifth"))), result = ret(t"ReturnType"))
+
+        test(m"a clause too wide for a line puts each parameter on one, its types aligned"):
+          shown(t"multiParams", wide, 40)
+        . assert(_ == List(t"def multiParams(first: First)", t"  ( second: Second,", t"    third:  Third,", t"    fourth: Fourth,", t"    fifth:  Fifth )", t":   ReturnType"))
+
+        test(m"a using clause says using once, its later parameters aligned beneath the first"):
+          val decl: Api.Declaration = Api.Declaration(Api.Kind.Def, clauses = List(clause(named(t"x", t"X")), clause(named(t"alpha", t"Alpha", true), named(t"beta", t"Beta", true))), result = ret(t"R"))
+          (shown(t"f", decl, 80), shown(t"f", decl, 20))
+        . assert(_ == (List(t"def f(x: X)(using alpha: Alpha, beta: Beta): R"), List(t"def f(x: X)", t"  ( using alpha: Alpha,", t"          beta:  Beta )", t":   R")))
+
+        test(m"a nameless using parameter is its type alone"):
+          val decl: Api.Declaration = Api.Declaration(Api.Kind.Def, clauses = List(clause(named(t"", t"Tactic", true))), result = ret(t"R"))
+          shown(t"f", decl, 80)
+        . assert(_ == List(t"def f(using Tactic): R"))
+
+        test(m"a table cell holds the clauses and result on lines of their own"):
+          Signatures.cell(wide, Api.empty, scope, 40).tokens.map(_.text).join
+        . assert(_ == t"(first: First)\n( second: Second,\n  third:  Third,\n  fourth: Fourth,\n  fifth:  Fifth )\n:   ReturnType")
+
+        test(m"no signature in the model carries a compiler-made parameter name"):
+          full.entities.values.toList.filter(_.own).flatMap(_.declarations.stdlib).flatMap(_.clauses.stdlib).map(_.qualified).count(_.contains(t"$$"))
+        . assert(_ == 0)
+
+        test(m"a type with a companion is one row, and an export is marked as one"):
+          val exported: Api.Entity =
+            Api.Entity(Designator.Top(t"p"), t"Text", true, definition = Api.Declaration(Api.Kind.Val, exported = true, result = ret(t"q.Text")),
+                       template = Api.Declaration(Api.Kind.Type, result = ret(t"q.Text"), exported = true), alias = Designator(t"q.Text"))
+          val paired: Api.Entity =
+            Api.Entity(Designator.Top(t"p"), t"Doc", true, definition = Api.Declaration(Api.Kind.Val), template = Api.Declaration(Api.Kind.CaseClass), overloads = List(Api.Declaration(Api.Kind.Object)))
+          val api: Api = Api(scala.collection.immutable.Map(exported.key -> exported, paired.key -> paired))
+          def kinds(entity: Api.Entity): List[Text] =
+            ApiPages.rows(entity, true, api, scope, Resolver(api, scope)).map { row => Blocks.plain(row.cells.stdlib.head.content) }
+          (kinds(exported), kinds(paired))
+        . assert(_ == (List(t"export"), List(t"case class")))
+
+        test(m"member tables share fixed column widths"):
+          ApiPages.table(t"Name", t"Signature", List(Block.Row(Nil))).bind { case Block.Table(columns, _, _) => columns.map(_.sizing); case _ => Nil }
+        . assert(_ == List(Block.Sizing.Fixed(10), Block.Sizing.Fixed(20), Block.Sizing.Fixed(45), Block.Sizing.Fixed(25)))
+
+        test(m"a hierarchy's boxes are square-cornered and the drawing fits its width"):
+          val svg: Text = chainSvg
+          (svg.contains(t"rx="), svg.contains(t"width: min(100%"))
+        . assert(_ == (false, true))
 
       suite(m"Results"):
         test(m"+Shape finds what returns a Doc"):
