@@ -35,7 +35,7 @@ package fuel
 import soundness.{Language as _, Token as _, *}
 
 import dysasymptotics.linearSize
-import pyrocosm.{Block, Inline, Language, Token, Tone}
+import pyrocosm.{Block, Figure, Inline, Language, Token, Tone}
 import stenography.Designator
 
 // An entity's page, and the navigation of the whole API, as blocks: Amok's `JvmFolio` layout.
@@ -127,6 +127,13 @@ object ApiPages:
     def section(declaration: Api.Declaration, ofType: Boolean): List[Block] =
       val signature: Block = Signatures.line(Signatures.declaration(entity.name, declaration, api, scope))
 
+      // A type's place in the hierarchy, drawn beneath its signature where there is one to draw.
+      val none: List[Block] = Nil
+
+      val hierarchy: List[Block] =
+        if !ofType then none else Hierarchy.of(api, entity, scope).lay(none): (graph: Hierarchy.Graph) =>
+          Hierarchy.layout(graph).lay(none) { (layout: Hierarchy.Layout) => List(Block.Figure(Figure(Inline.text(Hierarchy.alt(graph)), Hierarchy.svg(layout)))) }
+
       val members: List[Api.Entity] = others.filter: (child: Api.Entity) =>
         child.parent.let(_.isInstanceOf[Designator.Type]).or(false) == ofType
 
@@ -146,7 +153,7 @@ object ApiPages:
           clause :: table(t"Name", t"Signature", these.map { (m: Api.Entity, d: Api.Declaration) => row(m, d, true) })
 
       val own: List[Block.Row] = if ofType || entity.template.absent then rows(parameters) else Nil
-      signature :: table(t"Parameter", t"Type", own) + table(t"Name", t"Signature", plain.map { (m: Api.Entity, d: Api.Declaration) => row(m, d, true) }) + groups
+      signature :: hierarchy + table(t"Parameter", t"Type", own) + table(t"Name", t"Signature", plain.map { (m: Api.Entity, d: Api.Declaration) => row(m, d, true) }) + groups
 
     val sections: List[Block] =
       entity.definition.let(section(_, false)).or(Nil)

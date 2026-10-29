@@ -144,6 +144,7 @@ object settings:
     "contingency-core",
     "gossamer-core",
     "gossamer-lexicon",          // Lexicon: fuzzy name search
+    "acyclicity-core",           // Dag.layered: the type-hierarchy figure
     "vacuous-core",
     "eucalyptus-core")           // logging.silentLogging
   . map(component(soundness))
