@@ -52,20 +52,43 @@ object ApiPages:
   // another page's are not (its anchors are its own). A `qualified` row, in a list drawn from
   // across the API, says where the member is before its name.
   def row(member: Api.Entity, d: Api.Declaration, anchored: Boolean, api: Api, scope: Scope, resolver: Resolver, qualified: Boolean = false): Block.Row =
-    val kind: List[Inline] = List(Inline.Toned(Tone.Muted, Inline.text(d.kind.keyword)))
+    val exported: Boolean = d.exported || member.alias.present
+    val kind: List[Inline] = List(Inline.Toned(Tone.Muted, Inline.text(if exported then t"export" else d.kind.keyword)))
     val accent: Token.Accent = if d.kind.isType then Token.Accent.Typal else Token.Accent.Term
     val where: List[Inline] =
       if !qualified then Nil
       else List(Inline.Toned(Tone.Muted, Inline.text(Text(member.key.s.substring(0, member.key.s.length - member.name.s.length).nn))))
     val name: List[Inline] = where + List(Inline.Strong(List(Signatures.code(List(Token(member.name, accent, Unset, Inline.Destination.Local(member.url)))))))
-    val signature: List[Inline] = List(Signatures.code(Signatures.tokens(Syntax0.of(d), api, scope)))
+
+    // An export's signature is what it exports, linked; any other's its clauses and result.
+    val signature: List[Inline] = member.alias.lay(List(Signatures.cell(d, api, scope))): (target: Designator) =>
+      List(Signatures.code(Signatures.designator(target, api, scope)))
+
     val info: List[Inline] = member.doc.let(_.info).let(Blocks.inline(_, resolver)).or(Nil)
     val tone: Optional[Tone] = if member.removed then Tone.Muted else Unset
     Block.Row(List(Block.Cell(kind), Block.Cell(name), Block.Cell(signature), Block.Cell(info)), tone, Unset, if anchored then member.name else Unset)
 
+  // A member's rows: one for the member, whether it is a term, a type or both (a type and its
+  // companion, an export of both), from its type where it has one, and one for each overload
+  // of a method — a companion object, which the type's row covers, is not one.
+  def rows(member: Api.Entity, anchored: Boolean, api: Api, scope: Scope, resolver: Resolver): List[Block.Row] =
+    val principal: Optional[Api.Declaration] = member.template.or(member.definition)
+
+    val overloads: List[Api.Declaration] =
+      if member.template.absent then member.overloads
+      else member.overloads.filter { d => d.kind == Api.Kind.Def || d.kind == Api.Kind.Given || d.kind == Api.Kind.Extension }
+
+    principal.let(List(_)).or(Nil).map(row(member, _, anchored, api, scope, resolver)) + overloads.map(row(member, _, anchored, api, scope, resolver))
+
+  // The columns every member table shares, each a fixed share of the width, so that the tables
+  // of a page line up.
   def table(heading: Text, signature: Text, rows: List[Block.Row]): List[Block] =
     val columns: List[Block.Column] =
-      List(Block.Column(Inline.text(t"")), Block.Column(Inline.text(heading)), Block.Column(Inline.text(signature)), Block.Column(Inline.text(t"Description")))
+      List
+        ( Block.Column(Inline.text(t""), sizing = Block.Sizing.Fixed(10)),
+          Block.Column(Inline.text(heading), sizing = Block.Sizing.Fixed(20)),
+          Block.Column(Inline.text(signature), sizing = Block.Sizing.Fixed(45)),
+          Block.Column(Inline.text(t"Description"), sizing = Block.Sizing.Fixed(25)) )
 
     if rows.nil then Nil else List(Block.Table(columns, rows, Unset))
 
@@ -120,12 +143,12 @@ object ApiPages:
       ApiPages.row(member, d, anchored, api, scope, resolver)
 
     def rows(members: List[Api.Entity]): List[Block.Row] = members.bind: (member: Api.Entity) =>
-      member.declarations.map(row(member, _, true))
+      ApiPages.rows(member, true, api, scope, resolver)
 
     // The parameters belong to the signature of the type, where there is one, since a class's
     // are its constructor's; else to the term's.
     def section(declaration: Api.Declaration, ofType: Boolean): List[Block] =
-      val signature: Block = Signatures.line(Signatures.declaration(entity.name, declaration, api, scope))
+      val signature: Block = Signatures.block(entity.name, declaration, api, scope)
 
       // A type's place in the hierarchy, drawn beneath its signature where there is one to draw.
       val none: List[Block] = Nil
@@ -138,11 +161,12 @@ object ApiPages:
         child.parent.let(_.isInstanceOf[Designator.Type]).or(false) == ofType
 
       // The extensions this entity declares are grouped under the clauses they extend, each
-      // group a table of its own headed by its clause, after the other members.
-      val declared: List[(Api.Entity, Api.Declaration)] =
-        members.bind { (m: Api.Entity) => m.declarations.map((m, _)) }
+      // group a table of its own headed by its clause, after the other members, which have a
+      // row each.
+      val extended: List[(Api.Entity, Api.Declaration)] =
+        members.bind { (m: Api.Entity) => m.declarations.filter(_.kind == Api.Kind.Extension).map((m, _)) }
 
-      val (extended, plain) = declared.partition(_(1).kind == Api.Kind.Extension)
+      val plain: List[Api.Entity] = members.filter(_.declarations.exists(_.kind != Api.Kind.Extension))
 
       val groups: List[Block] =
         val keys: List[Text] = extended.map(_(1).group.map(_.qualified).join(t" "))
@@ -153,12 +177,12 @@ object ApiPages:
           clause :: table(t"Name", t"Signature", these.map { (m: Api.Entity, d: Api.Declaration) => row(m, d, true) })
 
       val own: List[Block.Row] = if ofType || entity.template.absent then rows(parameters) else Nil
-      signature :: hierarchy + table(t"Parameter", t"Type", own) + table(t"Name", t"Signature", plain.map { (m: Api.Entity, d: Api.Declaration) => row(m, d, true) }) + groups
+      signature :: hierarchy + table(t"Parameter", t"Type", own) + table(t"Name", t"Signature", rows(plain)) + groups
 
     val sections: List[Block] =
       entity.definition.let(section(_, false)).or(Nil)
       + entity.template.let(section(_, true)).or(Nil)
-      + entity.overloads.bind { (d: Api.Declaration) => List(Signatures.line(Signatures.declaration(entity.name, d, api, scope))) }
+      + entity.overloads.bind { (d: Api.Declaration) => List(Signatures.block(entity.name, d, api, scope)) }
 
     // A link to an entity by its name, where it has a page.
     def link(key: Text): List[Inline] = api(key).lay(Inline.text(key)): (e: Api.Entity) =>

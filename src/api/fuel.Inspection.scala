@@ -270,9 +270,12 @@ object Inspection:
       case Some(head) =>
         val contextual: Boolean = head.flags.is(Flags.Given) || head.flags.is(Flags.Implicit)
 
+        // A name the compiler made up (`evidence$1`, `x$3`) is not shown: the type alone is.
         val items: scala.List[Syntax] = params.map: param =>
           val erased: Text = if param.flags.is(Flags.Erased) then t"erased " else t""
-          Syntax.Named(contextual, t"$erased${param.name}", syntax(param.info.widenByName))
+          val synthetic: Boolean = param.name.contains("$") || param.flags.is(Flags.Synthetic)
+          val shown: Text = if synthetic then erased.trim else t"$erased${param.name}"
+          Syntax.Named(contextual, shown, syntax(param.info.widenByName))
 
         Syntax.Sequence('(', List.from(items))
 
@@ -581,7 +584,7 @@ object Inspection:
                 val target: Optional[Api.Shape] = shape(other)
                 (target, noParams)
 
-          record(parent, name, own, Api.Declaration(Api.Kind.Type, modifiers(symbol), params, rhs, aliasOf = aliasOf, aliasParams = aliasParams), true, where)
+          record(parent, name, own, Api.Declaration(Api.Kind.Type, modifiers(symbol), params, rhs, aliasOf = aliasOf, aliasParams = aliasParams, exported = flags.is(Flags.Exported)), true, where)
 
           aliased match
             case TypeLambda(names, bounds, _) if own || Inspection.everyParameter =>
