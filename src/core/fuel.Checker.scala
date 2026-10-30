@@ -34,20 +34,23 @@ package fuel
 
 import java.util.concurrent as juc
 
+import dotty.tools.dotc.core.Contexts
+
 import soundness.*
 
 import ambience.systems.javaBaseSystem
-import logging.silentLogging
 import strategies.throwUnsafely
 
 object Checker:
   object tokenized extends Checker:
-    def check(code: Text, mode: Preamble.Mode, context: Optional[harlequin.Scala.Context]): SourceCode =
+    def check(code: Text, mode: Preamble.Mode, context: Optional[harlequin.Scala.Context])
+    :   SourceCode =
+
       harlequin.Scala.highlight(code, context)
 
     def enter(name: Text, unit: Text): Boolean = false
     def build(sources: Map[Text, Text], output: Text): List[Notice] = Nil
-    def context: Optional[dotty.tools.dotc.core.Contexts.Context] = Unset
+    def context: Optional[Contexts.Context] = Unset
     def compiles: Boolean = false
 
 // How a Scala fragment is highlighted: at tokenized depth, which needs nothing, or in a warm
@@ -68,7 +71,7 @@ trait Checker:
 
   // The session's own context, whose symbol table loads the classpath lazily — what walks a
   // dependency's API without unpickling a body — good only on the compiler's thread.
-  def context: Optional[dotty.tools.dotc.core.Contexts.Context]
+  def context: Optional[Contexts.Context]
 
   def compiles: Boolean
 
@@ -142,17 +145,21 @@ object Checking:
             def arguments: List[Text] = frontend.options
             def classpath: Text = frontend.classpath
             def compiler(): dotty.tools.dotc.Compiler = frontend.compiler
-            override def context(): Optional[dotty.tools.dotc.core.Contexts.Context] = frontend.context
+            override def context(): Optional[Contexts.Context] = frontend.context
 
       // The checker captures the session, which `body` never outlives: it is vouched pure so
       // that `body` may take a plain `Checker`.
       val checker: Checker = scala.caps.unsafe.unsafeAssumePure:
         new Checker:
-          def check(code: Text, mode: Preamble.Mode, context: Optional[harlequin.Scala.Context]): SourceCode =
+          def check(code: Text, mode: Preamble.Mode, context: Optional[harlequin.Scala.Context])
+          :   SourceCode =
+
             mode match
               case Preamble.Mode.Typecheck => harlequin.Scala.highlight(code, context)
-              case Preamble.Mode.Compile   => harlequin.Scala.highlight(code, context)(using compiled)
               case Preamble.Mode.Parse     => parsed(frontend, code, context)
+
+              case Preamble.Mode.Compile =>
+                harlequin.Scala.highlight(code, context)(using compiled)
 
           def enter(name: Text, unit: Text): Boolean =
             compilation.compile(Map(name -> unit)).errors == 0
@@ -169,7 +176,7 @@ object Checking:
 
             process.notices
 
-          def context: Optional[dotty.tools.dotc.core.Contexts.Context] = frontend.context
+          def context: Optional[Contexts.Context] = frontend.context
           def compiles: Boolean = true
 
       body(checker)
@@ -180,8 +187,10 @@ object Checking:
     ( frontend: Scalac.Session.Frontend, code: Text, context: Optional[harlequin.Scala.Context] )
   :   SourceCode =
 
-    import dotty.tools.dotc.core.Contexts
-    import dotty.tools.dotc.reporting.{Diagnostic as CompilerDiagnostic, HideNonSensicalMessages, Reporter, UniqueMessagePositions}
+    import dotty.tools.dotc.interfaces.Diagnostic.{ERROR, WARNING}
+    import dotty.tools.dotc.reporting.{Diagnostic as CompilerDiagnostic, HideNonSensicalMessages}
+    import dotty.tools.dotc.reporting.{Reporter, UniqueMessagePositions}
+    import harlequin.Diagnostic.Importance
     import dotty.tools.dotc.util.SourceFile
 
     val text: Text = harlequin.Scala.preprocess(code, context)
@@ -195,9 +204,9 @@ object Checking:
 
         if pos.exists then
           val importance = diagnostic.level match
-            case dotty.tools.dotc.interfaces.Diagnostic.ERROR   => harlequin.Diagnostic.Importance.Error
-            case dotty.tools.dotc.interfaces.Diagnostic.WARNING => harlequin.Diagnostic.Importance.Warning
-            case _                                              => harlequin.Diagnostic.Importance.Info
+            case ERROR   => Importance.Error
+            case WARNING => Importance.Warning
+            case _       => Importance.Info
 
           val span = Span.offset(pos.start.z, pos.end - pos.start)
           collected = harlequin.Diagnostic(span, diagnostic.message.tt, importance) :: collected
@@ -206,6 +215,7 @@ object Checking:
     base.setReporter(reporter)
     base.setSetting(base.settings.YstopAfter, scala.collection.immutable.List("parser"))
     given Contexts.Context = base
-    frontend.compiler.newRun.compileSources(scala.collection.immutable.List(SourceFile.virtual("<fuel>", text.s)))
+    val source: SourceFile = SourceFile.virtual("<fuel>", text.s)
+    frontend.compiler.newRun.compileSources(scala.collection.immutable.List(source))
 
     harlequin.Scala.highlight(code, context).copy(diagnostics = collected.reverse)

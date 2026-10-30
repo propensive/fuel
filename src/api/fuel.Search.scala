@@ -35,12 +35,11 @@ package fuel
 import scala.collection.immutable as sci
 import scala.collection.mutable as scm
 
-import soundness.{Language as _, Token as _, Query as _, *}
+import soundness.{Query as _, *}
 
-import pyrocosm.Control
-
-import proximities.levenshteinProximity
 import caseSensitivity.caseInsensitive
+import proximities.levenshteinProximity
+import pyrocosm.Control
 
 // A search of an `Api`, built once for it (`Api.search`): every declaration is an entry, with
 // the id in the `Lattice` of the type it returns and of each type it accepts, and the entries
@@ -62,8 +61,9 @@ object Search:
   // The names of the universal types, which have no entity, and the keys they stand for.
   private val universal: sci.Map[Text, Text] =
     sci.Map
-      ( t"Any" -> Lattice.any, t"Matchable" -> Lattice.matchable, t"AnyRef" -> Lattice.anyRef, t"Object" -> Lattice.obj,
-        t"AnyVal" -> Lattice.anyVal, t"Nothing" -> Lattice.nothing, t"Null" -> Lattice.nul )
+      ( t"Any" -> Lattice.any, t"Matchable" -> Lattice.matchable, t"AnyRef" -> Lattice.anyRef,
+        t"Object" -> Lattice.obj, t"AnyVal" -> Lattice.anyVal, t"Nothing" -> Lattice.nothing,
+        t"Null" -> Lattice.nul )
 
   private case class Entry
     ( entity:      Api.Entity,
@@ -84,14 +84,23 @@ final class Search private (api: Api, lattice: Lattice):
 
   private def headId(shape: Api.Shape): Int = Lattice.head(shape).let(lattice.id(_)).or(-1)
 
+  // Whether an entity is a type, or declares one; whether it is a package or an object.
+  private def isType(e: Api.Entity): Boolean =
+    e.template.present || e.declarations.exists(_.kind.isType)
+
+  private def container(e: Api.Entity): Boolean =
+    e.isPackage || e.definition.let(_.kind == Api.Kind.Object).or(false)
+
   private val entries: scala.Array[Entry] =
-    val sorted: scala.List[Api.Entity] = api.entities.values.toList.filter { e => !e.hidden && !e.isParameter }.sortBy(_.key.s)
+    val sorted: scala.List[Api.Entity] =
+      api.entities.values.toList.filter { e => !e.hidden && !e.isParameter }.sortBy(_.key.s)
 
     sorted.flatMap: entity =>
       entity.declarations.stdlib.map: declaration =>
-        val returns: Optional[Api.Shape] =
-          declaration.returns.or(if declaration.kind == Api.Kind.Given then declaration.provides else Unset)
+        val provided: Optional[Api.Shape] =
+          if declaration.kind == Api.Kind.Given then declaration.provides else Unset
 
+        val returns: Optional[Api.Shape] = declaration.returns.or(provided)
         val result: Optional[Api.Shape] = returns.let(api.expand(_))
         val params: scala.Array[Api.Shape] = declaration.accepts.stdlib.map(api.expand(_)).toArray
         Entry(entity, declaration, result, result.let(headId(_)).or(-1), params, params.map(headId))
@@ -105,20 +114,25 @@ final class Search private (api: Api, lattice: Lattice):
       heads(entries(index)).distinct.foreach: head =>
         if head >= 0 then
           val buffer: scm.ArrayBuffer[Int] = buffers(head) match
-            case null                           => scm.ArrayBuffer[Int]().tap { b => buffers(head) = b }
-            case buffer: scm.ArrayBuffer[Int]   => buffer
+            case null                         => scm.ArrayBuffer[Int]().tap: b => buffers(head) = b
+            case buffer: scm.ArrayBuffer[Int] => buffer
+
           buffer += index
 
-    buffers.map { b => if b == null then scala.Array.empty[Int] else b.toArray }
+    buffers.map: b => if b == null then scala.Array.empty[Int] else b.toArray
 
-  private val byResult: scala.Array[scala.Array[Int]] = postings { entry => if entry.resultHead < 0 then scala.Array.empty[Int] else scala.Array(entry.resultHead) }
+  private val byResult: scala.Array[scala.Array[Int]] = postings: entry =>
+    if entry.resultHead < 0 then scala.Array.empty[Int] else scala.Array(entry.resultHead)
+
   private val byParam: scala.Array[scala.Array[Int]] = postings(_.paramHeads)
 
   private val byEntity: sci.Map[Text, scala.Array[Int]] =
-    entries.indices.groupBy { index => entries(index).entity.key }.map { (key, indices) => (key, indices.toArray) }
+    entries.indices.groupBy { index => entries(index).entity.key }.map: (key, indices) =>
+      (key, indices.toArray)
 
   private lazy val lexicon: Lexicon[List[Api.Entity]] =
-    Lexicon[List[Api.Entity]]().tap { lexicon => api.byName.foreach { (name, entities) => lexicon(name) = entities } }
+    Lexicon[List[Api.Entity]]().tap: lexicon =>
+      api.byName.foreach: (name, entities) => lexicon(name) = entities
 
   // The entities a name finds: exactly, or at the smallest radius which finds any.
   private def named(name: Query.Name): (scala.List[Api.Entity], Boolean) =
@@ -127,7 +141,9 @@ final class Search private (api: Api, lattice: Lattice):
       def search(radius: Int): (scala.List[Api.Entity], Boolean) =
         if radius > 2 then (scala.Nil, false)
         else
-          val found: scala.List[Api.Entity] = lexicon.search(name.text, radius).stdlib.toList.flatMap(_.stdlib)
+          val found: scala.List[Api.Entity] =
+            lexicon.search(name.text, radius).stdlib.toList.flatMap(_.stdlib)
+
           if found.isEmpty then search(radius + 1) else (found, radius == 0)
 
       search(0)
@@ -137,21 +153,25 @@ final class Search private (api: Api, lattice: Lattice):
   private def keysOf(name: Text): scala.List[Text] =
     universal.get(name) match
       case Some(key) => scala.List(key)
+
       case None =>
-        val simple: Text = name.s.substring(name.s.lastIndexOf('.') + 1).nn.tt
+        def leaf(key: Text): String = key.s.substring(key.s.lastIndexOf('.') + 1).nn
+        val simple: Text = leaf(name).tt
         val dotted: Boolean = name.contains('.')
 
         val entities: scala.List[Text] =
           api.byName.get(simple).map(_.stdlib).getOrElse(scala.Nil)
-          . filter { e => e.template.present || e.declarations.exists(_.kind.isType) }
+          . filter(isType)
           . map(_.key)
-          . filter { key => !dotted || key.sub(t"#", t".") == name }
+          . filter: key => !dotted || key.sub(t"#", t".") == name
 
         val java: scala.List[Text] =
           (Lattice.javaTypes.keys ++ Lattice.javaTypes.values.flatten).toList.distinct
-          . filter { key => key == name || (!dotted && key.s.substring(key.s.lastIndexOf('.') + 1) == simple.s) }
+          . filter: key => key == name || (!dotted && leaf(key) == simple.s)
 
-        val primitive: scala.List[Text] = Lattice.primitives.toList.filter { key => key == name || (!dotted && key == t"scala.$simple") }
+        val primitive: scala.List[Text] =
+          Lattice.primitives.toList.filter: key =>
+            key == name || (!dotted && key == t"scala.$simple")
 
         (entities ++ java ++ primitive).distinct
 
@@ -169,7 +189,10 @@ final class Search private (api: Api, lattice: Lattice):
 
         acc.flatMap { prefix => options.map(prefix :+ _) }.take(Search.alternatives)
 
-    keys.flatMap { key => combinations.map { args => api.expand(Api.Shape.Named(key, List.from(args))) } }.distinct
+    val shapes: scala.List[Api.Shape] = keys.flatMap: key =>
+      combinations.map: args => api.expand(Api.Shape.Named(key, List.from(args)))
+
+    shapes.distinct
 
   private def resolve(query: Query.TypeQuery): scala.List[(Int, Api.Shape)] =
     shapesOf(query).flatMap: shape =>
@@ -179,28 +202,37 @@ final class Search private (api: Api, lattice: Lattice):
   // Whether two expanded shapes agree, argument by argument, variance aside.
   private def same(left: Api.Shape, right: Api.Shape): Boolean = (left, right) match
     case (Api.Shape.Named(k1, as1), Api.Shape.Named(k2, as2)) =>
-      k1 == k2 && as1.stdlib.size == as2.stdlib.size && as1.stdlib.zip(as2.stdlib).forall(same(_, _))
+      k1 == k2 && as1.stdlib.size == as2.stdlib.size &&
+        as1.stdlib.zip(as2.stdlib).forall(same(_, _))
+
     case _ => false
 
   // Whether a hit's type satisfies a query's, with arguments: the same head with the same
   // arguments, or a strict subtype whose own direct parents say it is the query's type.
   private def satisfies(hit: Api.Shape, query: Api.Shape, queryHead: Int): Boolean = query match
     case Api.Shape.Named(_, Nil) => true
+
     case Api.Shape.Named(queryKey, _) => hit match
       case Api.Shape.Named(hitKey, _) if hitKey == queryKey => same(hit, query)
+
       case Api.Shape.Named(hitKey, _) =>
-        api(hitKey).let(_.template).let(_.parentShapes).or(Nil).stdlib.map(api.expand(_)).exists: parent =>
-          parent match
-            case Api.Shape.Named(parentKey, _) => parentKey == queryKey && same(parent, query)
-            case _                             => false
+        val parents: scala.List[Api.Shape] =
+          api(hitKey).let(_.template).let(_.parentShapes).or(Nil).stdlib.map(api.expand(_))
+
+        parents.exists:
+          case parent @ Api.Shape.Named(key, _) => key == queryKey && same(parent, query)
+          case _                                => false
+
       case _ => false
+
     case _ => false
 
   // Every simple name, sorted, for completion by prefix; and every name a type has.
   private lazy val names: scala.List[Text] = api.byName.keys.toList.sortBy(_.s)
+
   private lazy val typeNames: sci.Set[Text] =
-    api.byName.filter { (_, entities) => entities.exists { e => e.template.present || e.declarations.exists(_.kind.isType) } }.keySet
-    ++ universal.keySet ++ Lattice.primitives.map { key => Text(key.s.substring(6).nn) }
+    val named: sci.Set[Text] = api.byName.filter { (_, entities) => entities.exists(isType) }.keySet
+    named ++ universal.keySet ++ Lattice.primitives.map: key => Text(key.s.substring(6).nn)
 
   // What may complete the word before the caret: after `+` or `-`, or within the type there, a
   // type's name; after `/`, a package's or an object's; elsewhere a name or a keyword.
@@ -208,7 +240,8 @@ final class Search private (api: Api, lattice: Lattice):
     val s: String = text.s
     val at: Int = caret.min(s.length).max(0)
     var start: Int = at
-    while start > 0 && (s.charAt(start - 1).isLetterOrDigit || s.charAt(start - 1) == '_') do start -= 1
+    def wordChar(char: Char): Boolean = char.isLetterOrDigit || char == '_'
+    while start > 0 && wordChar(s.charAt(start - 1)) do start -= 1
     val stem: String = s.substring(start, at).nn
 
     if stem.isEmpty then Nil else
@@ -217,34 +250,48 @@ final class Search private (api: Api, lattice: Lattice):
       def governing(index: Int, depth: Int): Optional[Char] =
         if index < 0 then Unset else s.charAt(index) match
           case ']' | ')' | '}'         => governing(index - 1, depth + 1)
-          case '[' | '(' | '{'         => if depth > 0 then governing(index - 1, depth - 1) else governing(index - 1, 0)
+          case '[' | '(' | '{'         => governing(index - 1, (depth - 1).max(0))
           case c if c.isWhitespace     => if depth > 0 then governing(index - 1, depth) else Unset
           case '+' | '-' | '/'         => s.charAt(index)
           case _                       => governing(index - 1, depth)
 
       val sigil: Optional[Char] = governing(start - 1, 0)
       def prefixed(name: Text): Boolean = name.s.regionMatches(true, 0, stem, 0, stem.length)
-      def ranked(found: scala.List[Text]): scala.List[Text] = found.sortBy { name => (!name.s.startsWith(stem), name.s) }.take(Search.completed)
+
+      def ranked(found: scala.List[Text]): scala.List[Text] =
+        found.sortBy { name => (!name.s.startsWith(stem), name.s) }.take(Search.completed)
 
       val found: scala.List[Control.Field.Completion] = sigil match
         case '+' | '-' =>
           ranked(typeNames.toList.filter(prefixed)).map: name =>
-            val key: Text = api.byName.get(name).flatMap(_.stdlib.find { e => e.template.present }).map(_.key).getOrElse(universal.getOrElse(name, t"scala.$name"))
+            val entity: Option[Api.Entity] =
+              api.byName.get(name).flatMap(_.stdlib.find(_.template.present))
+
+            val key: Text = entity.map(_.key).getOrElse(universal.getOrElse(name, t"scala.$name"))
             Control.Field.Completion(name, t"type", key)
 
         case '/' =>
-          ranked(names.filter { name => prefixed(name) && api.byName.get(name).exists(_.stdlib.exists { e => e.isPackage || e.definition.let(_.kind == Api.Kind.Object).or(false) }) }).map: name =>
-            val key: Text = api.byName.get(name).flatMap(_.stdlib.find { e => e.isPackage || e.definition.let(_.kind == Api.Kind.Object).or(false) }).map(_.key).getOrElse(name)
+          def holds(name: Text): Boolean = api.byName.get(name).exists(_.stdlib.exists(container))
+
+          ranked(names.filter { name => prefixed(name) && holds(name) }).map: name =>
+            val key: Text =
+              api.byName.get(name).flatMap(_.stdlib.find(container)).map(_.key).getOrElse(name)
+
             Control.Field.Completion(name, t"package", key)
 
         case _ =>
           val keywords: scala.List[Control.Field.Completion] =
-            Query.Keyword.all.keys.toList.filter(prefixed).sortBy(_.s).map { word => Control.Field.Completion(word, t"keyword", t"") }
+            Query.Keyword.all.keys.toList.filter(prefixed).sortBy(_.s).map: word =>
+              Control.Field.Completion(word, t"keyword", t"")
 
-          val entities: scala.List[Control.Field.Completion] = ranked(names.filter(prefixed)).map: name =>
-            val first: Option[Api.Entity] = api.byName.get(name).flatMap(_.stdlib.headOption)
-            val kind: Text = first.flatMap(_.declarations.stdlib.headOption).map(_.kind.keyword).getOrElse(t"")
-            Control.Field.Completion(name, kind, first.map(_.key).getOrElse(t""))
+          val entities: scala.List[Control.Field.Completion] =
+            ranked(names.filter(prefixed)).map: name =>
+              val first: Option[Api.Entity] = api.byName.get(name).flatMap(_.stdlib.headOption)
+
+              val kind: Text =
+                first.flatMap(_.declarations.stdlib.headOption).map(_.kind.keyword).getOrElse(t"")
+
+              Control.Field.Completion(name, kind, first.map(_.key).getOrElse(t""))
 
           keywords ++ entities
 
@@ -264,7 +311,7 @@ final class Search private (api: Api, lattice: Lattice):
     query.names.stdlib.foreach: name =>
       val (found, isExact) = named(name)
       val set: java.util.BitSet = java.util.BitSet()
-      found.foreach { entity => byEntity.get(entity.key).foreach(_.foreach(set.set(_))) }
+      found.foreach: entity => byEntity.get(entity.key).foreach(_.foreach(set.set(_)))
       if isExact then exact.or(set)
       narrow(set)
 
@@ -289,11 +336,14 @@ final class Search private (api: Api, lattice: Lattice):
         lattice.above(head).foreach: sup =>
           byParam(sup).foreach: index =>
             val entry: Entry = entries(index)
+
             val fits: Boolean = shape match
               case Api.Shape.Named(_, Nil) => true
+
               case _ =>
                 entry.params.indices.exists: i =>
                   entry.paramHeads(i) == sup && (sup != head || same(entry.params(i), shape))
+
             if fits then set.set(index)
 
       narrow(set)
@@ -305,10 +355,15 @@ final class Search private (api: Api, lattice: Lattice):
       val declaration: Api.Declaration = entry.declaration
       val key: Text = entry.entity.key.sub(t"#", t".")
 
-      (query.kinds.isEmpty || query.kinds.contains(declaration.kind))
-      && query.form.lay(true) { form => (form == Query.Form.Type) == declaration.kind.isType }
-      && query.modifiers.forall(declaration.modifiers.has(_))
-      && query.packages.stdlib.forall { pkg => key == pkg || key.starts(t"$pkg.") }
+      def kind: Boolean = query.kinds.isEmpty || query.kinds.contains(declaration.kind)
+
+      def form: Boolean =
+        query.form.lay(true): wanted => (wanted == Query.Form.Type) == declaration.kind.isType
+
+      def modifiers: Boolean = query.modifiers.forall(declaration.modifiers.has(_))
+      def within: Boolean = query.packages.stdlib.forall: pkg => key == pkg || key.starts(t"$pkg.")
+
+      kind && form && modifiers && within
 
     val hits: scm.ListBuffer[Hit] = scm.ListBuffer()
     var index: Int = candidates.nextSetBit(0)
@@ -319,5 +374,5 @@ final class Search private (api: Api, lattice: Lattice):
       index = candidates.nextSetBit(index + 1)
 
     // Exactly-named hits first, then the project's own before its dependencies', then by key.
-    val ordered: scala.List[Hit] = hits.toList.sortBy { hit => (!hit.exact, !hit.entity.own) }
+    val ordered: scala.List[Hit] = hits.toList.sortBy: hit => (!hit.exact, !hit.entity.own)
     Outcome(List.from(ordered), List.from(notices))

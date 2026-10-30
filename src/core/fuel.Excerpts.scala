@@ -34,8 +34,7 @@ package fuel
 
 import soundness.{Language as _, Token as _, *}
 
-import pyrocosm.{Block, Inline, Language, Token}
-import pyrocosm.Notices
+import pyrocosm.{Block, Inline, Language, Notices, Token}
 
 // The lines around a problem, for its diagnostic to show: the line it is on and one either
 // side, numbered as the file numbers them, with the problem's span underlined — a Scala source
@@ -44,7 +43,7 @@ import pyrocosm.Notices
 // else the whole line; or, for Scala, as character offsets.
 object Excerpts:
   private def plainLines(text: Text): List[Block.Line] =
-    text.cut(t"\n").map { (line: Text) => Block.Line(List(Token.plain(line))) }
+    text.cut(t"\n").map: (line: Text) => Block.Line(List(Token.plain(line)))
 
   private def scalaLines(text: Text): List[Block.Line] =
     safely(Notices.lines(text)).or(plainLines(text))
@@ -74,10 +73,14 @@ object Excerpts:
   // where it does not.
   def plainAt(text: Text, line: Int, target: Text, style: Block.Note.Style): List[Block] =
     val at: Int = text.cut(t"\n").stdlib.lift(line - 1).map(_.s.indexOf(target.s)).getOrElse(-1)
-    if at < 0 || target == t"" then plain(text, line, style) else plain(text, line, style, at + 1, target.length)
+
+    if at < 0 || target == t"" then plain(text, line, style)
+    else plain(text, line, style, at + 1, target.length)
 
   // A Scala source, highlighted, with the characters from one offset to another underlined; the
   // location of the span's start is given back with the excerpt, for the diagnostic's heading.
-  def scala(text: Text, from: Int, to: Int, style: Block.Note.Style): (Optional[(Int, Int)], List[Block]) =
+  def scala(text: Text, from: Int, to: Int, style: Block.Note.Style)
+  :   (Optional[(Int, Int)], List[Block]) =
+
     val note: Block.Note = Notes.of(text, from, to, style)
     ((note.line + 1, note.start + 1), excerpt(Language.Scala, scalaLines(text), note))

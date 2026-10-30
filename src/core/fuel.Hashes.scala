@@ -34,8 +34,6 @@ package fuel
 
 import java.nio.file as jnf
 
-import scala.jdk.CollectionConverters.*
-
 import soundness.*
 
 import alphabets.hexLowerCase

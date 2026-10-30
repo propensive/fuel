@@ -32,7 +32,7 @@
                                                                                                   */
 package fuel
 
-import soundness.{Language as _, Token as _, *}
+import soundness.*
 
 import codepages.utf8Codepage
 import dysasymptotics.linearSize
@@ -47,7 +47,8 @@ import pyrocosm.{Block, Inline}
 //   follows setup                 # the fragments whose text precedes this one when it compiles
 //   errors show                   # fail (the default): an error fails the compile;
 //                                 # show: errors are expected and shown; ignore: not compiled
-//   language java                 # how the fragment is highlighted: the fence's language unless said
+//   language java                 # how the fragment is highlighted: the fence's language
+//                                 # unless said
 //   highlight Mi..es  the caption # a range to mark, with its caption in the remaining atoms,
 //   error     Lit..ond            # as `highlight`, `error`, `caution` or `param`
 //     caption  or beneath it
@@ -120,7 +121,8 @@ object Preamble:
     val raw: Block.Diagnostic = Block.Diagnostic.of(error, path, headed(text))
 
     val location: Optional[Block.Location] =
-      raw.location.let { (location: Block.Location) => location.copy(line = location.line.let(_ + shift)) }
+      raw.location.let: (location: Block.Location) =>
+        location.copy(line = location.line.let(_ + shift))
 
     val excerpt: List[Block] = raw.excerpt.map:
       case code: Block.Code => code.copy(start = code.start.let(_ + shift))
@@ -144,7 +146,7 @@ object Preamble:
         node.fields(keyword).to[List].head.let(_.atomTexts.to[List].filter(_ != t"").join(t" "))
 
       def number(text: Optional[Text]): Optional[Double] =
-        text.let { (text: Text) => safely(text.as[Double]) }
+        text.let: (text: Text) => safely(text.as[Double])
 
       // The marks beneath a node — the preamble's own, or a frame's — each with its caption
       // in its remaining atoms or a `caption` beneath it, and its selection read whole.

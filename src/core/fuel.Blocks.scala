@@ -34,7 +34,7 @@ package fuel
 
 import soundness.{Language as _, Token as _, *}
 
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 import pyrocosm.{Block, Inline, Language, Token}
 
 // A link a document makes, by the line it is on — its paragraph's first, since phrasing has no
@@ -42,11 +42,15 @@ import pyrocosm.{Block, Inline, Language, Token}
 // target is known.
 object Linkage:
   enum Target:
-    case Document(section: Text, path: Text, fragment: Optional[Text])   // another document, by its path in its section
-    case Site(path: Text, fragment: Optional[Text])                       // a page of the site, by its root-absolute path
-    case Anchor(fragment: Text)                                           // a place on this page
-    case Url(url: Text)                                                   // a URL, with a scheme
-    case Sigil(reference: Text)                                           // a sigilled reference nothing resolved
+    // Another document, by its path in its section.
+    case Document(section: Text, path: Text, fragment: Optional[Text])
+
+    // A page of the site, by its root-absolute path.
+    case Site(path: Text, fragment: Optional[Text])
+
+    case Anchor(fragment: Text)  // a place on this page
+    case Url(url: Text)          // a URL, with a scheme
+    case Sigil(reference: Text)  // a sigilled reference nothing resolved
 
 case class Linkage(line: Int, target: Linkage.Target)
 
@@ -77,11 +81,17 @@ object Blocks:
   // What one conversion gathers besides its blocks: the links it made, for the check which
   // runs once every document is converted, and the anchors it gave its headings and fences,
   // each unique on its page.
-  final class Context(val linker: Linker, val page: Optional[Page] = Unset, val glossary: Glossary = Glossary.none):
+  final class Context
+    ( val linker:   Linker,
+      val page:     Optional[Page] = Unset,
+      val glossary: Glossary       = Glossary.none ):
+
     private var references0: List[Linkage] = Nil
     private var anchors0: List[Text] = Nil
 
-    def refer(line: Int, target: Linkage.Target): Unit = references0 = Linkage(line, target) :: references0
+    def refer(line: Int, target: Linkage.Target): Unit =
+      references0 = Linkage(line, target) :: references0
+
     def references: List[Linkage] = references0.reverse
     def anchors: List[Text] = anchors0.reverse
 
@@ -101,13 +111,17 @@ object Blocks:
   def of(markdown: Markdown of Layout, embeddings: List[Embedding], context: Context): List[Block] =
     all(markdown.children, embeddings, context)
 
-  def of(markdown: Markdown of Layout, embeddings: List[Embedding], linker: Linker = Linker.none): List[Block] =
+  def of(markdown: Markdown of Layout, embeddings: List[Embedding], linker: Linker = Linker.none)
+  :   List[Block] =
+
     of(markdown, embeddings, Context(linker))
 
   // A heading's anchor from its text, as GitHub makes one: lowercased, every character which
   // is not a letter, a digit, a space or a hyphen dropped, and each space a hyphen.
   def slug(text: Text): Text =
-    Text(text.s.toLowerCase.nn.filter { c => c.isLetterOrDigit || c == ' ' || c == '-' }.replace(' ', '-').nn)
+    val kept: String = text.s.toLowerCase.nn.filter: c => c.isLetterOrDigit || c == ' ' || c == '-'
+
+    Text(kept.replace(' ', '-').nn)
 
   // The first heading's text, of whatever level, which is what a document is called.
   def title(blocks: List[Block]): Optional[Text] = blocks match
@@ -129,9 +143,10 @@ object Blocks:
     case Inline.Snippet(_, tokens)    => tokens.map(_.text).join(t"")
     case _                            => t""
 
-  private def all(nodes: List[Layout], embeddings: List[Embedding], context: Context): List[Block] = nodes match
-    case head :: tail => layout(head, embeddings, context) + all(tail, embeddings, context)
-    case _            => Nil
+  private def all(nodes: List[Layout], embeddings: List[Embedding], context: Context): List[Block] =
+    nodes match
+      case head :: tail => layout(head, embeddings, context) + all(tail, embeddings, context)
+      case _            => Nil
 
   private def phrasing(nodes: List[Prose], context: Context, line: Int): List[Inline] =
     nodes.map(prose(_, context, line))
@@ -171,11 +186,13 @@ object Blocks:
       link(destination, phrasing(List.from(content), context, line), context, line)
 
     case Prose.Image(destination, _, content*) =>
-      Inline.Link(Inline.Destination.External(destination), phrasing(List.from(content), context, line))
+      val phrases: List[Inline] = phrasing(List.from(content), context, line)
+      Inline.Link(Inline.Destination.External(destination), phrases)
 
   // A destination's path and its fragment, after `#`.
   private def split(destination: Text): (Text, Optional[Text]) =
     val hash: Int = destination.s.indexOf('#')
+
     if hash < 0 then (destination, Unset)
     else (Text(destination.s.substring(0, hash).nn), Text(destination.s.substring(hash + 1).nn))
 
@@ -188,8 +205,9 @@ object Blocks:
     val (path, fragment) = split(destination)
     val scheme: Boolean = path.s.matches("[A-Za-z][A-Za-z0-9+.-]*:.*")
     def external: Inline = Inline.Link(Inline.Destination.External(destination), content)
+    val glossed: Boolean = destination.starts(Glossary.scheme)
 
-    if destination.starts(Glossary.scheme) then glossary(destination.skip(Glossary.scheme.length), content, context, line)
+    if glossed then glossary(destination.skip(Glossary.scheme.length), content, context, line)
     else if scheme then
       context.refer(line, Linkage.Target.Url(destination))
       external
@@ -205,7 +223,8 @@ object Blocks:
         page.resolve(path) match
           case resolved: Text =>
             context.refer(line, Linkage.Target.Document(page.section, resolved, fragment))
-            Inline.Link(Inline.Destination.Local(Doc.url(page.section, resolved), fragment), content)
+            val url: Text = Doc.url(page.section, resolved)
+            Inline.Link(Inline.Destination.Local(url, fragment), content)
 
           case _ =>
             context.refer(line, Linkage.Target.Document(page.section, path, fragment))
@@ -217,21 +236,34 @@ object Blocks:
   // have — a `glossary:` destination written by hand — leads to the glossary page, and the
   // check says it is not there.
   private def glossary(slug: Text, content: List[Inline], context: Context, line: Int): Inline =
-    context.glossary(slug).lay[Inline](Inline.Link(Inline.Destination.Local(t"/glossary", slug), content)): (term: Glossary.Term) =>
-      val destination: Inline.Destination = term.link.lay(Inline.Destination.Local(t"/glossary", term.slug)): (url: Text) =>
+    val unknown: Inline = Inline.Link(Inline.Destination.Local(t"/glossary", slug), content)
+
+    context.glossary(slug).lay[Inline](unknown): (term: Glossary.Term) =>
+      val entry: Inline.Destination = Inline.Destination.Local(t"/glossary", term.slug)
+
+      val destination: Inline.Destination = term.link.lay(entry): (url: Text) =>
         val (path, fragment) = split(url)
-        if url.starts(t"/") then Inline.Destination.Local(path, fragment) else Inline.Destination.External(url)
+
+        if url.starts(t"/") then Inline.Destination.Local(path, fragment)
+        else Inline.Destination.External(url)
 
       destination match
-        case Inline.Destination.Local(path, fragment) => context.refer(line, Linkage.Target.Site(path, fragment))
-        case Inline.Destination.External(url)         => context.refer(line, Linkage.Target.Url(url))
-        case _                                        => ()
+        case Inline.Destination.Local(path, fragment) =>
+          context.refer(line, Linkage.Target.Site(path, fragment))
 
-      Inline.Annotated(List(Inline.Link(destination, content)), Blocks.inline(term.definition, context.linker))
+        case Inline.Destination.External(url) =>
+          context.refer(line, Linkage.Target.Url(url))
+
+        case _ =>
+          ()
+
+      val definition: List[Inline] = Blocks.inline(term.definition, context.linker)
+      Inline.Annotated(List(Inline.Link(destination, content)), definition)
 
     . also:
       // Recorded even when the term is unknown, so that the check reports it.
-      if context.glossary(slug).absent then context.refer(line, Linkage.Target.Site(t"/glossary", slug))
+      if context.glossary(slug).absent
+      then context.refer(line, Linkage.Target.Site(t"/glossary", slug))
 
   // The first embedding to answer a fence, else the plain rendering.
   def fence(info: List[Text], content: Text, line: Int, embeddings: List[Embedding])
@@ -278,7 +310,8 @@ object Blocks:
           scala += 1
           Embedding.scan(info, content, scala)
 
-      scanned.let { (scanned: (Text, List[(Text, Linker.Kind)])) => linker.define(scanned(0), scanned(1)) }
+      scanned.let: (scanned: (Text, List[(Text, Linker.Kind)])) =>
+        linker.define(scanned(0), scanned(1))
 
       val sentinel: Block = Output.sentinel(index) match
         case code: Block.Code => code.copy(id = scanned.let(_(0)))
@@ -319,50 +352,51 @@ object Blocks:
     case Prose.Softbreak     => true
     case _                   => false
 
-  private def layout(node: Layout, embeddings: List[Embedding], context: Context): List[Block] = node match
-    case Layout.Paragraph(_, prose*) if prose.nonEmpty && prose.forall(hidden) =>
-      Nil
+  private def layout(node: Layout, embeddings: List[Embedding], context: Context): List[Block] =
+    node match
+      case Layout.Paragraph(_, prose*) if prose.nonEmpty && prose.forall(hidden) =>
+        Nil
 
-    case Layout.Paragraph(line, prose*) =>
-      List(Block.Paragraph(phrasing(List.from(prose), context, line.n1)))
+      case Layout.Paragraph(line, prose*) =>
+        List(Block.Paragraph(phrasing(List.from(prose), context, line.n1)))
 
-    case Layout.Heading(line, level, prose*) =>
-      val content: List[Inline] = phrasing(List.from(prose), context, line.n1)
-      List(Block.Heading(level, content, context.anchor(slug(plain(content)))))
+      case Layout.Heading(line, level, prose*) =>
+        val content: List[Inline] = phrasing(List.from(prose), context, line.n1)
+        List(Block.Heading(level, content, context.anchor(slug(plain(content)))))
 
-    case Layout.BlockQuote(_, layouts*) =>
-      List(Block.Quotation(all(List.from(layouts), embeddings, context)))
+      case Layout.BlockQuote(_, layouts*) =>
+        List(Block.Quotation(all(List.from(layouts), embeddings, context)))
 
-    case Layout.ThematicBreak(_) =>
-      List(Block.Rule())
+      case Layout.ThematicBreak(_) =>
+        List(Block.Rule())
 
-    // An HTML comment is for the author, not the reader; other HTML is shown as it is.
-    case Layout.HtmlBlock(_, html) if html.trim.starts(t"<!--") && html.trim.ends(t"-->") =>
-      Nil
+      // An HTML comment is for the author, not the reader; other HTML is shown as it is.
+      case Layout.HtmlBlock(_, html) if html.trim.starts(t"<!--") && html.trim.ends(t"-->") =>
+        Nil
 
-    case Layout.HtmlBlock(_, html) =>
-      List(Block.Code(Language(t"html"), Embedding.lines(html)))
+      case Layout.HtmlBlock(_, html) =>
+        List(Block.Code(Language(t"html"), Embedding.lines(html)))
 
-    // A fence's anchor is the id its embedding gave it (or its sentinel carries), which a
-    // reference to a name it defines leads to.
-    case Layout.CodeBlock(line, info, content) =>
-      val blocks: List[Block] = fence(info, content, line.n0, embeddings)
+      // A fence's anchor is the id its embedding gave it (or its sentinel carries), which a
+      // reference to a name it defines leads to.
+      case Layout.CodeBlock(line, info, content) =>
+        val blocks: List[Block] = fence(info, content, line.n0, embeddings)
 
-      blocks.each: (block: Block) =>
-        block match
-          case Block.Code(_, _, _, _, _, id) => id.let(context.anchored(_))
-          case _                             => ()
+        blocks.each: (block: Block) =>
+          block match
+            case Block.Code(_, _, _, _, _, id) => id.let(context.anchored(_))
+            case _                             => ()
 
-      blocks
+        blocks
 
-    case Layout.BulletList(_, _, items*) =>
-      val listed: List[Block.Item] =
-        List.from(items.map { (item: List[Layout]) => Block.Item(all(item, embeddings, context)) })
+      case Layout.BulletList(_, _, items*) =>
+        val listed: List[Block.Item] =
+          List.from(items).map: (item: List[Layout]) => Block.Item(all(item, embeddings, context))
 
-      List(Block.Listing(false, listed))
+        List(Block.Listing(false, listed))
 
-    case Layout.OrderedList(_, _, _, _, items*) =>
-      val listed: List[Block.Item] =
-        List.from(items.map { (item: List[Layout]) => Block.Item(all(item, embeddings, context)) })
+      case Layout.OrderedList(_, _, _, _, items*) =>
+        val listed: List[Block.Item] =
+          List.from(items).map: (item: List[Layout]) => Block.Item(all(item, embeddings, context))
 
-      List(Block.Listing(true, listed))
+        List(Block.Listing(true, listed))

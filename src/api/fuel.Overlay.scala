@@ -32,9 +32,7 @@
                                                                                                   */
 package fuel
 
-import scala.collection.immutable as sci
-
-import soundness.{Language as _, Token as _, *}
+import soundness.*
 
 import codepages.utf8Codepage
 import dysasymptotics.{linearAccess, linearSize}
@@ -71,7 +69,9 @@ object Overlay:
   private val once: List[Text] = List(t"base", t"info", t"detail", t"hidden", t"until")
 
   // The lines `headed` adds before the file's own.
-  private def headed(text: Text): Text = if text.trim.starts(t"tel ") then text else t"tel 1.0\n\n$text"
+  private def headed(text: Text): Text =
+    if text.trim.starts(t"tel ") then text else t"tel 1.0\n\n$text"
+
   private def added(text: Text): Int = if text.trim.starts(t"tel ") then 0 else 2
 
   // An overlay read from its text, or the diagnostic which says why it could not be.
@@ -82,17 +82,26 @@ object Overlay:
       val tel: Tel = headed(text).read[Tel]
       val lines: Lines = Lines(text, tel.childCompounds.to[List])
 
-      val base: Optional[Text] = tel.fields(t"base").to[List].head.let(_.primaryAtom).let { (b: Text) => if b == t"" then Unset else b }
+      val base: Optional[Text] =
+        tel.fields(t"base").to[List].head.let(_.primaryAtom).let(_.puncture(t""))
 
-      base.lay[Overlay | Block.Diagnostic](Block.Diagnostic(Tone.Failure, Block.Location(path, 1), List(Block.paragraph(t"An overlay must name the package it documents with `base`.")))):
-        (base: Text) =>
-          val problems: List[Block] = check(path, lines, Unset, tel.childCompounds.to[List], fileKeywords)
-          Overlay(path, base, doc(tel, 1, Nil), entries(tel, lines), problems)
+      val missing: Block.Diagnostic =
+        val message: Text = t"An overlay must name the package it documents with `base`."
+        Block.Diagnostic(Tone.Failure, Block.Location(path, 1), List(Block.paragraph(message)))
+
+      base.lay[Overlay | Block.Diagnostic](missing): (base: Text) =>
+        val problems: List[Block] =
+          check(path, lines, Unset, tel.childCompounds.to[List], fileKeywords)
+
+        Overlay(path, base, doc(tel, 1, Nil), entries(tel, lines), problems)
 
     catch case error: Tel.Error =>
       val shift: Int = -added(text)
       val raw: Block.Diagnostic = Block.Diagnostic.of(error, path, headed(text))
-      val location = raw.location.let { (location: Block.Location) => location.copy(line = location.line.let(_ + shift)) }
+
+      val location = raw.location.let: (location: Block.Location) =>
+        location.copy(line = location.line.let(_ + shift))
+
       raw.copy(location = location)
 
   // The line of each compound of the file, since a node does not know its own: walking the
@@ -111,8 +120,8 @@ object Overlay:
         val index: Int = seek(compound.keyword.s, cursor)
         placed.put(compound, index + 1)
 
-        val source: Int =
-          compound.atoms.stdlib.collectFirst { case Tel.Atom.Source(text) => text.s.split("\n", -1).nn.length }.getOrElse(0)
+        val source: Int = sourceAtom(compound).lay(0): (text: Text) =>
+          text.s.split("\n", -1).nn.length
 
         walk(rest, walk(childrenOf(compound), index + 1 + source))
 
@@ -121,10 +130,13 @@ object Overlay:
     private def seek(keyword: String, from: Int): Int =
       def begins(line: String): Boolean =
         val trimmed: String = line.trim.nn
-        trimmed == keyword || trimmed.startsWith(keyword + " ") || trimmed.startsWith(keyword + "\t")
+        trimmed == keyword || trimmed.startsWith(keyword + " ") ||
+          trimmed.startsWith(keyword + "\t")
 
-      all.indexed.seek { (line: Text, index: Ordinal) => index.n0 >= from && begins(line.s) }.let(_(1).n0).or:
-        from.min(all.size - 1).max(0)
+      all.indexed
+      . seek: (line: Text, index: Ordinal) => index.n0 >= from && begins(line.s)
+      . let(_(1).n0)
+      . or(from.min(all.size - 1).max(0))
 
   private def failure(path: Text, line: Int, message: Text): Block =
     Block.Diagnostic(Tone.Failure, Block.Location(path, line), List(Block.paragraph(message)))
@@ -137,13 +149,24 @@ object Overlay:
     compound.atoms.stdlib.collectFirst { case Tel.Atom.Source(text) => text }.getOrElse(Unset)
 
   private def texts(compound: Tel.Compound): List[Text] =
-    List.from(compound.atoms.stdlib.collect { case Tel.Atom.Inline(text, _) => text; case Tel.Atom.Source(text) => text }.toList)
+    val all: scala.List[Text] = compound.atoms.stdlib.toList.collect:
+      case Tel.Atom.Inline(text, _) => text
+      case Tel.Atom.Source(text)    => text
+
+    List.from(all)
 
   private def childrenOf(compound: Tel.Compound): List[Tel.Compound] =
     List.from(compound.children.stdlib.toList.flatMap(_.compounds.stdlib.toList))
 
   // The failures of the children of one node: the file (`entry` unset) or an entry.
-  private def check(path: Text, lines: Lines, entry: Optional[Tel.Compound], children: List[Tel.Compound], allowed: List[Text]): List[Block] =
+  private def check
+    ( path:     Text,
+      lines:    Lines,
+      entry:    Optional[Tel.Compound],
+      children: List[Tel.Compound],
+      allowed:  List[Text] )
+  :   List[Block] =
+
     def written(keywords: List[Text]): Text = keywords.map { (k: Text) => t"`$k`" }.join(t", ")
     def named(keyword: Text): List[Tel.Compound] = children.filter(_.keyword == keyword)
 
@@ -153,43 +176,54 @@ object Overlay:
 
       if !allowed.has(keyword) then
         val where: Text = if entry.absent then t"An overlay" else t"An entry"
-        List(failure(path, lines(child), t"`$keyword` is not part of an overlay: $where may hold ${written(allowed)}."))
+
+        val message: Text =
+          t"`$keyword` is not part of an overlay: $where may hold ${written(allowed)}."
+
+        List(failure(path, lines(child), message))
       else if keyword == t"entry" then
+        val unnamed: Text = t"An `entry` must name the member it documents, as `.name` or `#Name`."
+
         val name: List[Block] =
-          if inlineAtoms(child).nil then List(failure(path, lines(child), t"An `entry` must name the member it documents, as `.name` or `#Name`."))
-          else Nil
+          if inlineAtoms(child).nil then List(failure(path, lines(child), unnamed)) else Nil
 
         name + check(path, lines, child, grandchildren, entryKeywords)
-      else grandchildren.head.lay(Nil: List[Block]): (first: Tel.Compound) =>
-        List(failure(path, lines(first), t"`$keyword` holds no `${first.keyword}`: it takes its value alone."))
+      else
+        grandchildren.head.lay(Nil: List[Block]): (first: Tel.Compound) =>
+          val message: Text = t"`$keyword` holds no `${first.keyword}`: it takes its value alone."
+          List(failure(path, lines(first), message))
 
     val repeated: List[Block] = once.bind: (keyword: Text) =>
-      named(keyword).skip(1).map { (child: Tel.Compound) => failure(path, lines(child), t"`$keyword` is given more than once here.") }
+      named(keyword).skip(1).map: (child: Tel.Compound) =>
+        failure(path, lines(child), t"`$keyword` is given more than once here.")
 
     // An entry's info may follow its name, and a leaf entry's detail may follow it as a source
     // atom, but not as well as a child which says the same.
     val doubled: List[Block] = entry.lay(Nil: List[Block]): (entry: Tel.Compound) =>
-      val info: List[Block] =
-        if inlineAtoms(entry).size > 1 then named(t"info").head.lay(Nil: List[Tel.Compound])(List(_)).map { (child: Tel.Compound) => failure(path, lines(child), t"This entry's info is already given on its line.") }
-        else Nil
+      // The first child of a keyword, as a failure, where it is given as well as on the line.
+      def already(keyword: Text, twice: Boolean, message: Text): List[Block] =
+        val found: List[Tel.Compound] = if twice then named(keyword).keep(1) else Nil
+        found.map: (child: Tel.Compound) => failure(path, lines(child), message)
 
-      val detail: List[Block] =
-        if sourceAtom(entry).present then named(t"detail").head.lay(Nil: List[Tel.Compound])(List(_)).map { (child: Tel.Compound) => failure(path, lines(child), t"This entry's detail is already given beneath its line.") }
-        else Nil
-
+      val onLine: Text = t"This entry's info is already given on its line."
+      val beneath: Text = t"This entry's detail is already given beneath its line."
+      val info: List[Block] = already(t"info", inlineAtoms(entry).size > 1, onLine)
+      val detail: List[Block] = already(t"detail", sourceAtom(entry).present, beneath)
       info + detail
 
     val duplicates: List[Block] =
-      val entries: List[(Text, Tel.Compound)] = named(t"entry").bind { (child: Tel.Compound) => inlineAtoms(child).head.lay(Nil: List[(Text, Tel.Compound)]) { (name: Text) => List((name, child)) } }
+      val entries: List[(Text, Tel.Compound)] = named(t"entry").bind: (child: Tel.Compound) =>
+        inlineAtoms(child).head.lay(Nil: List[(Text, Tel.Compound)]): (name: Text) =>
+          List((name, child))
 
       entries.indexed.bind: (pair: (Text, Tel.Compound), index: Ordinal) =>
-        if entries.keep(index.n0).exists(_(0) == pair(0)) then List(failure(path, lines(pair(1)), t"`${pair(0)}` already has an entry here."))
-        else Nil
+        if !entries.keep(index.n0).exists(_(0) == pair(0)) then Nil
+        else List(failure(path, lines(pair(1)), t"`${pair(0)}` already has an entry here."))
 
     // The info as it reads, which is what the limit is on, not the Markdown it is written in.
     val long: List[Block] =
       val infoChild: Optional[Tel.Compound] = named(t"info").head
-      val inline: List[Text] = entry.lay(Nil: List[Text]) { (entry: Tel.Compound) => inlineAtoms(entry).skip(1) }
+      val inline: List[Text] = entry.lay(Nil: List[Text])(inlineAtoms(_).skip(1))
 
       val info: Optional[Text] =
         infoChild.let { (child: Tel.Compound) => texts(child).filter(_ != t"").join(t" ") }.or:
@@ -199,14 +233,20 @@ object Overlay:
 
       info.lay(Nil: List[Block]): (info: Text) =>
         val size: Int = Blocks.plain(Blocks.inline(info)).length
-        if size <= InfoLimit then Nil
-        else List(failure(path, line, t"This info is ${size.show} characters long, and may be at most ${InfoLimit.show}: say the rest in a `detail`."))
+
+        val message: Text =
+          t"This info is ${size.show} characters long, and may be at most ${InfoLimit.show}: " +
+            t"say the rest in a `detail`."
+
+        if size <= InfoLimit then Nil else List(failure(path, line, message))
 
     each + repeated + doubled + duplicates + long
 
   // The text of a node's child by keyword: its atoms, inline then the indented source, joined.
   private def child(node: Tel, keyword: Text): Optional[Text] =
-    node.fields(keyword).to[List].head.let(_.atomTexts.to[List].filter(_ != t"").join(t" ")).let { (t: Text) => if t == t"" then Unset else t }
+    node.fields(keyword).to[List].head
+    . let(_.atomTexts.to[List].filter(_ != t"").join(t" "))
+    . let(_.puncture(t""))
 
   private def atoms(node: Tel, keyword: Text): List[Text] =
     node.fields(keyword).to[List].bind(_.atomTexts.to[List].filter(_ != t""))
@@ -218,7 +258,7 @@ object Overlay:
     val until: Optional[Api.Until] =
       node.fields(t"until").to[List].head.let: (until: Tel) =>
         val texts: List[Text] = until.atomTexts.to[List].filter(_ != t"")
-        texts.head.let { (version: Text) => Api.Until(version, texts.at(Sec)) }
+        texts.head.let: (version: Text) => Api.Until(version, texts.at(Sec))
 
     Api.Entry
       ( info    = child(node, t"info"),
@@ -253,7 +293,8 @@ object Overlay:
         val base: Api.Entry = doc(tel, line, scope)
 
         val entry: Api.Entry =
-          base.copy(info = base.info.or(info), detail = base.detail.or(source), imports = scope + atoms(tel, t"import"))
+          val imports: List[Text] = scope + atoms(tel, t"import")
+          base.copy(info = base.info.or(info), detail = base.detail.or(source), imports = imports)
 
         List(Entry(plain, isType, entry, entries(tel, lines, entry.imports), line))
 
@@ -266,7 +307,8 @@ object Overlay:
     var problems: List[Block] = Nil
 
     def report(tone: Tone, path: Text, line: Int, message: Text): Unit =
-      problems = Block.Diagnostic(tone, Block.Location(path, line), List(Block.paragraph(message))) :: problems
+      val location: Block.Location = Block.Location(path, line)
+      problems = Block.Diagnostic(tone, location, List(Block.paragraph(message))) :: problems
 
     def place(overlay: Overlay, parent: Api.Entity, entry: Entry): Unit =
       val designator: Designator = if entry.isType then parent.tpe else parent.term
@@ -276,64 +318,99 @@ object Overlay:
       current(key) match
         case existing: Api.Entity =>
           entry.doc.until.let: (until: Api.Until) =>
-            report(Tone.Warning, overlay.file, entry.line, t"`$written` is marked as removed in ${until.version}, but it still exists.")
+            val message: Text =
+              t"`$written` is marked as removed in ${until.version}, but it still exists."
+
+            report(Tone.Warning, overlay.file, entry.line, message)
 
           val doc: Api.Entry = entry.doc.copy(file = overlay.file)
           current = current.add(existing.copy(doc = doc))
-          entry.entries.each { (child: Entry) => place(overlay, existing.copy(doc = doc), child) }
+          entry.entries.each: (child: Entry) => place(overlay, existing.copy(doc = doc), child)
 
         case _ =>
           entry.doc.until match
             case until: Api.Until =>
+              val doc: Api.Entry = entry.doc.copy(file = overlay.file)
+
               val removed: Api.Entity =
-                Api.Entity(designator, entry.name, own = true, doc = entry.doc.copy(file = overlay.file), removed = true)
+                Api.Entity(designator, entry.name, own = true, doc = doc, removed = true)
 
               current = current.add(removed)
-              current = current.update(parent.key) { (p: Api.Entity) => p.copy(members = (p.members + List(key)).distinct) }
-              entry.entries.each { (child: Entry) => place(overlay, removed, child) }
+
+              current = current.update(parent.key): (p: Api.Entity) =>
+                p.copy(members = (p.members + List(key)).distinct)
+
+              entry.entries.each: (child: Entry) => place(overlay, removed, child)
 
             case _ =>
-              report(Tone.Failure, overlay.file, entry.line, t"`$written` is documented here, but no such member of `${parent.key}` is declared.")
+              val message: Text =
+                t"`$written` is documented here, but no such member of `${parent.key}` is declared."
+
+              report(Tone.Failure, overlay.file, entry.line, message)
 
     overlays.each: (overlay: Overlay) =>
-      overlay.problems.each { (problem: Block) => problems = problem :: problems }
+      overlay.problems.each: (problem: Block) => problems = problem :: problems
       val base: Designator = Designator(overlay.base)
 
       current(Api.key(base)) match
         case entity: Api.Entity =>
           val documented: Api.Entity = entity.copy(doc = overlay.doc.copy(file = overlay.file))
           current = current.add(documented)
-          overlay.entries.each { (entry: Entry) => place(overlay, documented, entry) }
+          overlay.entries.each: (entry: Entry) => place(overlay, documented, entry)
 
         case _ =>
-          report(Tone.Failure, overlay.file, 1, t"The package `${overlay.base}` this overlay documents is not declared by the sources.")
+          val message: Text =
+            t"The package `${overlay.base}` this overlay documents is not declared by the sources."
+
+          report(Tone.Failure, overlay.file, 1, message)
 
     // A public member of a documented package, declared by the sources, with no entry, and
     // under no hidden entity: a caution where it is declared, naming the entry to write.
     val bases: List[Text] = overlays.map(_.base)
 
     def within(entity: Api.Entity): Boolean =
-      bases.exists { (base: Text) => entity.key == base || entity.key.starts(t"$base.") || entity.key.starts(t"$base#") }
+      bases.exists: (base: Text) =>
+        entity.key == base || entity.key.starts(t"$base.") || entity.key.starts(t"$base#")
 
     def concealed(entity: Api.Entity): Boolean =
-      entity.hidden || entity.parent.let { (parent: Designator) => current(Api.key(parent)).let(concealed).or(false) }.or(false)
+      entity.hidden || entity.parent.let(Api.key(_)).let(current(_)).let(concealed).or(false)
 
     // A member which only overrides is documented by what it overrides; a parameter need not be
     // documented at all.
     def overriding(entity: Api.Entity): Boolean =
-      !entity.declarations.nil && entity.declarations.all { (d: Api.Declaration) => d.overrides || d.modifiers.has(t"override") }
+      !entity.declarations.nil && entity.declarations.all: (d: Api.Declaration) =>
+        d.overrides || d.modifiers.has(t"override")
 
     current.entities.values.toList.sortBy(_.key.s).foreach: entity =>
-      if entity.own && !entity.removed && !entity.isPackage && !entity.isParameter && entity.doc.absent && within(entity) && !concealed(entity) && !overriding(entity) then
-        val overlay: Optional[Overlay] = overlays.seek { (o: Overlay) => entity.key.starts(t"${o.base}.") || entity.key.starts(t"${o.base}#") }
+      val undocumented: Boolean = entity.own && !entity.removed && entity.doc.absent
+      val member: Boolean = !entity.isPackage && !entity.isParameter
+
+      if undocumented && member && within(entity) && !concealed(entity) && !overriding(entity) then
+        val overlay: Optional[Overlay] = overlays.seek: (o: Overlay) =>
+          entity.key.starts(t"${o.base}.") || entity.key.starts(t"${o.base}#")
+
         val where: Text = entity.location.let(_.path).or(overlay.let(_.file).or(t""))
         val line: Int = entity.location.let(_.line).or(1)
-        val written: Text = entity.parent.let { (p: Designator) => if p.isInstanceOf[Designator.Type] then t"#${entity.name}" else t".${entity.name}" }.or(entity.name)
+
+        val written: Text = entity.parent.lay(entity.name):
+          case Designator.Type(_, _) => t"#${entity.name}"
+          case _                     => t".${entity.name}"
+
         val parentKey: Text = entity.parent.let(Api.key(_)).or(t"")
-        report(Tone.Warning, where, line, t"`${entity.key}` is not documented: add `entry $written` under `$parentKey` in ${overlay.let(_.file).or(t"an overlay")}.")
+        val file: Text = overlay.let(_.file).or(t"an overlay")
+
+        val message: Text =
+          t"`${entity.key}` is not documented: add `entry $written` under `$parentKey` in $file."
+
+        report(Tone.Warning, where, line, message)
 
     (current, problems.reverse)
 
 // One overlay file: the package it documents, what it says of the package, its entries, and
 // the failures of its format, which merging reports.
-case class Overlay(file: Text, base: Text, doc: Api.Entry, entries: List[Overlay.Entry], problems: List[Block] = Nil)
+case class Overlay
+  ( file:     Text,
+    base:     Text,
+    doc:      Api.Entry,
+    entries:  List[Overlay.Entry],
+    problems: List[Block]         = Nil )

@@ -32,42 +32,10 @@
                                                                                                   */
 package fuel
 
-import soundness.{Language as _, Token as _, *}
+import soundness.{Token as _, *}
 
 import pyrocosm.{Inline, Token, model}
 import stenography.Syntax
-
-// Where a reference in a document leads: the hook by which inline code (`` `Text` ``) and the
-// typed tokens of a fragment are linked to the page which documents what they name, when a
-// model of the API is at hand to say that such a page exists. A document is converted with
-// the linker its scope gives it — its enclosing entity, its imports and the project's — and
-// learns the imports its own fragments make; `fuel-core` knows only the hook, and `none`.
-trait Linker:
-  // A reference as written in prose: a name, qualified or not, as the scope resolves it.
-  def link(reference: Text): Optional[Inline.Destination]
-
-  // A token of highlighted code, by its text and the type the compiler gave it: linked only
-  // when the token *is* the name of what the type names, so that a value whose type is `Int`
-  // does not link to `Int`.
-  def link(name: Text, tpe: Syntax): Optional[Inline.Destination]
-
-  // The imports a fragment makes at its top level (`import a.b.*`), which extend the scope.
-  def learn(imports: List[Text]): Unit
-
-  // The names a fragment defines at its top level, each a type or a term, by the anchor the
-  // fragment has on its page: what a later reference in the same document resolves to before
-  // anything else, as a REPL's own definitions shadow a library's; the latest definition of a
-  // name wins.
-  def define(anchor: Text, names: List[(Text, Linker.Kind)]): Unit
-
-  // The references which named several entities, and so were not linked.
-  def ambiguities: List[Text]
-
-  // A reference as the tokens of inline code: by default one token, linked as a whole; a
-  // linker which can, gives a qualified name a linked token for each segment, each after the
-  // first `chained` to the name before it.
-  def tokens(reference: Text): List[Token] =
-    List(Token.plain(reference).copy(link = link(reference)))
 
 object Linker:
   // What a reference means, when it says: a type (written `#Name`, or a member of a type) or
@@ -80,7 +48,9 @@ object Linker:
   // that a path (`.pyrocosm/fuel/config.tel`) or a selector is code as written, not a
   // reference.
   def kind(reference: Text): Optional[Kind] =
-    val named: Boolean = reference.length > 1 && reference.s.substring(1).nn.matches("[A-Za-z_][\\w$]*(?:[.#][A-Za-z_][\\w$]*)*")
+    val pattern: String = "[A-Za-z_][\\w$]*(?:[.#][A-Za-z_][\\w$]*)*"
+    val named: Boolean = reference.length > 1 && reference.s.substring(1).nn.matches(pattern)
+
     if !named then Unset
     else if reference.starts(t"#") then Kind.Type
     else if reference.starts(t".") then Kind.Term
@@ -97,7 +67,9 @@ object Linker:
   // A highlighted token as the model's, with the link its type gives it.
   def token(linker: Linker, token: harlequin.Token): Token =
     val plain: Token = token.model
-    token.meta.lay(plain) { (meta: harlequin.Token.Meta) => plain.copy(link = linker.link(token.text, meta.tpe)) }
+
+    token.meta.lay(plain): (meta: harlequin.Token.Meta) =>
+      plain.copy(link = linker.link(token.text, meta.tpe))
 
   def lines(linker: Linker, source: SourceCode): List[pyrocosm.Block.Line] =
     source.lines.to[List].map: (line: List[harlequin.Token]) =>
@@ -131,3 +103,35 @@ object Linker:
         done.reverse
 
     recur(tokens, Nil)
+
+// Where a reference in a document leads: the hook by which inline code (`` `Text` ``) and the
+// typed tokens of a fragment are linked to the page which documents what they name, when a
+// model of the API is at hand to say that such a page exists. A document is converted with
+// the linker its scope gives it — its enclosing entity, its imports and the project's — and
+// learns the imports its own fragments make; `fuel-core` knows only the hook, and `none`.
+trait Linker:
+  // A reference as written in prose: a name, qualified or not, as the scope resolves it.
+  def link(reference: Text): Optional[Inline.Destination]
+
+  // A token of highlighted code, by its text and the type the compiler gave it: linked only
+  // when the token *is* the name of what the type names, so that a value whose type is `Int`
+  // does not link to `Int`.
+  def link(name: Text, tpe: Syntax): Optional[Inline.Destination]
+
+  // The imports a fragment makes at its top level (`import a.b.*`), which extend the scope.
+  def learn(imports: List[Text]): Unit
+
+  // The names a fragment defines at its top level, each a type or a term, by the anchor the
+  // fragment has on its page: what a later reference in the same document resolves to before
+  // anything else, as a REPL's own definitions shadow a library's; the latest definition of a
+  // name wins.
+  def define(anchor: Text, names: List[(Text, Linker.Kind)]): Unit
+
+  // The references which named several entities, and so were not linked.
+  def ambiguities: List[Text]
+
+  // A reference as the tokens of inline code: by default one token, linked as a whole; a
+  // linker which can, gives a qualified name a linked token for each segment, each after the
+  // first `chained` to the name before it.
+  def tokens(reference: Text): List[Token] =
+    List(Token.plain(reference).copy(link = link(reference)))

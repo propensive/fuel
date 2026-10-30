@@ -32,10 +32,9 @@
                                                                                                   */
 package fuel
 
-import soundness.{Language as _, Token as _, *}
+import soundness.*
 
 import codepages.utf8Codepage
-import dysasymptotics.{linearAccess, linearSize}
 import pyrocosm.{Block, Inline, Tone}
 
 // The glossary: terms defined in TEL files, each `define <term>` holding a Markdown
@@ -60,7 +59,9 @@ object Glossary:
   val scheme: Text = t"glossary:"
 
   // The lines `headed` adds before the file's own.
-  private def headed(text: Text): Text = if text.trim.starts(t"tel ") then text else t"tel 1.0\n\n$text"
+  private def headed(text: Text): Text =
+    if text.trim.starts(t"tel ") then text else t"tel 1.0\n\n$text"
+
   private def added(text: Text): Int = if text.trim.starts(t"tel ") then 0 else 2
 
   // The text of a node's child by keyword: its atoms, inline then the indented source, joined.
@@ -82,12 +83,16 @@ object Glossary:
       val compounds: List[Tel.Compound] = tel.childCompounds.to[List].filter(_.keyword == t"define")
 
       val terms: List[Term] = nodes.zip(compounds).map: (node: Tel, compound: Tel.Compound) =>
-        val inline: List[Text] = List.from(compound.atoms.stdlib.collect { case Tel.Atom.Inline(text, _) => text }.toList)
+        val inline: List[Text] = List.from:
+          compound.atoms.stdlib.collect { case Tel.Atom.Inline(text, _) => text }.toList
+
         val name: Text = inline.join(t" ").trim
 
         // The term's line, by its text: a TEL node does not know its own.
         val line: Int =
-          lines.indexed.seek { (line: Text, index: Ordinal) => line.trim.starts(t"define ") && line.trim.skip(7).trim == name }
+          lines.indexed.seek: (line: Text, index: Ordinal) =>
+            line.trim.starts(t"define ") && line.trim.skip(7).trim == name
+
           . let(_(1).n0 + 1).or(1)
 
         Term(name, child(node, t"definition").or(t""), child(node, t"link"), path, line)
@@ -97,7 +102,9 @@ object Glossary:
     catch case error: Tel.Error =>
       val shift: Int = -added(text)
       val raw: Block.Diagnostic = Block.Diagnostic.of(error, path, headed(text))
-      val location = raw.location.let { (location: Block.Location) => location.copy(line = location.line.let(_ + shift)) }
+
+      val location = raw.location.let: (location: Block.Location) =>
+        location.copy(line = location.line.let(_ + shift))
 
       // The excerpt's lines are numbered as the file numbers them too.
       val excerpt: List[Block] = raw.excerpt.map:
@@ -114,23 +121,35 @@ object Glossary:
     def report(tone: Tone, term: Term, message: Text): Block =
       Block.Diagnostic(tone, Block.Location(term.file, term.line), List(Block.paragraph(message)))
 
-    def recur(rest: List[Term], kept: List[Term], problems: List[Block]): (Glossary, List[Block]) = rest match
-      case term :: tail =>
-        if term.name == t"" || term.name.s.contains("[") || term.name.s.contains("]") then
-          recur(tail, kept, problems + List(report(Tone.Failure, term, t"`${term.name}` cannot be a glossary term: a term is written in brackets, so it cannot hold one.")))
-        else kept.seek(_.slug == term.slug) match
-          case earlier: Term =>
-            recur(tail, kept, problems + List(report(Tone.Failure, term, t"`${term.name}` is defined already, at ${earlier.file}:${earlier.line.show}.")))
+    def recur(rest: List[Term], kept: List[Term], problems: List[Block]): (Glossary, List[Block]) =
+      rest match
+        case term :: tail =>
+          if term.name == t"" || term.name.s.contains("[") || term.name.s.contains("]") then
+            val message: Text =
+              t"`${term.name}` cannot be a glossary term: a term is written in brackets, so it " +
+                t"cannot hold one."
 
-          case _ =>
-            val short: List[Block] =
-              if term.name.length == 1 then List(report(Tone.Warning, term, t"`${term.name}` is one character, which any `[${term.name}]` in prose matches, in either case."))
-              else Nil
+            recur(tail, kept, problems + List(report(Tone.Failure, term, message)))
+          else
+            kept.seek(_.slug == term.slug) match
+              case earlier: Term =>
+                val message: Text =
+                  t"`${term.name}` is defined already, at ${earlier.file}:${earlier.line.show}."
 
-            recur(tail, kept + List(term), problems + short)
+                recur(tail, kept, problems + List(report(Tone.Failure, term, message)))
 
-      case _ =>
-        (Glossary(kept), problems)
+              case _ =>
+                val message: Text =
+                  t"`${term.name}` is one character, which any `[${term.name}]` in prose " +
+                    t"matches, in either case."
+
+                val short: List[Block] =
+                  if term.name.length == 1 then List(report(Tone.Warning, term, message)) else Nil
+
+                recur(tail, kept + List(term), problems + short)
+
+        case _ =>
+          (Glossary(kept), problems)
 
     recur(glossaries.bind(_.terms), Nil, Nil)
 
@@ -141,7 +160,10 @@ case class Glossary(terms: List[Glossary.Term]):
   // `[term]` is a link the parser makes, not a pattern searched for; a definition the author
   // writes first wins, as CommonMark has it.
   def definitions: Text =
-    terms.map { (term: Glossary.Term) => t"[${term.name}]: ${Glossary.scheme}${term.slug}" }.join(t"\n")
+    val lines: List[Text] = terms.map: (term: Glossary.Term) =>
+      t"[${term.name}]: ${Glossary.scheme}${term.slug}"
+
+    lines.join(t"\n")
 
   // The glossary page: each term under a heading anchored by its slug, with its definition and
   // where it is explained in full.
@@ -151,9 +173,11 @@ case class Glossary(terms: List[Glossary.Term]):
 
       val more: List[Block] = term.link.lay(Nil: List[Block]): (url: Text) =>
         val destination: Inline.Destination =
-          if url.starts(t"/") then Inline.Destination.Local(url) else Inline.Destination.External(url)
+          if url.starts(t"/") then Inline.Destination.Local(url)
+          else Inline.Destination.External(url)
 
-        List(Block.Paragraph(List(Inline.Textual(t"See "), Inline.Link(destination, Inline.text(url)), Inline.Textual(t"."))))
+        val link: Inline = Inline.Link(destination, Inline.text(url))
+        List(Block.Paragraph(List(Inline.Textual(t"See "), link, Inline.Textual(t"."))))
 
       Block.Heading(2, Inline.text(term.name), term.slug) :: detail + more
 

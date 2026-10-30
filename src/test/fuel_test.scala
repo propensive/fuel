@@ -32,11 +32,12 @@
                                                                                                   */
 package fuel
 
+import scala.collection.immutable as sci
+
 // Excluded from the umbrella: `Compilation`, anthology's, which would outrank fuel's own.
 import soundness.{Compilation as _, Language as _, Token as _, Query as _, *}
 
 import dysasymptotics.{linearAccess, linearSize}
-import scala.jdk.CollectionConverters.*
 import pyrocosm.{Block, Inline, Language, Purview, TerminalRenderer, Token, Tone}
 import systems.javaBaseSystem
 
@@ -84,8 +85,11 @@ make run
 
       test(m"a scala fence is highlighted into several tokens"):
         Doc.parse(t"doc/intro.md", intro).blocks match
-          case _ :: _ :: Block.Code(Language.Scala, line :: _, _, _, _, _) :: _ => line.tokens.size > 1
-          case _                                                             => false
+          case _ :: _ :: Block.Code(Language.Scala, line :: _, _, _, _, _) :: _ =>
+            line.tokens.size > 1
+
+          case _ =>
+            false
 
       . assert(_ == true)
 
@@ -179,7 +183,7 @@ error oops
 
         Doc.parse(t"doc/n.md", text).blocks match
           case _ :: Block.Code(_, _, _, start, _, _) :: _ => start
-          case _                                       => Unset
+          case _                                          => Unset
 
       . assert(_ == 6)
 
@@ -232,21 +236,32 @@ error oops
 
     suite(m"Animation"):
       val animatedFence: Text =
-        t"```scala fuel\nid steps\nframe\n  code\n      val x: Int = 1\nframe\n  code\n      val x: Int = 1\n" +
+        t"```scala fuel\nid steps\nframe\n  code\n      val x: Int = 1\nframe\n" +
+          t"  code\n      val x: Int = 1\n" +
           t"      val y: Int = x + 1\nframe\n  code val z: Int = 2\n##\n```\n"
 
       test(m"a frame's code is its `code` child, indented beneath it or on the line"):
-        Preamble.parse(t"frame\n  code\n      val x = 1\n      val y = 2\nframe\n  code val z = 3\nloop\n") match
+        val text: Text =
+          t"frame\n  code\n      val x = 1\n      val y = 2\nframe\n  code val z = 3\nloop\n"
+
+        Preamble.parse(text) match
           case p: Preamble => (p.frames.map(_.code), p.autoplay, p.loop)
           case _           => (Nil: List[Optional[Text]], true, true)
 
       . assert(_ == (List(t"val x = 1\nval y = 2", t"val z = 3"), false, true))
 
       test(m"a frame's label, hold, at and language are read"):
-        Preamble.parse(t"frame\n  code\n      val x = 1\n  label the *first* step\n  hold 2\n  at 12.5\n  language java\n") match
+        val text: Text =
+          t"frame\n  code\n      val x = 1\n  label the *first* step\n" +
+            t"  hold 2\n  at 12.5\n  language java\n"
+
+        Preamble.parse(text) match
           case p: Preamble =>
             p.frames.head.let: (frame: Preamble.Frame) =>
-              val emphasised: Boolean = frame.label.exists { case Inline.Emphasis(_) => true; case _ => false }
+              val emphasised: Boolean = frame.label.exists:
+                case Inline.Emphasis(_) => true
+                case _                  => false
+
               (Blocks.plain(frame.label), emphasised, frame.hold, frame.at, frame.language)
 
           case _ =>
@@ -255,10 +270,16 @@ error oops
       . assert(_ == (t"the first step", true, 2.0, 12.5, t"java"))
 
       test(m"a frame's marks are its own, refined beneath them by line and occurrence"):
-        Preamble.parse(t"frame\n  code\n      val x = x\n  highlight x  the variable\n    line 1\n    occurrence 2\n") match
+        val text: Text =
+          t"frame\n  code\n      val x = x\n  highlight x  the variable\n" +
+            t"    line 1\n    occurrence 2\n"
+
+        Preamble.parse(text) match
           case p: Preamble =>
             val own: Optional[List[(Block.Note.Style, Optional[Text], Optional[Int], Int)]] =
-              p.frames.head.let(_.marks.map { (mark: Preamble.Mark) => (mark.style, mark.caption, mark.selection.line, mark.selection.occurrence) })
+              p.frames.head.let: (frame: Preamble.Frame) =>
+                frame.marks.map: (mark: Preamble.Mark) =>
+                  (mark.style, mark.caption, mark.selection.line, mark.selection.occurrence)
 
             (p.marks.size, own)
 
@@ -283,19 +304,25 @@ error oops
       . assert(_ == ((10, 11), (4, 5), Unset, Unset))
 
       test(m"a frame without code is a problem at its line, and is dropped"):
-        val text: Text = t"# T\n\n```scala fuel\nframe\n  code\n      val x = 1\nframe\n    val y = 2\n##\n```\n"
+        val text: Text =
+          t"# T\n\n```scala fuel\nframe\n  code\n      val x = 1\nframe\n    val y = 2\n##\n```\n"
+
         val doc = Doc.parse(t"doc/anim.md", text)
 
         val problem = doc.problems match
-          case Block.Diagnostic(Tone.Failure, location, Block.Paragraph(Inline.Textual(message) :: _) :: _, _, _) :: Nil =>
-            (location.let(_.line), message.starts(t"Frame 2"))
+          case Block.Diagnostic(Tone.Failure, location, paragraph :: _, _, _) :: Nil =>
+            val second: Boolean = paragraph match
+              case Block.Paragraph(Inline.Textual(message) :: _) => message.starts(t"Frame 2")
+              case _                                             => false
+
+            (location.let(_.line), second)
 
           case _ =>
             (Unset, false)
 
         val frames = doc.blocks match
           case _ :: Block.Code(_, _, _, _, animation, _) :: _ => animation.let(_.slides.size)
-          case _                                           => Unset
+          case _                                              => Unset
 
         (problem, frames)
 
@@ -303,14 +330,16 @@ error oops
 
       test(m"a frame's details reach the animation, and a block-level mark every frame it matches"):
         val text: Text =
-          t"```scala fuel\nhighlight x\nframe\n  code\n      val x: Int = 1\nframe\n  label a *second* value\n  hold 2\n  at 12.5\n" +
+          t"```scala fuel\nhighlight x\nframe\n  code\n      val x: Int = 1\n" +
+            t"frame\n  label a *second* value\n  hold 2\n  at 12.5\n" +
             t"  highlight y  the new one\n  code\n      val y: Int = 2\n##\n```\n"
 
         Doc.parse(t"doc/anim.md", text).blocks match
           case Block.Code(_, _, notes, _, animation, _) :: Nil =>
             animation.let: (animation: Block.Animation) =>
               val second: Block.Slide = animation.slides.skip(1).head.or(Block.Slide(-1))
-              (notes.size, animation.slides.map(_.notes.size), Blocks.plain(second.label), second.hold, second.at)
+              val label: Text = Blocks.plain(second.label)
+              (notes.size, animation.slides.map(_.notes.size), label, second.hold, second.at)
 
           case _ =>
             Unset
@@ -319,7 +348,8 @@ error oops
 
       test(m"a java frame is highlighted without the checker, in its own language"):
         val text: Text =
-          t"```scala fuel\nframe\n  code\n      val x: Int = 1\nframe\n  language java\n  code\n      int x = 1;\n##\n```\n"
+          t"```scala fuel\nframe\n  code\n      val x: Int = 1\nframe\n" +
+            t"  language java\n  code\n      int x = 1;\n##\n```\n"
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           val doc = Doc.parse(t"doc/anim.md", text, checker)
@@ -327,7 +357,9 @@ error oops
           doc.blocks match
             case Block.Code(_, _, _, _, animation, _) :: Nil =>
               animation.let: (animation: Block.Animation) =>
-                (doc.problems.size, animation.slides.skip(1).head.let(_.language), animation.lines(1).head.let(_.size > 1))
+                ( doc.problems.size,
+                  animation.slides.skip(1).head.let(_.language),
+                  animation.lines(1).head.let(_.size > 1) )
 
             case _ =>
               Unset
@@ -336,14 +368,18 @@ error oops
 
       test(m"a java fence with a preamble is read by the preamble embedding"):
         Doc.parse(t"doc/j.md", t"```java fuel\nid j\n##\nint x = 1;\n```\n").blocks match
-          case Block.Code(language, line :: _, _, _, _, _) :: Nil => (language, line.tokens.size > 1)
-          case _                                               => Unset
+          case Block.Code(language, line :: _, _, _, _, _) :: Nil =>
+            (language, line.tokens.size > 1)
+
+          case _ =>
+            Unset
 
       . assert(_ == (Language.Java, true))
 
       test(m"a fragment follows the last scala frame of an animation"):
         val first: Text =
-          t"```scala fuel\nid setup\nframe\n  code\n      val base: Int = 1\nframe\n  language java\n  code\n      int base = 1;\n##\n```\n"
+          t"```scala fuel\nid setup\nframe\n  code\n      val base: Int = 1\nframe\n" +
+            t"  language java\n  code\n      int base = 1;\n##\n```\n"
 
         val second: Text = t"```scala fuel\nfollows setup\n##\nval n: Int = base + 1\n```\n"
 
@@ -377,7 +413,8 @@ error oops
 
       test(m"a frame that does not compile is a problem naming the frame"):
         val fence: Text =
-          t"```scala fuel\nframe\n  code\n      val x: Int = 1\nframe\n  code\n      val x: Int = \"oops\"\n##\n```\n"
+          t"```scala fuel\nframe\n  code\n      val x: Int = 1\nframe\n  code\n" +
+            t"      val x: Int = \"oops\"\n##\n```\n"
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           Doc.parse(t"doc/anim.md", fence, checker).problems match
@@ -406,49 +443,77 @@ error oops
 
       test(m"a fragment sees a value an earlier one defined"):
         problems(t"```scala\nval a: Int = 1\n```\n\n```scala\nval b: Int = a + 1\n```\n")
+
       . assert(_ == Nil)
 
       test(m"a bare expression is a statement of the session"):
         problems(t"```scala\nval a: Int = 1\n```\n\n```scala\na + 1\n```\n")
+
       . assert(_ == Nil)
 
       test(m"`restart` begins the session afresh"):
-        problems(t"```scala\nval a: Int = 1\n```\n```scala fuel\nrestart\n##\nval b: Int = a\n```\n").map(line(_))
+        val text: Text =
+          t"```scala\nval a: Int = 1\n```\n```scala fuel\nrestart\n##\nval b: Int = a\n```\n"
+
+        problems(text).map(line(_))
+
       . assert(_ == List(7))
 
       test(m"a name defined again hides the earlier definition"):
-        problems(t"```scala\nval a: Int = 1\n```\n```scala\nval a: Int = 2\n```\n```scala\nval b: Int = a + 1\n```\n")
+        problems:
+          t"```scala\nval a: Int = 1\n```\n```scala\nval a: Int = 2\n```\n" +
+            t"```scala\nval b: Int = a + 1\n```\n"
+
       . assert(_ == Nil)
 
       test(m"an earlier fragment's imports are in scope for a later one"):
-        problems(t"```scala\nimport scala.collection.mutable.ArrayBuffer\nval a: Int = 1\n```\n```scala\nval buffer: ArrayBuffer[Int] = ArrayBuffer(a)\n```\n")
+        problems:
+          t"```scala\nimport scala.collection.mutable.ArrayBuffer\nval a: Int = 1\n```\n" +
+            t"```scala\nval buffer: ArrayBuffer[Int] = ArrayBuffer(a)\n```\n"
+
       . assert(_ == Nil)
 
       test(m"a fixture is compiled before the first fragment"):
-        problems(t"```scala\nfixed + 1\n```\n", (t"doc/fixtures/check.scala", t"val fixed: Int = 1"))
+        val fixture: (Text, Text) = (t"doc/fixtures/check.scala", t"val fixed: Int = 1")
+        problems(t"```scala\nfixed + 1\n```\n", fixture)
+
       . assert(_ == Nil)
 
       test(m"a fixture which does not compile is a problem at its own path"):
-        problems(t"```scala\nval n: Int = 1\n```\n", (t"doc/fixtures/check.scala", t"val fixed: Int = \"x\"")) match
-          case Block.Diagnostic(_, location, _, _, _) :: Nil => (location.let(_.path), location.let(_.line))
-          case _                                             => Unset
+        val fixture: (Text, Text) = (t"doc/fixtures/check.scala", t"val fixed: Int = \"x\"")
+
+        problems(t"```scala\nval n: Int = 1\n```\n", fixture) match
+          case Block.Diagnostic(_, location, _, _, _) :: Nil =>
+            (location.let(_.path), location.let(_.line))
+
+          case _ =>
+            Unset
+
       . assert(_ == (t"doc/fixtures/check.scala", 1))
 
       test(m"an `errors show` fragment does not join the session"):
         val text: Text =
-          t"```scala\nval a: Int = 1\n```\n```scala fuel\nerrors show\n##\nval c: Int = \"x\"\n```\n```scala\nval d: Int = c\n```\n"
+          t"```scala\nval a: Int = 1\n```\n" +
+            t"```scala fuel\nerrors show\n##\nval c: Int = \"x\"\n```\n" +
+            t"```scala\nval d: Int = c\n```\n"
 
         problems(text).map(line(_))
+
       . assert(_ == List(10))
 
       test(m"a parsed fragment passes a type error and fails a syntax error"):
         ( problems(t"```scala fuel\nparse\n##\nval n: Int = \"x\"\n```\n").size,
           problems(t"```scala fuel\nparse\n##\nval = 1\n```\n").size )
+
       . assert(_ == (0, 1))
 
       test(m"a compiled fragment reports a type error, and passes a feature flag"):
-        ( problems(t"```scala fuel\ncompile\n##\nval n: Int = \"x\"\n```\n").size,
-          problems(t"```scala fuel\ncompile\nfeature experimental.captureChecking\n##\nval n: Int = 1\n```\n").size )
+        val feature: Text =
+          t"```scala fuel\ncompile\nfeature experimental.captureChecking\n##\nval n: Int = 1\n```\n"
+
+        val typed: Text = t"```scala fuel\ncompile\n##\nval n: Int = \"x\"\n```\n"
+        (problems(typed).size, problems(feature).size)
+
       . assert(_ == (1, 0))
 
       test(m"a line marked as not compiling must not compile, and is noted"):
@@ -456,27 +521,36 @@ error oops
 
         val note: Optional[(Int, Block.Note.Style)] = blocks(text) match
           case Block.Code(_, _, note :: _, _, _, _) :: _ => (note.line, note.style)
-          case _                                      => Unset
+          case _                                         => Unset
 
         (problems(text).size, note)
+
       . assert(_ == (0, (1, Block.Note.Style.Erroneous)))
 
       test(m"a line marked as not compiling which compiles is a problem at its line"):
-        problems(t"```scala\nval n: Int = 1\nval m: Int = 2 // does not compile\n```\n").map(line(_))
+        val text: Text = t"```scala\nval n: Int = 1\nval m: Int = 2 // does not compile\n```\n"
+        problems(text).map(line(_))
+
       . assert(_ == List(3))
 
       test(m"a diagnostic in a session is at its line and column in the file"):
         problems(t"```scala\nval a: Int = 1\n```\n```scala\nval b: Int = \"oops\"\n```\n") match
-          case Block.Diagnostic(_, location, _, _, _) :: Nil => (location.let(_.line), location.let(_.column))
-          case _                                             => Unset
+          case Block.Diagnostic(_, location, _, _, _) :: Nil =>
+            (location.let(_.line), location.let(_.column))
+
+          case _ =>
+            Unset
+
       . assert(_ == (5, 14))
 
       test(m"a document is titled by its first heading, of any level"):
         Doc.parse(t"doc/x.md", t"## Hello\n\ntext\n").title
+
       . assert(_ == t"Hello")
 
       test(m"an HTML comment is no block"):
         Doc.parse(t"doc/x.md", t"<!-- doccheck: skip -->\n\n```scala\nval x = 1\n```\n").blocks.size
+
       . assert(_ == 1)
 
     suite(m"Showing"):
@@ -555,8 +629,11 @@ slide
 
         val animated: List[Int] = all.bind: (leaf: Block.Leaf) =>
           leaf.content.bind:
-            case Block.Code(_, _, _, _, animation: Block.Animation, _) => List(animation.slides.size)
-            case _                                                  => Nil
+            case Block.Code(_, _, _, _, animation: Block.Animation, _) =>
+              List(animation.slides.size)
+
+            case _ =>
+              Nil
 
         (all.size, animated)
 
@@ -640,17 +717,23 @@ slide
       class Counting(inner: Checker) extends Checker:
         var checks: Int = 0
 
-        def check(code: Text, mode: Preamble.Mode, context: Optional[harlequin.Scala.Context]): SourceCode =
+        def check(code: Text, mode: Preamble.Mode, context: Optional[harlequin.Scala.Context])
+        :   SourceCode =
+
           checks += 1
           inner.check(code, mode, context)
 
         def enter(name: Text, unit: Text): Boolean = inner.enter(name, unit)
-        def build(sources: Map[Text, Text], output: Text): List[Notice] = inner.build(sources, output)
+
+        def build(sources: Map[Text, Text], output: Text): List[Notice] =
+          inner.build(sources, output)
+
         def context: Optional[dotty.tools.dotc.core.Contexts.Context] = inner.context
         def compiles: Boolean = inner.compiles
 
       def document(b: Text, prose: Text = t""): Text =
-        t"# Fragments\n\n${prose}Some prose.\n\n```scala\nval a = 1\n```\n\nMore prose.\n\n```scala\n$b\n```\n\n```scala\nval c = 3\n```\n"
+        t"# Fragments\n\n${prose}Some prose.\n\n```scala\nval a = 1\n```\n\nMore prose.\n\n" +
+          t"```scala\n$b\n```\n\n```scala\nval c = 3\n```\n"
 
       // The checks a second compile makes, after a first of `first`, and the two compiles'
       // documents.
@@ -658,9 +741,13 @@ slide
         Checking.session(classpath, Nil): (checker: Checker) =>
           val cache: Cache = Cache.Transient()
           val counting = Counting(checker)
-          val one: Doc = Doc.parse(path, first, counting, session, Unset, Linker.none, cache, t"base")
+
+          def parse(text: Text): Doc =
+            Doc.parse(path, text, counting, session, Unset, Linker.none, cache, t"base")
+
+          val one: Doc = parse(first)
           counting.checks = 0
-          val two: Doc = Doc.parse(path, second, counting, session, Unset, Linker.none, cache, t"base")
+          val two: Doc = parse(second)
           (counting.checks, one, two)
 
       def starts(doc: Doc): List[Optional[Int]] = doc.blocks.bind:
@@ -668,33 +755,48 @@ slide
         case _                => Nil
 
       test(m"an unchanged document is compiled from what was kept, to the same blocks"):
-        val (checks, one, two) = twice(document(t"val b = a + 1"), document(t"val b = a + 1"), true, t"doc/s1.md")
+        val unchanged: Text = document(t"val b = a + 1")
+        val (checks, one, two) = twice(unchanged, unchanged, true, t"doc/s1.md")
         (checks, one.blocks == two.blocks, one.problems == two.problems)
+
       . assert(_ == (0, true, true))
 
       test(m"a change of prose compiles no fence, and the fences' lines move with them"):
-        val (checks, one, two) =
-          twice(document(t"val b = a + 1"), document(t"val b = a + 1", t"Two lines\nof prose.\n\n"), true, t"doc/s2.md")
+        val longer: Text = document(t"val b = a + 1", t"Two lines\nof prose.\n\n")
+        val (checks, one, two) = twice(document(t"val b = a + 1"), longer, true, t"doc/s2.md")
 
-        (checks, starts(two) == starts(one).map(_.let(_ + 3)), Blocks.plain(two.blocks.at(Sec).lay(Nil) { case Block.Paragraph(c) => c; case _ => Nil }))
+        val paragraph: List[Inline] = two.blocks.at(Sec).lay(Nil):
+          case Block.Paragraph(content) => content
+          case _                        => Nil
+
+        (checks, starts(two) == starts(one).map(_.let(_ + 3)), Blocks.plain(paragraph))
+
       . assert(_ == (0, true, t"Two lines of prose."))
 
       test(m"in a session, a changed fence is compiled with those after it, and not those before"):
         twice(document(t"val b = a + 1"), document(t"val b = a + 2"), true, t"doc/s3.md")(0)
+
       . assert(_ == 2)
 
       test(m"outside a session, a changed fence is compiled alone"):
         twice(document(t"val b = 2"), document(t"val b = 3"), false, t"doc/s4.md")(0)
+
       . assert(_ == 1)
 
       test(m"a document compiled through a cache has the blocks it has without one"):
         val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
-        val text: Text = Text(java.nio.file.Files.readString(java.nio.file.Path.of(s"$here/doc/markdown.md")).nn)
+        val path = java.nio.file.Path.of(s"$here/doc/markdown.md")
+        val text: Text = Text(java.nio.file.Files.readString(path).nn)
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           val plain: Doc = Doc.parse(t"markdown.md", text, checker, true)
-          val kept: Doc = Doc.parse(t"markdown.md", text, checker, true, Unset, Linker.none, Cache.Transient(), t"base")
+          val cache: Cache = Cache.Transient()
+
+          val kept: Doc =
+            Doc.parse(t"markdown.md", text, checker, true, Unset, Linker.none, cache, t"base")
+
           (plain.blocks == kept.blocks, plain.problems.size == kept.problems.size)
+
       . assert(_ == (true, true))
 
     suite(m"Output directory"):
@@ -707,16 +809,21 @@ slide
               Linkage(6, Linkage.Target.Url(t"https://example.com/")),
               Linkage(7, Linkage.Target.Sigil(t"#Nope")) )
 
-        val linked: Output.Prose = Output.Prose(List(Block.paragraph(t"x")), Nil, linkages, List(t"top"))
+        val linked: Output.Prose =
+          Output.Prose(List(Block.paragraph(t"x")), Nil, linkages, List(t"top"))
+
         Output.Prose.decode(Output.Prose.encode(linked)) == linked
+
       . assert(_ == true)
 
       val fragment: Output.Fragment =
         Output.Fragment(List(Block.paragraph(t"code")), Nil, true, List(t"x"), Nil, t"val x = 1", 4)
 
-      val prose: Output.Prose = Output.Prose(List(Block.paragraph(t"prose"), Output.sentinel(0)), Nil)
+      val prose: Output.Prose =
+        Output.Prose(List(Block.paragraph(t"prose"), Output.sentinel(0)), Nil)
 
-      def directory(): Text = Text(java.nio.file.Files.createTempDirectory("fuel-output").nn.toString)
+      def directory(): Text =
+        Text(java.nio.file.Files.createTempDirectory("fuel-output").nn.toString)
 
       def objects(output: Text): Int =
         java.nio.file.Files.list(java.nio.file.Path.of(output.s, "objects")).nn.count.toInt
@@ -729,6 +836,7 @@ slide
         first.finish(t"1.0", t"classpath", t"environment")
         val second = Store(output, false)
         (second.fragment(t"k1") == fragment, second.prose(t"k2") == prose, second.hits.get)
+
       . assert(_ == (true, true, 2))
 
       test(m"a record the next compile does not use is deleted"):
@@ -741,6 +849,7 @@ slide
         second.fragment(t"k1")
         second.finish(t"1.0", t"classpath", t"environment")
         (objects(output), Store(output, false).prose(t"k2").absent)
+
       . assert(_ == (1, true))
 
       test(m"`--force` keeps nothing"):
@@ -749,6 +858,7 @@ slide
         first.fragment(t"k1", fragment)
         first.finish(t"1.0", t"classpath", t"environment")
         Store(output, true).fragment(t"k1").absent
+
       . assert(_ == true)
 
       test(m"the manifest names its inputs, and each document by its section"):
@@ -758,7 +868,11 @@ slide
         store.finish(t"1.0", t"classpath", t"environment")
 
         Store.manifest(output).let: (manifest: Output.Manifest) =>
-          (manifest.fuel, manifest.classpath, manifest.documents.map { (d: Output.Manifest.Document) => (d.section, d.path, d.title) })
+          val documents = manifest.documents.map: (d: Output.Manifest.Document) =>
+            (d.section, d.path, d.title)
+
+          (manifest.fuel, manifest.classpath, documents)
+
       . assert(_ == (t"1.0", t"classpath", List((t"doc/modules", t"json.md", t"JSON"))))
 
     suite(m"Output"):
@@ -766,9 +880,14 @@ slide
         val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
 
         Compilation.document(t"$here/doc/markdown.md").lay(t"unreadable"): (doc: Doc) =>
-          val fragment: Output.Fragment = Output.Fragment(doc.blocks, doc.problems, true, List(t"x"), List(t"import a.*"), t"val x = 1", 7)
+          val fragment: Output.Fragment =
+            Output.Fragment
+              ( doc.blocks, doc.problems, true, List(t"x"), List(t"import a.*"), t"val x = 1", 7 )
+
           val data: Data = Output.Fragment.encode(fragment)
-          Output.Fragment.decode(data).lay(t"undecodable") { (back: Output.Fragment) => if back == fragment then t"same" else t"different" }
+
+          Output.Fragment.decode(data).lay(t"undecodable"): (back: Output.Fragment) =>
+            if back == fragment then t"same" else t"different"
 
       . assert(_ == t"same")
 
@@ -797,11 +916,14 @@ object Util:
   val limit: Int = 10
 """
 
-      val output: Text = Text(java.nio.file.Files.createTempDirectory("fuel-api").nn.toString)
+      val output: Text =
+        Text(java.nio.file.Files.createTempDirectory("fuel-api").nn.toString)
+
       val entries: List[Text] = classpath().cut(t":").filter(_ != t"")
 
       lazy val notices: List[Notice] =
-        Checking.session(classpath, Nil) { (checker: Checker) => checker.build(Map(t"Sample.scala" -> sample), output) }
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          checker.build(Map(t"Sample.scala" -> sample), output)
 
       lazy val api: Api | Throwable =
         notices
@@ -817,54 +939,76 @@ object Util:
 
       test(m"the sources compile, and their TASTy is saved"):
         (notices.filter(_.importance == Importance.Error).size, Inspection.tastyIn(output).size > 0)
+
       . assert(_ == (0, true))
 
       test(m"the inspection yields a model"):
         api match
-          case api: Api         => t"${api.entities.size.toString} entities"
-          case error: Throwable => t"${error.toString}: ${java.lang.String.join("; ", error.getStackTrace.nn.take(6).map(_.toString)*).nn}"
+          case api: Api => t"${api.entities.size.toString} entities"
+
+          case error: Throwable =>
+            val frames = error.getStackTrace.nn.take(6).map(_.toString)
+            t"${error.toString}: ${java.lang.String.join("; ", frames*).nn}"
+
       . assert(_.ends(t"entities"))
 
       test(m"a case class and its companion are one entity, with a template and a definition"):
-        entity(t"sample.Doc").let { (doc: Api.Entity) => (doc.own, doc.template.let(_.kind), doc.definition.let(_.kind)) }
+        entity(t"sample.Doc").let: (doc: Api.Entity) =>
+          (doc.own, doc.template.let(_.kind), doc.definition.let(_.kind))
+
       . assert(_ == (true, Api.Kind.CaseClass, Api.Kind.Object))
 
       test(m"a field is a member of the type, and a companion method of the term"):
-        (entity(t"sample.Doc#title").let(_.definition.let(_.kind)), entity(t"sample.Doc.parse").let(_.definition.let(_.kind)))
+        ( entity(t"sample.Doc#title").let(_.definition.let(_.kind)),
+          entity(t"sample.Doc.parse").let(_.definition.let(_.kind)) )
+
       . assert(_ == (Api.Kind.Val, Api.Kind.Def))
 
       test(m"an entity's page is at its path, with `~` after a type and `.` after a term"):
         (entity(t"sample.Doc#title").let(_.url), entity(t"sample.Doc.parse").let(_.url))
+
       . assert(_ == (t"/api/sample.Doc~title", t"/api/sample.Doc.parse"))
 
       test(m"a path leads back to its entity"):
         api match
           case api: Api => api.locate(t"sample.Doc~title").let(_.key)
           case _        => Unset
+
       . assert(_ == t"sample.Doc#title")
 
       test(m"a package is an entity whose members are its types and terms, declared once"):
-        entity(t"sample").let { (p: Api.Entity) => (p.members.has(t"sample.Doc"), p.overloads.size) }
+        entity(t"sample").let: (p: Api.Entity) => (p.members.has(t"sample.Doc"), p.overloads.size)
+
       . assert(_ == (true, 0))
 
       test(m"a private member is not walked"):
         entity(t"sample.Doc#secret").present
+
       . assert(_ == false)
 
       test(m"a method's signature has its clauses and its result, and its overloads are kept"):
-        entity(t"sample.Doc.parse").let { (e: Api.Entity) => (e.definition.let(_.clauses.size), e.definition.let(_.result.let(_.qualified)), e.overloads.size) }
+        entity(t"sample.Doc.parse").let: (e: Api.Entity) =>
+          ( e.definition.let(_.clauses.size),
+            e.definition.let(_.result.let(_.qualified)),
+            e.overloads.size )
+
       . assert(_ == (1, t"sample.Doc", 1))
 
       test(m"a class's parents are its declared ones"):
         entity(t"sample.Doc").let(_.template.let(_.parents.map(_.qualified)))
+
       . assert(_ == List(t"sample.Shape[scala.Int]"))
 
       test(m"an extension keeps the clause it extends apart from its own"):
-        entity(t"sample.Util.twice").let(_.definition.let { (d: Api.Declaration) => (d.kind, d.group.size, d.clauses.size) })
+        entity(t"sample.Util.twice").let(_.definition).let: (d: Api.Declaration) =>
+          (d.kind, d.group.size, d.clauses.size)
+
       . assert(_ == (Api.Kind.Extension, 1, 0))
 
       test(m"a type alias has its parameters and its right-hand side"):
-        entity(t"sample.Util.Pair").let(_.template.let { (d: Api.Declaration) => (d.kind, d.clauses.size, d.result.let(_.qualified)) })
+        entity(t"sample.Util.Pair").let(_.template).let: (d: Api.Declaration) =>
+          (d.kind, d.clauses.size, d.result.let(_.qualified))
+
       . assert(_ == (Api.Kind.Type, 1, t"(A, A)"))
 
       test(m"a method's parameters are members of its type form, one entity across its overloads"):
@@ -872,30 +1016,39 @@ object Util:
           entity(t"sample.Doc.parse#size").let(_.definition.let(_.result.let(_.qualified))),
           entity(t"sample.Doc.parse#text").let(_.overloads.size),
           entity(t"sample.Doc.parse#text").let(_.url) )
+
       . assert(_ == (Api.Kind.Param, t"scala.Int", 0, t"/api/sample.Doc.parse~text"))
 
       test(m"a class's, an alias's and an extension's parameters are entities, type and term"):
         ( entity(t"sample.Shape#A").let(_.template.let(_.kind)),
           entity(t"sample.Util.Pair#A").let(_.template.let(_.kind)),
           entity(t"sample.Util.twice#text").let(_.definition.let(_.kind)) )
+
       . assert(_ == (Api.Kind.TypeParam, Api.Kind.TypeParam, Api.Kind.Param))
 
       test(m"a case class's field is its constructor's parameter, and stays a field"):
-        entity(t"sample.Doc#title").let { (e: Api.Entity) => (e.definition.let(_.kind), e.overloads.size, e.isParameter) }
+        entity(t"sample.Doc#title").let: (e: Api.Entity) =>
+          (e.definition.let(_.kind), e.overloads.size, e.isParameter)
+
       . assert(_ == (Api.Kind.Val, 0, false))
 
       test(m"a parameter is not in the navigation"):
         api match
           case api: Api =>
             def names(nodes: List[Block.TreeNode]): List[Text] =
-              nodes.bind { (node: Block.TreeNode) => List(Blocks.plain(node.label)) + names(node.children) }
+              nodes.bind: (node: Block.TreeNode) =>
+                List(Blocks.plain(node.label)) + names(node.children)
 
             names(ApiPages.tree(api, t"sample.Shape").roots).has(t"A")
+
           case _ => true
+
       . assert(_ == false)
 
       test(m"a given and a val are declarations of their kinds"):
-        (entity(t"sample.Util.given_Ordering_Doc").let(_.definition.let(_.kind)), entity(t"sample.Util.limit").let(_.definition.let(_.kind)))
+        ( entity(t"sample.Util.given_Ordering_Doc").let(_.definition.let(_.kind)),
+          entity(t"sample.Util.limit").let(_.definition.let(_.kind)) )
+
       . assert(_ == (Api.Kind.Given, Api.Kind.Val))
 
       test(m"a dependency jar is walked through the session's symbol table"):
@@ -904,43 +1057,75 @@ object Util:
 
         val result: Api | Throwable =
           Checking.session(classpath, Nil): (checker: Checker) =>
-            checker.context.lay[Api | Throwable](Api.empty) { (context: dotty.tools.dotc.core.Contexts.Context) => Inspection.classpath(List(jar), context) }
-
+            checker.context.lay[Api | Throwable](Api.empty): context =>
+              Inspection.classpath(List(jar), context)
 
         result match
-          case api: Api         => (api.entities.size > 1000, api(t"scala.Option").let(_.own), api(t"scala.Option").let(_.template.let(_.kind)), api(t"scala.Option#map").present, api(t"scala.Option#map").let(_.definition.let(_.result.let(_.qualified))))
-          case error: Throwable => error.toString
+          case api: Api =>
+            val option: Optional[Api.Entity] = api(t"scala.Option")
+            val mapped: Optional[Api.Entity] = api(t"scala.Option#map")
+
+            ( api.entities.size > 1000,
+              option.let(_.own),
+              option.let(_.template.let(_.kind)),
+              mapped.present,
+              mapped.let(_.definition.let(_.result.let(_.qualified))) )
+
+          case error: Throwable =>
+            error.toString
+
       . assert(_ == (true, false, Api.Kind.Class, true, t"scala.Option[B]"))
 
       // A companion's members bring a few types stenography cannot render (a literal type, a
       // type with a companion's prefix): under one in a thousand, and under one in ten
       // thousand shown as `?`.
-      test(m"every type of a dependency renders, all but a few through stenography whole and almost none as `?`"):
+      test
+        ( m"every type of a dependency renders, all but a few through stenography " +
+          m"whole and almost none as `?`" ):
+
         val rendered: Int = Inspection.rendered.get
-        (rendered > 10000, Inspection.fallbacks.get * 1000 < rendered, Inspection.unrendered.get * 10000 < rendered)
+
+        ( rendered > 10000,
+          Inspection.fallbacks.get * 1000 < rendered,
+          Inspection.unrendered.get * 10000 < rendered )
+
       . assert(_ == (true, true, true))
 
-      test(m"a dependency jar is walked before a build, in a session on that jar under the project's options"):
+      test
+        ( m"a dependency jar is walked before a build, in a session on " +
+          m"that jar under the project's options" ):
+
         val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
         val jar: Text = t"$here/out/fuel/launcher/assembly.dest/out.jar"
         val out: Text = Text(java.nio.file.Files.createTempDirectory("fuel-probe").nn.toString)
 
-        val config: Text = Text(java.nio.file.Files.readString(java.nio.file.Path.of(s"$here/.pyrocosm/fuel/config.tel")).nn)
-        val options: List[Text] = config.cut(t"\n").filter(_.starts(t"scalac-option ")).map(_.skip(14).trim)
+        val path = java.nio.file.Path.of(s"$here/.pyrocosm/fuel/config.tel")
+        val config: Text = Text(java.nio.file.Files.readString(path).nn)
+
+        val options: List[Text] =
+          config.cut(t"\n").filter(_.starts(t"scalac-option ")).map(_.skip(14).trim)
+
         val sizes: (Int, Int) =
           Checking.session(List(jar), options): (checker: Checker) =>
-            val before: Int = checker.context.lay(0) { (c: dotty.tools.dotc.core.Contexts.Context) => Inspection.classpath(List(jar), c) match { case api: Api => api.entities.size; case _ => -1 } }
+            def size(): Int = checker.context.lay(0): context =>
+              Inspection.classpath(List(jar), context) match
+                case api: Api => api.entities.size
+                case _        => -1
+
+            val before: Int = size()
             checker.build(Map(t"Probe.scala" -> sample), out)
-            val after: Int = checker.context.lay(0) { (c: dotty.tools.dotc.core.Contexts.Context) => Inspection.classpath(List(jar), c) match { case api: Api => api.entities.size; case _ => -1 } }
+            val after: Int = size()
             (before, after)
 
         // After a compile under these options the walk reads next to nothing, which is why
         // the compile step walks the dependencies first.
         (sizes(0) > 10000, sizes(1) < sizes(0))
+
       . assert(_ == (true, true))
 
       test(m"a symbolic name is encoded in its path, and decoded from it"):
         Api.unpath(Api.path(stenography.Designator(t"a.B"), t"+:")).name
+
       . assert(_ == t"+:")
 
       // A second source, compiled and walked as the first, with what applies to a type: an
@@ -986,79 +1171,158 @@ extension (doc: Doc) def titled: String = doc.title
 """
 
       lazy val decorated: Api =
-        val output2: Text = Text(java.nio.file.Files.createTempDirectory("fuel-api2").nn.toString)
-        Checking.session(classpath, Nil) { (checker: Checker) => checker.build(Map(t"Extended.scala" -> extended), output2) }
+        val output2: Text =
+          Text(java.nio.file.Files.createTempDirectory("fuel-api2").nn.toString)
+
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          checker.build(Map(t"Extended.scala" -> extended), output2)
 
         Inspection.walk(List(output2), Nil, entries) match
           case api: Api => Applicables.decorate(api)
           case _        => Api.empty
 
       def applicable(key: Text): List[(Text, Int, Int, Int, Optional[Text])] =
-        decorated(key).let(_.extensions.map { (e: Api.Applicable) => (e.key, e.tier, e.distance, e.reach, e.via) }).or(Nil)
+        decorated(key).lay(Nil: List[Api.Applicable])(_.extensions).map: (e: Api.Applicable) =>
+          (e.key, e.tier, e.distance, e.reach, e.via)
 
-      test(m"a given with a body is one given, providing its first parent, which its signature shows"):
-        decorated(t"extended.Chars.docText").let { (e: Api.Entity) => e.definition.let { (d: Api.Declaration) => (d.kind, d.modifiers, d.result.let(_.qualified), d.provides, e.overloads.size) } }
-      . assert(_ == (Api.Kind.Given, Nil, t"extended.Show[extended.Doc]", Api.Shape.Named(t"extended.Show", List(Api.Shape.Named(t"extended.Doc"))), 0))
+      val showDoc: Api.Shape =
+        Api.Shape.Named(t"extended.Show", List(Api.Shape.Named(t"extended.Doc")))
+
+      test
+        ( m"a given with a body is one given, providing its first parent, " +
+          m"which its signature shows" ):
+
+        decorated(t"extended.Chars.docText").let: (e: Api.Entity) =>
+          e.definition.let: (d: Api.Declaration) =>
+            (d.kind, d.modifiers, d.result.let(_.qualified), d.provides, e.overloads.size)
+
+      . assert(_ == (Api.Kind.Given, Nil, t"extended.Show[extended.Doc]", showDoc, 0))
+
+      val showT: Api.Shape = Api.Shape.Named(t"extended.Show", List(Api.Shape.Param(t"T")))
 
       test(m"an extension's receiver and requirements are shapes, a context bound a requirement"):
-        decorated(t"extended.Showing.shown").let(_.definition.let { (d: Api.Declaration) => (d.receiver, d.requires) })
-      . assert(_ == (Api.Shape.Param(t"T"), List(Api.Shape.Named(t"extended.Show", List(Api.Shape.Param(t"T"))))))
+        decorated(t"extended.Showing.shown").let(_.definition).let: (d: Api.Declaration) =>
+          (d.receiver, d.requires)
+
+      . assert(_ == (Api.Shape.Param(t"T"), List(showT)))
+
+      val shapeOfAny: Api.Shape =
+        Api.Shape.Named(t"extended.Shape", List(Api.Shape.Named(t"scala.Any")))
 
       test(m"a bounded type parameter's receiver has its bound, and a class its bases"):
-        (decorated(t"extended.Showing.areaTwice").let(_.definition.let(_.receiver)), decorated(t"extended.Doc").let(_.bases))
-      . assert(_ == (Api.Shape.Param(t"T", Api.Shape.Named(t"extended.Shape", List(Api.Shape.Named(t"scala.Any")))), List(t"extended.Shape")))
+        ( decorated(t"extended.Showing.areaTwice").let(_.definition.let(_.receiver)),
+          decorated(t"extended.Doc").let(_.bases) )
 
-      test(m"a type's extensions are ranked: companion, package, elsewhere, a base's, a bound's, then by a given, nearest first"):
+      . assert(_ == (Api.Shape.Param(t"T", shapeOfAny), List(t"extended.Shape")))
+
+      val ranked: List[(Text, Int, Int, Int, Optional[Text])] =
+        List
+          ( (t"extended.Doc.pages", 0, 0, 0, Unset),
+            (t"extended.titled", 1, 0, 1, Unset),
+            (t"extended.Chars.docText.words", 2, 0, 2, t"extended.Chars.docText"),
+            (t"extended.Shape.describe", 3, 1, 0, Unset),
+            (t"extended.Showing.areaTwice", 4, 1, 2, Unset),
+            (t"extended.Showing.shown", 5, 0, 2, t"extended.Doc.given_Show_Doc"),
+            (t"extended.Showing.ordered", 5, 2, 2, t"extended.Util.given_Ordering_Doc") )
+
+      test
+        ( m"a type's extensions are ranked: companion, package, elsewhere, a base's, a bound's, " +
+          m"then by a given, nearest first" ):
+
         applicable(t"extended.Doc")
-      . assert(_ == List(
-          (t"extended.Doc.pages", 0, 0, 0, Unset),
-          (t"extended.titled", 1, 0, 1, Unset),
-          (t"extended.Chars.docText.words", 2, 0, 2, t"extended.Chars.docText"),
-          (t"extended.Shape.describe", 3, 1, 0, Unset),
-          (t"extended.Showing.areaTwice", 4, 1, 2, Unset),
-          (t"extended.Showing.shown", 5, 0, 2, t"extended.Doc.given_Show_Doc"),
-          (t"extended.Showing.ordered", 5, 2, 2, t"extended.Util.given_Ordering_Doc") ))
 
-      test(m"an extension needing a given the type has none of is not the type's; a base's and a bound's are"):
+      . assert(_ == ranked)
+
+      test
+        ( m"an extension needing a given the type has none of is not the type's; " +
+          m"a base's and a bound's are" ):
+
         applicable(t"extended.Shape").map(_(0))
+
       . assert(_ == List(t"extended.Shape.describe", t"extended.Showing.areaTwice"))
 
-      test(m"an unbounded extension, and one needing a type class nothing provides, extend any value"):
-        applicable(t"scala.Any").map { (e: (Text, Int, Int, Int, Optional[Text])) => (e(0), e(1)) }
+      test
+        ( m"an unbounded extension, and one needing a type class " +
+          m"nothing provides, extend any value" ):
+
+        applicable(t"scala.Any").map: (e: (Text, Int, Int, Int, Optional[Text])) => (e(0), e(1))
+
       . assert(_ == List((t"extended.Showing.never", 7), (t"extended.Showing.same", 7)))
+
+      val givensOfDoc: List[Text] =
+        List
+          ( t"extended.Doc.given_Show_Doc",
+            t"extended.Chars.docText",
+            t"extended.Util.given_Ordering_Doc" )
 
       test(m"a type's givens are those for it, nearest first, and a type class's its instances"):
         (decorated(t"extended.Doc").let(_.givens), decorated(t"extended.Show").let(_.givens))
-      . assert(_ == (List(t"extended.Doc.given_Show_Doc", t"extended.Chars.docText", t"extended.Util.given_Ordering_Doc"), List(t"extended.Chars.docText", t"extended.Doc.given_Show_Doc")))
+
+      . assert(_ == (givensOfDoc, List(t"extended.Chars.docText", t"extended.Doc.given_Show_Doc")))
+
+      val companions: List[Text] =
+        List(t"In the companion object", t"In the companion object of Shape")
 
       test(m"a type's page lists its extensions by source, then its givens, and points to `Any`"):
         decorated(t"extended.Doc").let: (doc: Api.Entity) =>
           val scope: Scope = Scope.of(doc, Nil)
-          val page: List[Block] = ApiPages.page(decorated, doc, Resolver(decorated, scope), scope, Nil)
-          val headings: List[Text] = page.bind { case Block.Heading(3, content, _) => List(Blocks.plain(content)); case _ => Nil }
-          val leads: List[Text] = page.bind { case Block.Paragraph(content) => List(Blocks.plain(content)); case _ => Nil }
-          (headings, leads.filter(_.starts(t"In the companion")), leads.exists(_.starts(t"By import")), leads.exists(_.starts(t"The extensions of every value")))
-      . assert(_ == (List(t"Extensions", t"Givens"), List(t"In the companion object", t"In the companion object of Shape"), true, true))
+          val resolver: Resolver = Resolver(decorated, scope)
+          val page: List[Block] = ApiPages.page(decorated, doc, resolver, scope, Nil)
+
+          val headings: List[Text] = page.bind:
+            case Block.Heading(3, content, _) => List(Blocks.plain(content))
+            case _                            => Nil
+
+          val leads: List[Text] = page.bind:
+            case Block.Paragraph(content) => List(Blocks.plain(content))
+            case _                        => Nil
+
+          ( headings,
+            leads.filter(_.starts(t"In the companion")),
+            leads.exists(_.starts(t"By import")),
+            leads.exists(_.starts(t"The extensions of every value")) )
+
+      . assert(_ == (List(t"Extensions", t"Givens"), companions, true, true))
 
       test(m"the extensions an object declares are grouped under the clause they extend"):
         api0(t"sample.Util").let: (util: Api.Entity) =>
           val scope: Scope = Scope.of(util, Nil)
           val page: List[Block] = ApiPages.page(api0, util, Resolver(api0, scope), scope, Nil)
-          page.bind { case code: Block.Code => code.lines.map { (line: Block.Line) => line.tokens.map(_.text).join }; case _ => Nil }
+
+          page.bind:
+            case code: Block.Code => code.lines.map(_.tokens.map(_.text).join)
+            case _                => Nil
+
         . or(Nil)
+
       . assert(_.has(t"extension (text: String)"))
 
-      test(m"a package's heading carries its import toggle and bookmark; a type's, its bookmark alone"):
+      val sampleMarks: List[Inline] =
+        List(Inline.Import(t"/api/sample", t"sample"), Inline.Bookmark(t"/api/sample", t"sample"))
+
+      test
+        ( m"a package's heading carries its import toggle and " +
+          m"bookmark; a type's, its bookmark alone" ):
+
         def marks(key: Text): List[Inline] =
           api0(key).let: (entity: Api.Entity) =>
             val scope: Scope = Scope.of(entity, Nil)
             val page: List[Block] = ApiPages.page(api0, entity, Resolver(api0, scope), scope, Nil)
-            page.bind { case Block.Heading(1, content, _) => content.filter { case Inline.Import(_, _) | Inline.Bookmark(_, _) => true; case _ => false }; case _ => Nil }
+
+            page.bind:
+              case Block.Heading(1, content, _) =>
+                content.filter:
+                  case Inline.Import(_, _) | Inline.Bookmark(_, _) => true
+                  case _                                           => false
+
+              case _ =>
+                Nil
+
           . or(Nil)
 
         (marks(t"sample"), marks(t"sample.Doc"))
-      . assert(_ == ( List(Inline.Import(t"/api/sample", t"sample"), Inline.Bookmark(t"/api/sample", t"sample")),
-                      List(Inline.Bookmark(t"/api/sample.Doc", t"sample.Doc")) ))
+
+      . assert(_ == (sampleMarks, List(Inline.Bookmark(t"/api/sample.Doc", t"sample.Doc"))))
 
     suite(m"Search"):
       import Query.{Form, Name, TypeQuery}
@@ -1072,6 +1336,7 @@ extension (doc: Doc) def titled: String = doc.title
       def fails(text: Text): Boolean = Query.read(text) match
         case error: Query.Error => true
         case _                  => false
+
       def tq(name: Text, args: TypeQuery*): TypeQuery = TypeQuery(name, List(args*))
 
       // The sample with its dependencies, as the daemon models a project: the standard library
@@ -1082,7 +1347,8 @@ extension (doc: Doc) def titled: String = doc.title
 
         val dependencies: Api | Throwable =
           Checking.session(classpath, Nil): (checker: Checker) =>
-            checker.context.lay[Api | Throwable](Api.empty) { (context: dotty.tools.dotc.core.Contexts.Context) => Inspection.classpath(List(jar), context) }
+            checker.context.lay[Api | Throwable](Api.empty): context =>
+              Inspection.classpath(List(jar), context)
 
         dependencies match
           case api: Api => api.merge(api0)
@@ -1090,197 +1356,352 @@ extension (doc: Doc) def titled: String = doc.title
 
       // The keys of the sample's hits, in order, each once.
       def keys(text: Text): List[Text] =
-        List.from(full.search(query(text)).hits.stdlib.map(_.entity.key).filter(_.starts(t"sample.")).distinct)
+        val hits = full.search(query(text)).hits.stdlib
+        List.from(hits.map(_.entity.key).filter(_.starts(t"sample.")).distinct)
 
-      def count(text: Text): Int = full.search(query(text)).hits.stdlib.count(_.entity.key.starts(t"sample."))
+      def count(text: Text): Int =
+        full.search(query(text)).hits.stdlib.count(_.entity.key.starts(t"sample."))
 
       suite(m"Parsing"):
         test(m"+List"):
           query(t"+List")
+
         . assert(_ == Query(results = List(tq(t"List"))))
 
         test(m"+List[Int]"):
           query(t"+List[Int]")
+
         . assert(_ == Query(results = List(tq(t"List", tq(t"Int")))))
 
         test(m"-Either[Int, String]"):
           query(t"-Either[Int, String]")
+
         . assert(_ == Query(parameters = List(tq(t"Either", tq(t"Int"), tq(t"String")))))
+
+        val listOfInt: Query =
+          Query(results = List(tq(t"List", tq(t"Int"))), parameters = List(tq(t"String")))
 
         test(m"+List[Int] -String"):
           query(t"+List[Int] -String")
-        . assert(_ == Query(results = List(tq(t"List", tq(t"Int"))), parameters = List(tq(t"String"))))
+
+        . assert(_ == listOfInt)
+
+        val tuple: Query =
+          Query
+            ( results = List(tq(t"scala.Tuple3", tq(t"Int"), tq(t"Double"), tq(t"String"))),
+              parameters = List(tq(t"String")) )
 
         test(m"a tuple is a TupleN"):
           query(t"+(Int, Double, String) -String")
-        . assert(_ == Query(results = List(tq(t"scala.Tuple3", tq(t"Int"), tq(t"Double"), tq(t"String"))), parameters = List(tq(t"String"))))
+
+        . assert(_ == tuple)
+
+        val functions: Query =
+          Query
+            ( results = List(tq(t"List", tq(t"scala.Function1", tq(t"String"), tq(t"Int")))),
+              parameters = List(tq(t"scala.ContextFunction1", tq(t"Int"), tq(t"Int"))) )
 
         test(m"a function is a FunctionN, and a context function a ContextFunctionN"):
           query(t"+List[String => Int] -(Int ?=> Int)")
-        . assert(_ == Query(results = List(tq(t"List", tq(t"scala.Function1", tq(t"String"), tq(t"Int")))), parameters = List(tq(t"scala.ContextFunction1", tq(t"Int"), tq(t"Int")))))
+
+        . assert(_ == functions)
+
+        val fuzzy: Query =
+          Query
+            ( names = List(Name(t"testing", false)),
+              results = List(tq(t"String")),
+              parameters = List(tq(t"Int")) )
 
         test(m"a bare word is a fuzzy name"):
           query(t"testing +String -Int")
-        . assert(_ == Query(names = List(Name(t"testing", false)), results = List(tq(t"String")), parameters = List(tq(t"Int"))))
+
+        . assert(_ == fuzzy)
+
+        val typeMember: Query =
+          Query
+            ( form = Form.Type,
+              names = List(Name(t"testing", false)),
+              results = List(tq(t"String")),
+              parameters = List(tq(t"Int")) )
 
         test(m"# is a type member"):
           query(t"#testing +String -Int")
-        . assert(_ == Query(form = Form.Type, names = List(Name(t"testing", false)), results = List(tq(t"String")), parameters = List(tq(t"Int"))))
+
+        . assert(_ == typeMember)
+
+        val termMember: Query = Query(form = Form.Term, names = List(Name(t"testing", false)))
 
         test(m". is a term member, glued or not"):
           (query(t".testing"), query(t". testing"))
-        . assert(_ == (Query(form = Form.Term, names = List(Name(t"testing", false))), Query(form = Form.Term, names = List(Name(t"testing", false)))))
+
+        . assert(_ == (termMember, termMember))
+
+        val packaged: Query =
+          Query
+            ( packages = List(t"my.package.name"),
+              form = Form.Type,
+              names = List(Name(t"Testing", false)) )
 
         test(m"/ is a package, dotted, spaced or not"):
           (query(t"/my.package.name #Testing"), query(t"/ mypackage"))
-        . assert(_ == (Query(packages = List(t"my.package.name"), form = Form.Type, names = List(Name(t"Testing", false))), Query(packages = List(t"mypackage"))))
+
+        . assert(_ == (packaged, Query(packages = List(t"mypackage"))))
+
+        val trailing: Query =
+          Query
+            ( packages = List(t"my.package.name"),
+              form = Form.Type,
+              names = List(Name(t"Testing", false)),
+              results = List(tq(t"List", tq(t"scala.Function1", tq(t"String"), tq(t"Int")))),
+              parameters = List(tq(t"Int")) )
 
         test(m"trailing space is nothing"):
           query(t"/my.package.name #Testing +List[String => Int] -Int ")
-        . assert(_ == Query(packages = List(t"my.package.name"), form = Form.Type, names = List(Name(t"Testing", false)), results = List(tq(t"List", tq(t"scala.Function1", tq(t"String"), tq(t"Int")))), parameters = List(tq(t"Int"))))
+
+        . assert(_ == trailing)
 
         test(m"backticks are an exact name"):
           query(t"`parse`")
+
         . assert(_ == Query(names = List(Name(t"parse", true))))
 
         test(m"backticks make a symbol a name"):
           query(t"`+` `::`")
+
         . assert(_ == Query(names = List(Name(t"+", true), Name(t"::", true))))
 
         test(m"backticks make a keyword a name"):
           query(t"`type`")
+
         . assert(_ == Query(names = List(Name(t"type", true))))
 
         test(m"a kind keyword"):
           query(t"def parse")
-        . assert(_ == Query(kinds = scala.collection.immutable.Set(Kind.Def), names = List(Name(t"parse", false))))
+
+        . assert(_ == Query(kinds = sci.Set(Kind.Def), names = List(Name(t"parse", false))))
 
         test(m"case class is one keyword; case alone is a case"):
           (query(t"case class").kinds, query(t"case").kinds)
-        . assert(_ == (scala.collection.immutable.Set(Kind.CaseClass), scala.collection.immutable.Set(Kind.Case)))
+
+        . assert(_ == (sci.Set(Kind.CaseClass), sci.Set(Kind.Case)))
 
         test(m"a modifier keyword"):
           query(t"inline def")
-        . assert(_ == Query(kinds = scala.collection.immutable.Set(Kind.Def), modifiers = scala.collection.immutable.Set(t"inline")))
+
+        . assert(_ == Query(kinds = sci.Set(Kind.Def), modifiers = sci.Set(t"inline")))
 
         test(m"? is given and ~ is extension"):
           (query(t"?").kinds, query(t"given").kinds, query(t"~").kinds)
-        . assert(_ == (scala.collection.immutable.Set(Kind.Given), scala.collection.immutable.Set(Kind.Given), scala.collection.immutable.Set(Kind.Extension)))
+
+        . assert(_ == (sci.Set(Kind.Given), sci.Set(Kind.Given), sci.Set(Kind.Extension)))
 
         test(m"type is a type or a type parameter"):
           query(t"type").kinds
-        . assert(_ == scala.collection.immutable.Set(Kind.Type, Kind.TypeParam))
+
+        . assert(_ == sci.Set(Kind.Type, Kind.TypeParam))
 
         test(m"private warns"):
           query(t"private").warnings.size
+
         . assert(_ == 1)
 
         test(m"an unterminated backtick fails"):
           fails(t"`parse")
+
         . assert(_ == true)
 
         test(m"an unterminated bracket fails"):
           fails(t"+List[Int")
+
         . assert(_ == true)
 
         test(m"a bare symbol fails"):
           fails(t"::")
+
         . assert(_ == true)
 
         test(m"a sigil without a type fails"):
           fails(t"+")
+
         . assert(_ == true)
 
       suite(m"Lattice"):
         val lattice: Lattice = full.lattice
-        def sub(a: Text, b: Text): Boolean = lattice.isSubtype(lattice.id(a).or(-1), lattice.id(b).or(-1))
+
+        def sub(a: Text, b: Text): Boolean =
+          lattice.isSubtype(lattice.id(a).or(-1), lattice.id(b).or(-1))
 
         test(m"Doc is a Shape"):
           sub(t"sample.Doc", t"sample.Shape")
+
         . assert(_ == true)
 
         test(m"Doc is Any and AnyRef, not AnyVal"):
-          (sub(t"sample.Doc", t"scala.Any"), sub(t"sample.Doc", t"scala.AnyRef"), sub(t"sample.Doc", t"scala.AnyVal"))
+          ( sub(t"sample.Doc", t"scala.Any"),
+            sub(t"sample.Doc", t"scala.AnyRef"),
+            sub(t"sample.Doc", t"scala.AnyVal") )
+
         . assert(_ == (true, true, false))
 
         test(m"Int is AnyVal, not AnyRef"):
           (sub(t"scala.Int", t"scala.AnyVal"), sub(t"scala.Int", t"scala.AnyRef"))
+
         . assert(_ == (true, false))
 
         test(m"Nothing is beneath everything; Null beneath references only"):
-          (sub(t"scala.Nothing", t"sample.Doc"), sub(t"scala.Null", t"sample.Doc"), sub(t"scala.Null", t"scala.Int"))
+          ( sub(t"scala.Nothing", t"sample.Doc"),
+            sub(t"scala.Null", t"sample.Doc"),
+            sub(t"scala.Null", t"scala.Int") )
+
         . assert(_ == (true, true, false))
 
-        test(m"a base's distance is its place in the linearisation, a universal type's beyond them"):
-          def distance(a: Text, b: Text): Int = lattice.distance(lattice.id(a).or(-1), lattice.id(b).or(-1))
-          (distance(t"sample.Doc", t"sample.Doc"), distance(t"sample.Doc", t"sample.Shape"), distance(t"sample.Doc", t"scala.AnyRef") > 1, distance(t"sample.Shape", t"sample.Doc"))
+        test
+          ( m"a base's distance is its place in the linearisation, " +
+            m"a universal type's beyond them" ):
+
+          def distance(a: Text, b: Text): Int =
+            lattice.distance(lattice.id(a).or(-1), lattice.id(b).or(-1))
+
+          ( distance(t"sample.Doc", t"sample.Doc"),
+            distance(t"sample.Doc", t"sample.Shape"),
+            distance(t"sample.Doc", t"scala.AnyRef") > 1,
+            distance(t"sample.Shape", t"sample.Doc") )
+
         . assert(_ == (0, 1, true, -1))
 
         test(m"String is a CharSequence"):
           sub(t"java.lang.String", t"java.lang.CharSequence")
+
         . assert(_ == true)
 
         test(m"Predef.String expands to java.lang.String"):
           full.expand(Api.Shape.Named(t"scala.Predef.String"))
+
         . assert(_ == Api.Shape.Named(t"java.lang.String"))
 
+        val int: Api.Shape = Api.Shape.Named(t"scala.Int")
+
         test(m"Pair[Int] expands to a tuple"):
-          full.expand(Api.Shape.Named(t"sample.Util.Pair", List(Api.Shape.Named(t"scala.Int"))))
-        . assert(_ == Api.Shape.Named(t"scala.Tuple2", List(Api.Shape.Named(t"scala.Int"), Api.Shape.Named(t"scala.Int"))))
+          full.expand(Api.Shape.Named(t"sample.Util.Pair", List(int)))
+
+        . assert(_ == Api.Shape.Named(t"scala.Tuple2", List(int, int)))
+
+        val shapeId: Int = lattice.id(t"sample.Shape").or(-1)
 
         test(m"a type's written parents, in order, and the types which name it"):
           val doc: Int = lattice.id(t"sample.Doc").or(-1)
           val shape: Int = lattice.id(t"sample.Shape").or(-1)
-          (lattice.parents(doc), lattice.children(shape).contains(doc), lattice.primaryParent(doc), lattice.parents(shape))
-        . assert(_ == (scala.List(lattice.id(t"sample.Shape").or(-1)), true, lattice.id(t"sample.Shape").or(-1), scala.Nil))
+
+          ( lattice.parents(doc),
+            lattice.children(shape).contains(doc),
+            lattice.primaryParent(doc),
+            lattice.parents(shape) )
+
+        . assert(_ == (scala.List(shapeId), true, shapeId, scala.Nil))
 
       suite(m"Hierarchy"):
         import Hierarchy.{Edge, Graph, Node, Role}
 
         def node(key: Text, role: Role): Node =
           val name: Text = Text(key.s.substring(key.s.lastIndexOf('.') + 1).nn)
-          Node(key, name, Text(key.s.substring(0, (key.s.length - name.s.length - 1).max(0)).nn), key, role)
+          val prefix: Text = Text(key.s.substring(0, (key.s.length - name.s.length - 1).max(0)).nn)
+          Node(key, name, prefix, key, role)
 
-        def laid(graph: Graph): Hierarchy.Layout = Hierarchy.layout(graph).or(Hierarchy.Layout(Nil, Nil, Nil, 0, 0))
-        def box(layout: Hierarchy.Layout, key: Text): Hierarchy.Box = layout.boxes.stdlib.find(_.node.key == key).get
+        def laid(graph: Graph): Hierarchy.Layout =
+          Hierarchy.layout(graph).or(Hierarchy.Layout(Nil, Nil, Nil, 0, 0))
+
+        def box(layout: Hierarchy.Layout, key: Text): Hierarchy.Box =
+          layout.boxes.stdlib.find(_.node.key == key).get
 
         val chain: Graph =
-          Graph(List(node(t"sample.A", Role.Current), node(t"sample.B", Role.Ancestor), node(t"scala.Any", Role.Universal)),
-                List(Edge(t"sample.A", t"sample.B"), Edge(t"sample.B", t"scala.Any")), t"sample.A")
+          val nodes: List[Node] =
+            List
+              ( node(t"sample.A", Role.Current),
+                node(t"sample.B", Role.Ancestor),
+                node(t"scala.Any", Role.Universal) )
+
+          val edges: List[Edge] =
+            List(Edge(t"sample.A", t"sample.B"), Edge(t"sample.B", t"scala.Any"))
+
+          Graph(nodes, edges, t"sample.A")
 
         chainSvg = Hierarchy.layout(chain).let(Hierarchy.svg(_)).or(t"")
 
         test(m"a chain is one column, Any on top"):
           val layout: Hierarchy.Layout = laid(chain)
-          val (a, b, any) = (box(layout, t"sample.A"), box(layout, t"sample.B"), box(layout, t"scala.Any"))
-          (layout.boxes.size, any.y < b.y && b.y < a.y, a.centre == b.centre && b.centre == any.centre)
+          val a: Hierarchy.Box = box(layout, t"sample.A")
+          val b: Hierarchy.Box = box(layout, t"sample.B")
+          val any: Hierarchy.Box = box(layout, t"scala.Any")
+
+          ( layout.boxes.size,
+            any.y < b.y && b.y < a.y,
+            a.centre == b.centre && b.centre == any.centre )
+
         . assert(_ == (3, true, true))
 
         val diamond: Graph =
-          Graph(List(node(t"d.D", Role.Current), node(t"d.B", Role.Ancestor), node(t"d.C", Role.Ancestor), node(t"d.A", Role.Ancestor)),
-                List(Edge(t"d.D", t"d.B"), Edge(t"d.D", t"d.C"), Edge(t"d.B", t"d.A"), Edge(t"d.C", t"d.A")), t"d.D")
+          val nodes: List[Node] =
+            List
+              ( node(t"d.D", Role.Current),
+                node(t"d.B", Role.Ancestor),
+                node(t"d.C", Role.Ancestor),
+                node(t"d.A", Role.Ancestor) )
+
+          val edges: List[Edge] =
+            List
+              ( Edge(t"d.D", t"d.B"),
+                Edge(t"d.D", t"d.C"),
+                Edge(t"d.B", t"d.A"),
+                Edge(t"d.C", t"d.A") )
+
+          Graph(nodes, edges, t"d.D")
 
         test(m"a diamond's middle shares a layer without overlap, and its ends align"):
           val layout: Hierarchy.Layout = laid(diamond)
-          val (a, b, c, d) = (box(layout, t"d.A"), box(layout, t"d.B"), box(layout, t"d.C"), box(layout, t"d.D"))
+          val a: Hierarchy.Box = box(layout, t"d.A")
+          val b: Hierarchy.Box = box(layout, t"d.B")
+          val c: Hierarchy.Box = box(layout, t"d.C")
+          val d: Hierarchy.Box = box(layout, t"d.D")
           val apart: Boolean = b.x + b.w <= c.x || c.x + c.w <= b.x
           (b.y == c.y, apart, (a.centre - d.centre).abs <= 1)
+
         . assert(_ == (true, true, true))
 
         val traits: Graph =
-          Graph(List(node(t"t.T", Role.Current), node(t"t.P", Role.Ancestor), node(t"t.Q", Role.Ancestor), node(t"t.R", Role.Ancestor)),
-                List(Edge(t"t.T", t"t.P"), Edge(t"t.T", t"t.Q"), Edge(t"t.T", t"t.R")), t"t.T")
+          val nodes: List[Node] =
+            List
+              ( node(t"t.T", Role.Current),
+                node(t"t.P", Role.Ancestor),
+                node(t"t.Q", Role.Ancestor),
+                node(t"t.R", Role.Ancestor) )
+
+          Graph(nodes, List(t"t.P", t"t.Q", t"t.R").map(Edge(t"t.T", _)), t"t.T")
 
         test(m"a type with three parents sits beneath their middle"):
           val layout: Hierarchy.Layout = laid(traits)
-          val parents: scala.List[Hierarchy.Box] = scala.List(box(layout, t"t.P"), box(layout, t"t.Q"), box(layout, t"t.R"))
+
+          val parents: scala.List[Hierarchy.Box] =
+            scala.List(t"t.P", t"t.Q", t"t.R").map(box(layout, _))
+
           val mean: Int = parents.map(_.centre).sum/3
-          (parents.map(_.y).distinct.size, (box(layout, t"t.T").centre - mean).abs <= 1, layout.stems.size)
+
+          ( parents.map(_.y).distinct.size,
+            (box(layout, t"t.T").centre - mean).abs <= 1,
+            layout.stems.size )
+
         . assert(_ == (1, true, 3))
 
         val skipping: Graph =
-          Graph(List(node(t"s.A", Role.Current), node(t"s.B", Role.Ancestor), node(t"s.C", Role.Ancestor)),
-                List(Edge(t"s.A", t"s.C"), Edge(t"s.A", t"s.B"), Edge(t"s.B", t"s.C")), t"s.A")
+          val nodes: List[Node] =
+            List
+              ( node(t"s.A", Role.Current),
+                node(t"s.B", Role.Ancestor),
+                node(t"s.C", Role.Ancestor) )
+
+          val edges: List[Edge] =
+            List(Edge(t"s.A", t"s.C"), Edge(t"s.A", t"s.B"), Edge(t"s.B", t"s.C"))
+
+          Graph(nodes, edges, t"s.A")
 
         test(m"a long edge passes its intermediate layer clear of the box there"):
           val layout: Hierarchy.Layout = laid(skipping)
@@ -1288,42 +1709,70 @@ extension (doc: Doc) def titled: String = doc.title
           val b: Hierarchy.Box = box(layout, t"s.B")
           val through: Int = long.points(2)._1
           (long.points.length >= 5, through < b.x || through > b.x + b.w)
+
         . assert(_ == (true, true))
 
         // A parent with five children, hand-built, for peers and the note of more.
         val family: Api =
           def entity(name: Text, parent: Optional[Text]): Api.Entity =
-            val shapes: List[Api.Shape] = parent.let { (p: Text) => List(Api.Shape.Named(p)) }.or(Nil)
-            Api.Entity(stenography.Designator.Top(t"p"), name, true, template = Api.Declaration(Api.Kind.Class, parentShapes = shapes), bases = parent.let(List(_)).or(Nil))
+            val shapes: List[Api.Shape] = parent.let(Api.Shape.Named(_)).let(List(_)).or(Nil)
+            val template: Api.Declaration = Api.Declaration(Api.Kind.Class, parentShapes = shapes)
+            val top: stenography.Designator = stenography.Designator.Top(t"p")
+            Api.Entity(top, name, true, template = template, bases = parent.let(List(_)).or(Nil))
 
-          val all: scala.List[Api.Entity] = entity(t"P", Unset) :: entity(t"Lone", Unset) :: scala.List(t"C1", t"C2", t"C3", t"C4", t"C5").map(entity(_, t"p.P"))
+          val children: scala.List[Api.Entity] =
+            scala.List(t"C1", t"C2", t"C3", t"C4", t"C5").map(entity(_, t"p.P"))
+
+          val all: scala.List[Api.Entity] =
+            entity(t"P", Unset) :: entity(t"Lone", Unset) :: children
+
           Api(all.map { e => e.key -> e }.toMap)
 
-        val sibling: Optional[Graph] = family(t"p.C1").let { (e: Api.Entity) => Hierarchy.of(family, e, Scope.document(Nil)) }
+        val sibling: Optional[Graph] = family(t"p.C1").let: (e: Api.Entity) =>
+          Hierarchy.of(family, e, Scope.document(Nil))
 
         test(m"three peers are drawn, and the rest noted"):
-          sibling.let { (g: Graph) => (g.nodes.stdlib.count(_.role == Role.Peer), g.nodes.stdlib.filter(_.role == Role.More).map(_.name)) }
+          sibling.let: (g: Graph) =>
+            ( g.nodes.stdlib.count(_.role == Role.Peer),
+              g.nodes.stdlib.filter(_.role == Role.More).map(_.name) )
+
         . assert(_ == (3, scala.List(t"…and 1 more")))
 
         test(m"the parent's children are peers under it, and the drawing says so"):
           sibling.let(Hierarchy.alt(_))
+
         . assert(_ == t"C1 extends P; a sibling of C2, C3, C4 and …and 1 more under P.")
 
         test(m"the SVG links each box in-app, by a relative path, with nothing honeycomb rejects"):
-          val svg: Text = sibling.let { (g: Graph) => Hierarchy.layout(g).let(Hierarchy.svg(_)) }.or(t"")
+          val svg: Text = sibling.let(Hierarchy.layout(_)).let(Hierarchy.svg(_)).or(t"")
           val digits: Boolean = svg.s.matches("(?s).*\\s[A-Za-z-]*[0-9][A-Za-z0-9-]*=\".*")
-          (svg.contains(t"pyro-locate"), svg.contains(t"""href="p.C2""""), svg.contains(t"<line"), svg.contains(t"xlink"), digits, svg.contains(t"font-family: var(--pyro-font-mono)"))
+
+          ( svg.contains(t"pyro-locate"),
+            svg.contains(t"""href="p.C2""""),
+            svg.contains(t"<line"),
+            svg.contains(t"xlink"),
+            digits,
+            svg.contains(t"font-family: var(--pyro-font-mono)") )
+
         . assert(_ == (true, true, false, false, false, true))
 
         test(m"a name with angle brackets is escaped"):
-          val graph: Graph = Graph(List(node(t"x.Foo<Bar>", Role.Current), node(t"x.Base", Role.Ancestor)), List(Edge(t"x.Foo<Bar>", t"x.Base")), t"x.Foo<Bar>")
+          val nodes: List[Node] =
+            List(node(t"x.Foo<Bar>", Role.Current), node(t"x.Base", Role.Ancestor))
+
+          val graph: Graph = Graph(nodes, List(Edge(t"x.Foo<Bar>", t"x.Base")), t"x.Foo<Bar>")
           Hierarchy.layout(graph).let(Hierarchy.svg(_)).or(t"").contains(t"Foo&lt;Bar&gt;")
+
         . assert(_ == true)
 
         def figures(key: Text): List[Block.Figure] =
           api0(key).let: (entity: Api.Entity) =>
             val scope: Scope = Scope.of(entity, Nil)
-            ApiPages.page(api0, entity, Resolver(api0, scope), scope, Nil).bind { case figure: Block.Figure => List(figure); case _ => Nil }
+
+            ApiPages.page(api0, entity, Resolver(api0, scope), scope, Nil).bind:
+              case figure: Block.Figure => List(figure)
+              case _                    => Nil
+
           . or(Nil)
 
         test(m"Doc's page draws its hierarchy after its signature, naming its parent as written"):
@@ -1331,238 +1780,420 @@ extension (doc: Doc) def titled: String = doc.title
             val scope: Scope = Scope.of(entity, Nil)
             val page: List[Block] = ApiPages.page(api0, entity, Resolver(api0, scope), scope, Nil)
             val at: Int = page.stdlib.indexWhere { case _: Block.Figure => true; case _ => false }
-            val after: Boolean = at > 0 && page.stdlib(at - 1).isInstanceOf[Block.Code]
+
+            val after: Boolean = page.stdlib.lift(at - 1) match
+              case Some(_: Block.Code) => true
+              case _                   => false
+
             (after, figures(t"sample.Doc").map { f => Blocks.plain(f.figure.alt) })
+
         . assert(_ == (true, List(t"Doc extends Shape[Int].")))
 
         test(m"Shape's page names the type which extends it"):
-          figures(t"sample.Shape").map { f => Blocks.plain(f.figure.alt) }
+          figures(t"sample.Shape").map: f => Blocks.plain(f.figure.alt)
+
         . assert(_ == List(t"Shape; extended by Doc."))
 
         test(m"an object, and a class with nothing but AnyRef above it, draw nothing"):
-          val lone: Optional[Graph] = family(t"p.Lone").let { (e: Api.Entity) => Hierarchy.of(family, e, Scope.document(Nil)) }
+          val lone: Optional[Graph] = family(t"p.Lone").let: (e: Api.Entity) =>
+            Hierarchy.of(family, e, Scope.document(Nil))
+
           (figures(t"sample.Util").size, lone.present)
+
         . assert(_ == (0, false))
 
       suite(m"Rendering"):
         import stenography.{Designator, Syntax}
 
-        def named(name: Text, tpe: Text, contextual: Boolean = false): Syntax = Syntax.Named(contextual, name, Syntax.Simple(Designator(tpe)))
+        def named(name: Text, tpe: Text, contextual: Boolean = false): Syntax =
+          Syntax.Named(contextual, name, Syntax.Simple(Designator(tpe)))
+
         def clause(items: Syntax*): Syntax = Syntax.Sequence('(', List(items*))
         def ret(tpe: Text): Syntax = Syntax.Simple(Designator(tpe))
         val scope: Scope = Scope.document(Nil)
 
         def shown(name: Text, declaration: Api.Declaration, width: Int): List[Text] =
-          Signatures.block(name, declaration, Api.empty, scope, width).lines.map { (line: Block.Line) => line.tokens.map(_.text).join }
+          Signatures.block(name, declaration, Api.empty, scope, width).lines
+          . map(_.tokens.map(_.text).join)
+
+        val simple: Api.Declaration =
+          Api.Declaration(Api.Kind.Def, clauses = List(clause()), result = ret(t"ReturnType"))
 
         test(m"a short signature is one line"):
-          shown(t"short", Api.Declaration(Api.Kind.Def, clauses = List(clause()), result = ret(t"ReturnType")), 88)
+          shown(t"short", simple, 88)
+
         . assert(_ == List(t"def short(): ReturnType"))
 
         test(m"a long name breaks only before its result, after the hard space"):
-          shown(t"thisIsALongerMethodName", Api.Declaration(Api.Kind.Def, clauses = List(clause()), result = ret(t"ReturnType")), 30)
+          shown(t"thisIsALongerMethodName", simple, 30)
+
         . assert(_ == List(t"def thisIsALongerMethodName()", t":   ReturnType"))
 
+        val firstClause: Syntax = clause(named(t"first", t"First"))
+
         val multi: Api.Declaration =
-          Api.Declaration(Api.Kind.Def, clauses = List(clause(named(t"first", t"First")), clause(named(t"second", t"Second"), named(t"third", t"Third"))), result = ret(t"ReturnType"))
+          val second: Syntax = clause(named(t"second", t"Second"), named(t"third", t"Third"))
+          val clauses: List[Syntax] = List(firstClause, second)
+          Api.Declaration(Api.Kind.Def, clauses = clauses, result = ret(t"ReturnType"))
+
+        val multiShown: List[Text] =
+          List
+            ( t"def multiParams(first: First)",
+              t"  ( second: Second, third: Third )",
+              t":   ReturnType" )
 
         test(m"a second clause goes on its own line, padded within"):
           shown(t"multiParams", multi, 40)
-        . assert(_ == List(t"def multiParams(first: First)", t"  ( second: Second, third: Third )", t":   ReturnType"))
+
+        . assert(_ == multiShown)
 
         val wide: Api.Declaration =
-          Api.Declaration(Api.Kind.Def, clauses = List(clause(named(t"first", t"First")), clause(named(t"second", t"Second"), named(t"third", t"Third"), named(t"fourth", t"Fourth"), named(t"fifth", t"Fifth"))), result = ret(t"ReturnType"))
+          val rest: Syntax =
+            clause
+              ( named(t"second", t"Second"),
+                named(t"third", t"Third"),
+                named(t"fourth", t"Fourth"),
+                named(t"fifth", t"Fifth") )
+
+          val clauses: List[Syntax] = List(firstClause, rest)
+          Api.Declaration(Api.Kind.Def, clauses = clauses, result = ret(t"ReturnType"))
+
+        val wideShown: List[Text] =
+          List
+            ( t"def multiParams(first: First)",
+              t"  ( second: Second,",
+              t"    third:  Third,",
+              t"    fourth: Fourth,",
+              t"    fifth:  Fifth )",
+              t":   ReturnType" )
 
         test(m"a clause too wide for a line puts each parameter on one, its types aligned"):
           shown(t"multiParams", wide, 40)
-        . assert(_ == List(t"def multiParams(first: First)", t"  ( second: Second,", t"    third:  Third,", t"    fourth: Fourth,", t"    fifth:  Fifth )", t":   ReturnType"))
+
+        . assert(_ == wideShown)
+
+        val usingWide: List[Text] = List(t"def f(x: X)(using alpha: Alpha, beta: Beta): R")
+
+        val usingNarrow: List[Text] =
+          List(t"def f(x: X)", t"  ( using alpha: Alpha,", t"          beta:  Beta )", t":   R")
 
         test(m"a using clause says using once, its later parameters aligned beneath the first"):
-          val decl: Api.Declaration = Api.Declaration(Api.Kind.Def, clauses = List(clause(named(t"x", t"X")), clause(named(t"alpha", t"Alpha", true), named(t"beta", t"Beta", true))), result = ret(t"R"))
+          val contextual: Syntax =
+            clause(named(t"alpha", t"Alpha", true), named(t"beta", t"Beta", true))
+
+          val clauses: List[Syntax] = List(clause(named(t"x", t"X")), contextual)
+
+          val decl: Api.Declaration =
+            Api.Declaration(Api.Kind.Def, clauses = clauses, result = ret(t"R"))
+
           (shown(t"f", decl, 80), shown(t"f", decl, 20))
-        . assert(_ == (List(t"def f(x: X)(using alpha: Alpha, beta: Beta): R"), List(t"def f(x: X)", t"  ( using alpha: Alpha,", t"          beta:  Beta )", t":   R")))
+
+        . assert(_ == (usingWide, usingNarrow))
 
         test(m"a nameless using parameter is its type alone"):
-          val decl: Api.Declaration = Api.Declaration(Api.Kind.Def, clauses = List(clause(named(t"", t"Tactic", true))), result = ret(t"R"))
+          val clauses: List[Syntax] = List(clause(named(t"", t"Tactic", true)))
+
+          val decl: Api.Declaration =
+            Api.Declaration(Api.Kind.Def, clauses = clauses, result = ret(t"R"))
+
           shown(t"f", decl, 80)
+
         . assert(_ == List(t"def f(using Tactic): R"))
+
+        val cell: Text =
+          t"(first: First)\n( second: Second,\n  third:  Third,\n" +
+            t"  fourth: Fourth,\n  fifth:  Fifth )\n" +
+            t":   ReturnType"
 
         test(m"a table cell holds the clauses and result on lines of their own"):
           Signatures.cell(wide, Api.empty, scope, 40).tokens.map(_.text).join
-        . assert(_ == t"(first: First)\n( second: Second,\n  third:  Third,\n  fourth: Fourth,\n  fifth:  Fifth )\n:   ReturnType")
+
+        . assert(_ == cell)
 
         test(m"no signature in the model carries a compiler-made parameter name"):
-          full.entities.values.toList.filter(_.own).flatMap(_.declarations.stdlib).flatMap(_.clauses.stdlib).map(_.qualified).count(_.contains(t"$$"))
+          full.entities.values.toList.filter(_.own).flatMap(_.declarations.stdlib)
+          . flatMap(_.clauses.stdlib)
+          . map(_.qualified)
+          . count(_.contains(t"$$"))
+
         . assert(_ == 0)
 
         test(m"a type with a companion is one row, and an export is marked as one"):
+          val aliasType: Api.Declaration =
+            Api.Declaration(Api.Kind.Type, result = ret(t"q.Text"), exported = true)
+
+          val aliasTerm: Api.Declaration =
+            Api.Declaration(Api.Kind.Val, exported = true, result = ret(t"q.Text"))
+
           val exported: Api.Entity =
-            Api.Entity(Designator.Top(t"p"), t"Text", true, definition = Api.Declaration(Api.Kind.Val, exported = true, result = ret(t"q.Text")),
-                       template = Api.Declaration(Api.Kind.Type, result = ret(t"q.Text"), exported = true), alias = Designator(t"q.Text"))
+            Api.Entity
+              ( Designator.Top(t"p"),
+                t"Text",
+                true,
+                definition = aliasTerm,
+                template = aliasType,
+                alias = Designator(t"q.Text") )
+
           val paired: Api.Entity =
-            Api.Entity(Designator.Top(t"p"), t"Doc", true, definition = Api.Declaration(Api.Kind.Val), template = Api.Declaration(Api.Kind.CaseClass), overloads = List(Api.Declaration(Api.Kind.Object)))
-          val api: Api = Api(scala.collection.immutable.Map(exported.key -> exported, paired.key -> paired))
+            Api.Entity
+              ( Designator.Top(t"p"),
+                t"Doc",
+                true,
+                definition = Api.Declaration(Api.Kind.Val),
+                template = Api.Declaration(Api.Kind.CaseClass),
+                overloads = List(Api.Declaration(Api.Kind.Object)) )
+
+          val api: Api = Api(sci.Map(exported.key -> exported, paired.key -> paired))
+
           def kinds(entity: Api.Entity): List[Text] =
-            ApiPages.rows(entity, true, api, scope, Resolver(api, scope)).map { row => Blocks.plain(row.cells.stdlib.head.content) }
+            ApiPages.rows(entity, true, api, scope, Resolver(api, scope)).map: row =>
+              Blocks.plain(row.cells.stdlib.head.content)
+
           (kinds(exported), kinds(paired))
+
         . assert(_ == (List(t"export"), List(t"case class")))
 
         test(m"member tables share fixed column widths"):
-          ApiPages.table(t"Name", t"Signature", List(Block.Row(Nil))).bind { case Block.Table(columns, _, _) => columns.map(_.sizing); case _ => Nil }
-        . assert(_ == List(Block.Sizing.Fixed(10), Block.Sizing.Fixed(20), Block.Sizing.Fixed(45), Block.Sizing.Fixed(25)))
+          ApiPages.table(t"Name", t"Signature", List(Block.Row(Nil))).bind:
+            case Block.Table(columns, _, _) => columns.map(_.sizing)
+            case _                          => Nil
+
+        . assert(_ == List(10, 20, 45, 25).map(Block.Sizing.Fixed(_)))
 
         test(m"a hierarchy's boxes are square-cornered and the drawing fits its width"):
           val svg: Text = chainSvg
           (svg.contains(t"rx="), svg.contains(t"width: min(100%"))
+
         . assert(_ == (false, true))
 
       suite(m"Results"):
         test(m"+Shape finds what returns a Doc"):
           keys(t"+Shape")
+
         . assert(_ == List(t"sample.Doc.parse"))
 
         test(m"+Shape[Int] finds a Doc through its parent; +Shape[String] does not"):
           (keys(t"+Shape[Int]"), keys(t"+Shape[String]"))
+
         . assert(_ == (List(t"sample.Doc.parse"), Nil))
 
         test(m"+Doc"):
           keys(t"+Doc")
+
         . assert(_ == List(t"sample.Doc.parse"))
 
         test(m"+Double"):
           keys(t"+Double")
+
         . assert(_ == List(t"sample.Doc#area", t"sample.Shape#area"))
+
+        val values: List[Text] =
+          List(t"sample.Doc#area", t"sample.Doc#size", t"sample.Shape#area", t"sample.Util.limit")
 
         test(m"+AnyVal finds the value-typed"):
           keys(t"+AnyVal")
-        . assert(_ == List(t"sample.Doc#area", t"sample.Doc#size", t"sample.Shape#area", t"sample.Util.limit"))
+
+        . assert(_ == values)
 
         test(m"+Any finds everything with a result"):
           keys(t"+Any").size
+
         . assert(_ >= 8)
 
         test(m"+String is java.lang.String"):
           (keys(t"+String"), keys(t"+java.lang.String"))
-        . assert { (a, b) => a == b && a == List(t"sample.Doc#shout", t"sample.Doc#title", t"sample.Util.twice") }
+
+        . assert: (a, b) =>
+            a == b && a == List(t"sample.Doc#shout", t"sample.Doc#title", t"sample.Util.twice")
 
         test(m"+Ordering[Doc] finds the given"):
           keys(t"+Ordering[Doc]")
+
         . assert(_ == List(t"sample.Util.given_Ordering_Doc"))
 
         test(m"a type nothing is called says so"):
           full.search(query(t"+Nonesuch99")).notices.size
+
         . assert(_ == 1)
 
         test(m"+List is every List"):
           full.search(query(t"+List")).hits.size > 100
+
         . assert(_ == true)
 
       suite(m"Parameters"):
         test(m"-String finds what takes a String, a receiver among them"):
           keys(t"-String")
+
         . assert(_ == List(t"sample.Doc", t"sample.Doc.parse", t"sample.Util.twice"))
 
         test(m"-CharSequence finds nothing taking a String, a String being beneath it"):
           keys(t"-CharSequence")
+
         . assert(_ == Nil)
 
         test(m"-Int finds the overload with a size"):
           (keys(t"-Int"), count(t"-Int"))
+
         . assert(_ == (List(t"sample.Doc", t"sample.Doc.parse"), 2))
 
         test(m"-Nothing finds every parameterised declaration; -Any only what takes Any"):
           (keys(t"-Nothing"), keys(t"-Any"))
+
         . assert(_ == (List(t"sample.Doc", t"sample.Doc.parse", t"sample.Util.twice"), Nil))
 
         test(m"-Shape finds nothing in the sample, but something takes Any"):
           (keys(t"-Shape"), full.search(query(t"-Shape")).hits.size > 0)
+
         . assert(_ == (Nil, true))
 
       suite(m"Names and criteria"):
         test(m"an exact name"):
           (keys(t"`parse`"), count(t"`parse`"))
+
         . assert(_ == (List(t"sample.Doc.parse"), 2))
 
         test(m"a fuzzy name, at radius one"):
           keys(t"pars")
+
         . assert(_ == List(t"sample.Doc.parse"))
 
         test(m"a name differing in case is exact"):
-          full.search(query(t"Parse")).hits.stdlib.filter(_.entity.key.starts(t"sample.")).forall(_.exact)
+          full.search(query(t"Parse")).hits.stdlib.filter(_.entity.key.starts(t"sample."))
+          . forall(_.exact)
+
         . assert(_ == true)
 
         test(m"inline finds nothing; private finds nothing and warns"):
           (count(t"inline"), count(t"private"), full.search(query(t"private")).notices.size)
+
         . assert(_ == (0, 0, 1))
 
         test(m"/sample.Util -String"):
           keys(t"/sample.Util -String")
+
         . assert(_ == List(t"sample.Util.twice"))
 
         test(m"# and . choose the type or the term"):
-          (full.search(query(t"/sample #Doc")).hits.map(_.declaration.kind), full.search(query(t"/sample .Doc")).hits.map(_.declaration.kind))
+          ( full.search(query(t"/sample #Doc")).hits.map(_.declaration.kind),
+            full.search(query(t"/sample .Doc")).hits.map(_.declaration.kind) )
+
         . assert(_ == (List(Kind.CaseClass), List(Kind.Object)))
 
         test(m"? finds the given and ~ the extension"):
           (keys(t"/sample ?"), keys(t"/sample ~"))
+
         . assert(_ == (List(t"sample.Util.given_Ordering_Doc"), List(t"sample.Util.twice")))
 
         test(m"+Doc -Int is one overload"):
           count(t"+Doc -Int")
+
         . assert(_ == 1)
 
         test(m"type Pair"):
           keys(t"type Pair")
+
         . assert(_ == List(t"sample.Util.Pair"))
 
         test(m"val"):
           keys(t"/sample val")
+
         . assert(_ == List(t"sample.Doc#size", t"sample.Doc#title", t"sample.Util.limit"))
 
         test(m"the search builds quickly and widely"):
           val start: Long = java.lang.System.nanoTime
           val count: Int = full.search(query(t"+Any")).hits.size
           ((java.lang.System.nanoTime - start)/1000000L < 2000L, count > 1000)
+
         . assert(_ == (true, true))
 
     suite(m"Reporting"):
       val text: Text = t"# Title\n\nSee [the guide](other.md) here.\n\n```scala\nval x = 1\n"
 
-      def codes(blocks: List[Block]): List[Block.Code] = blocks.bind { case code: Block.Code => List(code); case _ => Nil }
+      def codes(blocks: List[Block]): List[Block.Code] = blocks.bind:
+        case code: Block.Code => List(code)
+        case _                => Nil
 
       test(m"a plain excerpt numbers the line and its neighbours, underlining the span"):
-        val code: Block.Code = codes(Excerpts.plain(text, 3, Block.Note.Style.Erroneous, 5, 11)).stdlib.head
+        val code: Block.Code =
+          codes(Excerpts.plain(text, 3, Block.Note.Style.Erroneous, 5, 11)).stdlib.head
+
         (code.start, code.lines.size, code.notes.map { n => (n.line, n.start, n.end) })
+
       . assert(_ == (2, 3, List((1, 4, 15))))
 
       test(m"an excerpt at a target underlines its occurrence, or the whole line without one"):
-        val found: Block.Code = codes(Excerpts.plainAt(text, 3, t"other.md", Block.Note.Style.Caution)).stdlib.head
-        val whole: Block.Code = codes(Excerpts.plainAt(text, 3, t"nowhere", Block.Note.Style.Caution)).stdlib.head
+        val found: Block.Code =
+          codes(Excerpts.plainAt(text, 3, t"other.md", Block.Note.Style.Caution)).stdlib.head
+
+        val whole: Block.Code =
+          codes(Excerpts.plainAt(text, 3, t"nowhere", Block.Note.Style.Caution)).stdlib.head
+
         (found.notes.map { n => (n.start, n.end) }, whole.notes.map { n => (n.start, n.end) })
+
       . assert(_ == (List((16, 24)), List((0, 31))))
 
       test(m"a Scala excerpt is highlighted and placed by line and column"):
         val source: Text = t"object A:\n  val x: Int = \"no\"\n"
         val (place, blocks) = Excerpts.scala(source, 25, 29, Block.Note.Style.Erroneous)
-        (place, codes(blocks).stdlib.head.lines.stdlib.exists(_.tokens.stdlib.exists(_.accent == Token.Accent.Keyword)))
+        val lines = codes(blocks).stdlib.head.lines.stdlib
+        (place, lines.exists(_.tokens.stdlib.exists(_.accent == Token.Accent.Keyword)))
+
       . assert(_ == ((2, 16), true))
 
       // A fence left open is told apart from one which simply ends the file by the glossary's
       // definitions, which follow the text and which an open fence swallows.
-      val glossary: Glossary = Glossary(List(Glossary.Term(t"guide", t"A guide.", Unset, t"glossary.tel", 1)))
+      val glossary: Glossary =
+        Glossary(List(Glossary.Term(t"guide", t"A guide.", Unset, t"glossary.tel", 1)))
+
+      def parse(glossary: Glossary): Doc =
+        Doc.parse
+          ( t"guide.md",
+            text,
+            Checker.tokenized,
+            false,
+            Unset,
+            Linker.none,
+            Unset,
+            t"",
+            t"docs",
+            glossary )
 
       test(m"a document keeps its text, and an unclosed fence shows its line"):
-        val doc: Doc = Doc.parse(t"guide.md", text, Checker.tokenized, false, Unset, Linker.none, Unset, t"", t"docs", glossary)
-        (doc.text == text, doc.problems.bind { case Block.Diagnostic(_, location, message, excerpt, _) => List((location.let(_.text), Blocks.plain(message.bind { case Block.Paragraph(c) => c; case _ => Nil }), codes(excerpt).map(_.start))); case _ => Nil })
+        val doc: Doc = parse(glossary)
+
+        val problems = doc.problems.bind:
+          case Block.Diagnostic(_, location, message, excerpt, _) =>
+            val paragraphs: List[Inline] = message.bind:
+              case Block.Paragraph(content) => content
+              case _                        => Nil
+
+            List((location.let(_.text), Blocks.plain(paragraphs), codes(excerpt).map(_.start)))
+
+          case _ =>
+            Nil
+
+        (doc.text == text, problems)
+
       . assert(_ == (true, List((t"guide.md:5", t"This fence is not closed.", List(4)))))
 
       test(m"a broken link's problem shows the line it is on, the link underlined"):
-        val doc: Doc = Doc.parse(t"guide.md", text, Checker.tokenized, false, Unset, Linker.none, Unset, t"", t"docs", Glossary.none)
+        val doc: Doc = parse(Glossary.none)
         val corpus: Corpus = Corpus(List(Corpus.Section(t"docs", t"/docs", List(doc), Nil)))
-        Links.check(corpus, Api.empty, Glossary.none).bind { case Block.Diagnostic(_, _, _, excerpt, _) => codes(excerpt).bind(_.notes.map { n => (n.start, n.end) }); case _ => Nil }
+
+        Links.check(corpus, Api.empty, Glossary.none).bind:
+          case Block.Diagnostic(_, _, _, excerpt, _) =>
+            codes(excerpt).bind(_.notes.map { n => (n.start, n.end) })
+
+          case _ =>
+            Nil
+
       . assert(_ == List((16, 24)))
 
-      test(m"progress is the weight done over the weight planned, and a phase may be finished whole"):
+      test
+        ( m"progress is the weight done over the weight planned, " +
+          m"and a phase may be finished whole" ):
+
         import stdios.fileDescriptorStdio
         import termcapDefinitions.basicTermcap
         val progress: Progress = Progress(Unset, 80)
@@ -1574,6 +2205,7 @@ extension (doc: Doc) def titled: String = doc.title
         progress.step(Progress.Phase.Documents)
         progress.finish(Progress.Phase.Links)
         (start, (half*100).round, progress.fraction, progress.streamed)
+
       . assert(_ == (0.0, 43L, 1.0, true))
 
     suite(m"Overlays"):
@@ -1610,52 +2242,110 @@ entry .nowhere   nothing of the sort
         case overlay: Overlay => Overlay.merge(api, List(overlay))
         case _                => Unset
 
+      def plain(message: List[Block]): Text =
+        val inlines: List[Inline] = message.bind:
+          case Block.Paragraph(content) => content
+          case _                        => Nil
+
+        Blocks.plain(inlines)
+
       def problems(tone: Tone): List[Text] =
         merged.lay(Nil: List[Block]) { (m: (Api, List[Block])) => m(1) }.bind:
           case Block.Diagnostic(tone0, location, message, _, _) if tone0 == tone =>
-            List(t"${location.let(_.path).or(t"?")}:${location.let(_.line).or(0).toString}: ${Blocks.plain(message.bind { case Block.Paragraph(c) => c; case _ => Nil })}")
-          case _ => Nil
+            val path: Text = location.let(_.path).or(t"?")
+            List(t"$path:${location.let(_.line).or(0).toString}: ${plain(message)}")
+
+          case _ =>
+            Nil
 
       test(m"an overlay is read: its base, its package's info and detail, and its imports"):
         read match
-          case overlay: Overlay => (overlay.base, overlay.doc.info, overlay.doc.detail.let(_.trim), overlay.doc.imports)
-          case other            => other
+          case overlay: Overlay =>
+            (overlay.base, overlay.doc.info, overlay.doc.detail.let(_.trim), overlay.doc.imports)
+
+          case other =>
+            other
+
       . assert(_ == (t"sample", t"a sample package", t"All about _sample_.", List(t"scala")))
 
-      test(m"an entry has its name, kind, info (inline), detail (source), line and inherited imports"):
+      val docEntry =
+        ( t"Doc",
+          false,
+          t"a document",
+          t"A `Doc` has a *title*.",
+          8,
+          List(t"scala", t"scala.util"),
+          5 )
+
+      test
+        ( m"an entry has its name, kind, info (inline), detail (source), line " +
+          m"and inherited imports" ):
+
         read match
           case overlay: Overlay =>
-            overlay.entries.head.let { (e: Overlay.Entry) => (e.name, e.isType, e.doc.info, e.doc.detail.let(_.trim), e.line, e.doc.imports, e.entries.size) }
-          case other => other
-      . assert(_ == (t"Doc", false, t"a document", t"A `Doc` has a *title*.", 8, List(t"scala", t"scala.util"), 5))
+            overlay.entries.head.let: (e: Overlay.Entry) =>
+              ( e.name,
+                e.isType,
+                e.doc.info,
+                e.doc.detail.let(_.trim),
+                e.line,
+                e.doc.imports,
+                e.entries.size )
+
+          case other =>
+            other
+
+      . assert(_ == docEntry)
 
       test(m"a leaf entry's detail is its source atom"):
         read match
           case overlay: Overlay => overlay.entries.at(Sec).let(_.entries.head.let(_.doc.detail))
           case other            => other
+
       . assert(_ == Unset)
 
       test(m"an entry's children are placed by their parent's kind"):
         merged.let(_(0)(t"sample.Doc#title").let(_.doc.let(_.info)))
+
       . assert(_ == t"its title")
+
+      val nowhere: Text =
+        t"doc/api/sample.tel:23: `.nowhere` is documented here, " +
+          t"but no such member of `sample` is declared."
 
       test(m"an entry for a member nothing declares is a failure at its line"):
         problems(Tone.Failure)
-      . assert(_ == List(t"doc/api/sample.tel:23: `.nowhere` is documented here, but no such member of `sample` is declared."))
+
+      . assert(_ == List(nowhere))
 
       test(m"a parameter is documented as a member of its method's type form"):
         merged.let(_(0)(t"sample.Doc.parse#text").let(_.doc.let(_.info)))
+
       . assert(_ == t"the text to parse")
 
       def failures(text: Text): List[Text] = Overlay.read(t"x.tel", text) match
         case overlay: Overlay =>
           val lines: List[Text] = overlay.problems.bind:
             case Block.Diagnostic(_, location, message, _, _) =>
-              List(t"${location.let(_.line).or(0).toString}: ${Blocks.plain(message.bind { case Block.Paragraph(c) => c; case _ => Nil })}")
-            case _ => Nil
+              List(t"${location.let(_.line).or(0).toString}: ${plain(message)}")
+
+            case _ =>
+              Nil
 
           List.from(lines.stdlib.sortBy(_.cut(t":").head.s.toInt))
+
         case diagnostic: Block.Diagnostic => List(t"unread")
+
+      val formatFailures: List[Text] =
+        List
+          ( t"2: `domain` is not part of an overlay: An overlay may hold `base`, `import`, " +
+            t"`info`, `detail`, `refer`, `hidden`, `until`, `entry`.",
+            t"4: `info` is given more than once here.",
+            t"6: This entry's info is already given on its line.",
+            t"7: `detial` is not part of an overlay: An entry may hold `import`, `info`, " +
+              t"`detail`, `refer`, `hidden`, `until`, `entry`.",
+            t"10: `#title` already has an entry here.",
+            t"11: An `entry` must name the member it documents, as `.name` or `#Name`." )
 
       test(m"an overlay's format is checked, each failure at its line"):
         failures(t"""base sample
@@ -1670,84 +2360,133 @@ entry .Doc   a document
   entry #title  its title again
   entry
 """)
-      . assert(_ == List
-          ( t"2: `domain` is not part of an overlay: An overlay may hold `base`, `import`, `info`, `detail`, `refer`, `hidden`, `until`, `entry`.",
-            t"4: `info` is given more than once here.",
-            t"6: This entry's info is already given on its line.",
-            t"7: `detial` is not part of an overlay: An entry may hold `import`, `info`, `detail`, `refer`, `hidden`, `until`, `entry`.",
-            t"10: `#title` already has an entry here.",
-            t"11: An `entry` must name the member it documents, as `.name` or `#Name`." ))
+
+      . assert(_ == formatFailures)
+
+      val tooLong: Text =
+        t"4: This info is 141 characters long, and may be at most 140: say the rest in a `detail`."
 
       test(m"an info may be 140 characters as it reads, and no more"):
         val fits: Text = t"`${"a".repeat(140).nn.tt}`"
         val over: Text = "a".repeat(141).nn.tt
         failures(t"base sample\nentry .Doc  $fits\nentry .Shape\n  info $over\n")
-      . assert(_ == List(t"4: This info is 141 characters long, and may be at most 140: say the rest in a `detail`."))
+
+      . assert(_ == List(tooLong))
 
       test(m"an entry marked `until` need not exist, and has a page which is removed"):
-        merged.let(_(0)(t"sample.Doc#whisper").let { (e: Api.Entity) => (e.removed, e.doc.let(_.until.let(_.replacement))) })
+        merged.let(_(0)(t"sample.Doc#whisper")).let: (e: Api.Entity) =>
+          (e.removed, e.doc.let(_.until.let(_.replacement)))
+
       . assert(_ == (true, t"sample.Doc#shout"))
 
-      test(m"an undocumented public member is a caution where it is declared; a hidden entity's members are not"):
+      val undocumented: List[Text] =
+        List
+          ( t"Sample.scala:6: `sample.Doc#size` is not documented: add `entry #size` under " +
+            t"`sample.Doc` in doc/api/sample.tel.",
+            t"Sample.scala:4: `sample.Shape#area` is not documented: add `entry #area` under " +
+              t"`sample.Shape` in doc/api/sample.tel." )
+
+      test
+        ( m"an undocumented public member is a caution where it is declared; " +
+          m"a hidden entity's members are not" ):
+
         problems(Tone.Warning)
-      . assert(_ == List
-          ( t"Sample.scala:6: `sample.Doc#size` is not documented: add `entry #size` under `sample.Doc` in doc/api/sample.tel.",
-            t"Sample.scala:4: `sample.Shape#area` is not documented: add `entry #area` under `sample.Shape` in doc/api/sample.tel." ))
+
+      . assert(_ == undocumented)
 
     suite(m"Resolution"):
       def resolver(scope: Scope): Resolver = Resolver(Tests.this.api0, scope)
-      def linked(scope: Scope, reference: Text): Optional[Text] = resolver(scope).link(reference) match
-        case Inline.Destination.Local(path, _) => path
-        case _                                 => Unset
+
+      def linked(scope: Scope, reference: Text): Optional[Text] =
+        resolver(scope).link(reference) match
+          case Inline.Destination.Local(path, _) => path
+          case _                                 => Unset
 
       test(m"a qualified name resolves as written"):
         linked(Scope.document(Nil), t"sample.Doc")
+
       . assert(_ == t"/api/sample.Doc")
 
       test(m"a leaf resolves through an import"):
         linked(Scope.document(List(t"sample")), t"Doc")
+
       . assert(_ == t"/api/sample.Doc")
 
       test(m"a leaf does not resolve without a scope"):
         linked(Scope.document(Nil), t"Doc")
+
       . assert(_ == Unset)
+
+      val members: (Text, Text, Text, Text) =
+        ( t"/api/sample.Doc.parse",
+          t"/api/sample.Doc~title",
+          t"/api/sample.Doc.parse",
+          t"/api/sample.Doc~shout" )
 
       test(m"a member resolves through its enclosing entity, and by Amok's `.`/`#` forms"):
         val doc: Api.Entity = Tests.this.api0(t"sample.Doc").or(Api.Entity(Unset, t"?"))
         val scope: Scope = Scope.of(doc, Nil)
-        (linked(scope, t"parse"), linked(scope, t"#title"), linked(scope, t".parse"), linked(scope, t"Doc#shout"))
-      . assert(_ == (t"/api/sample.Doc.parse", t"/api/sample.Doc~title", t"/api/sample.Doc.parse", t"/api/sample.Doc~shout"))
+
+        ( linked(scope, t"parse"),
+          linked(scope, t"#title"),
+          linked(scope, t".parse"),
+          linked(scope, t"Doc#shout") )
+
+      . assert(_ == members)
 
       test(m"a fragment's imports are learned"):
         val r: Resolver = resolver(Scope.document(Nil))
         r.learn(List(t"import sample.*"))
+
         r.link(t"Util") match
           case Inline.Destination.Local(path, _) => path
           case _                                 => Unset
+
       . assert(_ == t"/api/sample.Util")
 
       test(m"a typed token links only when it is the name its type names"):
         val r: Resolver = resolver(Scope.document(Nil))
-        val doc: stenography.Syntax = stenography.Syntax.Simple(stenography.Designator(t"sample.Doc"))
+
+        val doc: stenography.Syntax =
+          stenography.Syntax.Simple(stenography.Designator(t"sample.Doc"))
+
         (r.link(t"Doc", doc).present, r.link(t"x", doc).present)
+
       . assert(_ == (true, false))
+
+      val docPage: Inline.Destination = Inline.Destination.Local(t"/api/sample.Doc")
 
       test(m"a signature is tokens, its designators linked, and written in full under an import"):
         val api: Api = Tests.this.api0
-        val parse: Api.Declaration = api(t"sample.Doc.parse").let(_.definition).or(Api.Declaration(Api.Kind.Def))
+
+        val parse: Api.Declaration =
+          api(t"sample.Doc.parse").let(_.definition).or(Api.Declaration(Api.Kind.Def))
+
         val tokens = Signatures.declaration(t"parse", parse, api, Scope.document(List(t"sample")))
         (tokens.map(_.text).join(t""), tokens.seek(_.text == t"Doc").let(_.link))
-      . assert(_ == (t"def parse(text: String): sample.Doc", Inline.Destination.Local(t"/api/sample.Doc")))
+
+      . assert(_ == (t"def parse(text: String): sample.Doc", docPage))
 
       test(m"a signature is elided by the enclosing scope alone"):
         val api: Api = Tests.this.api0
-        val parse: Api.Declaration = api(t"sample.Doc.parse").let(_.definition).or(Api.Declaration(Api.Kind.Def))
-        api(t"sample.Doc").let { (doc: Api.Entity) => Signatures.declaration(t"parse", parse, api, Scope.of(doc, Nil)).map(_.text).join(t"") }
+
+        val parse: Api.Declaration =
+          api(t"sample.Doc.parse").let(_.definition).or(Api.Declaration(Api.Kind.Def))
+
+        api(t"sample.Doc").let: (doc: Api.Entity) =>
+          Signatures.declaration(t"parse", parse, api, Scope.of(doc, Nil)).map(_.text).join(t"")
+
       . assert(_ == t"def parse(text: String): Doc")
+
+      val purview: List[Purview.Entry] =
+        List
+          ( Purview.Entry(t"/api/sample", t"sample"),
+            Purview.Entry(t"/api/scala.Predef", t"scala.Predef") )
 
       test(m"the project's imports are a reader's starting purview, one entry per page"):
         Scope.purview(List(t"sample", t"scala.Predef")).imports
-      . assert(_ == List(Purview.Entry(t"/api/sample", t"sample"), Purview.Entry(t"/api/scala.Predef", t"scala.Predef")))
+
+      . assert(_ == purview)
 
       val qualifiedSample: List[(Text, Optional[Text], Boolean)] =
         List
@@ -1802,21 +2541,36 @@ entry .Doc   a document
 
       . assert(_ == List(false, true, true, true, true, false, false, false, false))
 
+      val samplePage: Inline.Destination = Inline.Destination.Local(t"/api/sample")
+      val sampleLink: Inline = Inline.Link(samplePage, Inline.text(t"sample"))
+      val dot: Inline = Inline.Toned(Tone.Muted, Inline.text(t"."))
+      val heading: Block = Block.Paragraph(List(sampleLink, dot))
+
       test(m"a page has its heading, signature and member rows anchored by name"):
         val api: Api = Tests.this.api0
         val doc: Api.Entity = api(t"sample.Doc").or(Api.Entity(Unset, t"?"))
-        val page = ApiPages.page(api, doc, resolver(Scope.of(doc, Nil)), Scope.of(doc, Nil), Nil)
-        val rows: List[Text] = page.bind { case Block.Table(_, rows, _) => rows.bind { (r: Block.Row) => r.id.let(List(_)).or(Nil) }; case _ => Nil }
+        val scope: Scope = Scope.of(doc, Nil)
+        val page = ApiPages.page(api, doc, resolver(scope), scope, Nil)
+
+        val rows: List[Text] = page.bind:
+          case Block.Table(_, rows, _) => rows.bind(_.id.let(List(_)).or(Nil))
+          case _                       => Nil
+
         (page.head, rows.has(t"title"), rows.has(t"parse"))
-      . assert(_ == (Block.Paragraph(List(Inline.Link(Inline.Destination.Local(t"/api/sample"), Inline.text(t"sample")), Inline.Toned(Tone.Muted, Inline.text(t".")))), true, true))
+
+      . assert(_ == (heading, true, true))
 
       test(m"the tree links each node to its page, open along the way to the current one"):
         val tree = ApiPages.tree(Tests.this.api0, t"sample.Doc")
-        tree.roots.head.let { (n: Block.TreeNode) => (n.destination, n.open, n.children.map(_.label).map(Blocks.plain)) }
-      . assert(_ == (Inline.Destination.Local(t"/api/sample"), true, List(t"Doc", t"Shape", t"Util")))
+
+        tree.roots.head.let: (n: Block.TreeNode) =>
+          (n.destination, n.open, n.children.map(_.label).map(Blocks.plain))
+
+      . assert(_ == (samplePage, true, List(t"Doc", t"Shape", t"Util")))
 
     suite(m"References"):
-      def resolver(page: Optional[Text] = Unset): Resolver = Resolver(Tests.this.api0, Scope.document(List(t"sample")), page)
+      def resolver(page: Optional[Text] = Unset): Resolver =
+        Resolver(Tests.this.api0, Scope.document(List(t"sample")), page)
 
       def doc(text: Text, linker: Linker = resolver(t"/doc/doc/a.md")): Doc =
         Doc.parse(t"a.md", text, Checker.tokenized, false, Unset, linker, section = t"doc")
@@ -1828,67 +2582,113 @@ entry .Doc   a document
           case _ :: tail                          => snippet(tail)
           case _                                  => Unset
 
-        doc.blocks.seek { (block: Block) => block match { case Block.Paragraph(_) => true; case _ => false } } match
-          case Block.Paragraph(inlines) => snippet(inlines).let { (t: pyrocosm.Token) => (t.text, t.accent, t.link) }
-          case _                        => Unset
+        val paragraph = doc.blocks.seek:
+          case Block.Paragraph(_) => true
+          case _                  => false
+
+        paragraph match
+          case Block.Paragraph(inlines) =>
+            snippet(inlines).let: (t: pyrocosm.Token) => (t.text, t.accent, t.link)
+
+          case _ =>
+            Unset
 
       def symbols(doc: Doc): List[Text] = doc.references.bind: (reference: Linkage) =>
         reference.target match
-          case Linkage.Target.Sigil(text) => List(text)
+          case Linkage.Target.Sigil(text)    => List(text)
           case _                             => Nil
+
+      val docPage: Inline.Destination = Inline.Destination.Local(t"/api/sample.Doc")
 
       test(m"`#Name` names the type, shown without its sigil in the type's accent"):
         token(doc(t"See `#Doc`.\n"))
-      . assert(_ == (t"Doc", pyrocosm.Token.Accent.Typal, Inline.Destination.Local(t"/api/sample.Doc")))
 
-      test(m"`.name` names the term, through its path, each segment linked and the last in its kind's accent"):
+      . assert(_ == (t"Doc", pyrocosm.Token.Accent.Typal, docPage))
+
+      val utilLinks: List[Optional[Inline.Destination]] =
+        List
+          ( Inline.Destination.Local(t"/api/sample.Util"),
+            Unset,
+            Inline.Destination.Local(t"/api/sample.Util.limit") )
+
+      test
+        ( m"`.name` names the term, through its path, each segment " +
+          m"linked and the last in its kind's accent" ):
+
         doc(t"See `.Util.limit`.\n").blocks match
           case Block.Paragraph(_ :: Inline.Snippet(_, tokens) :: _) :: _ =>
             (tokens.map(_.text).join(t""), tokens.map(_.link), tokens.reverse.head.let(_.accent))
+
           case _ =>
             Unset
-      . assert(_ == (t"Util.limit", List(Inline.Destination.Local(t"/api/sample.Util"), Unset, Inline.Destination.Local(t"/api/sample.Util.limit")), pyrocosm.Token.Accent.Term))
 
-      test(m"a sigil which nothing of its kind answers is shown as written, unlinked, and recorded"):
+      . assert(_ == (t"Util.limit", utilLinks, pyrocosm.Token.Accent.Term))
+
+      test
+        ( m"a sigil which nothing of its kind answers is shown as " +
+          m"written, unlinked, and recorded" ):
+
         val shape: Doc = doc(t"See `.Shape` and `#Util`.\n")
         (token(shape).let(_(0)), token(shape).let(_(2)), symbols(shape))
+
       . assert(_ == (t".Shape", Unset, List(t".Shape", t"#Util")))
 
       test(m"a path or a selector after a dot is code as written, not a reference"):
         val paths: Doc = doc(t"See `.pyrocosm/fuel/config.tel`, `.sN:checked`, `..` and `.`.\n")
         (token(paths).let(_(0)), paths.references)
+
       . assert(_ == (t".pyrocosm/fuel/config.tel", Nil))
 
-      test(m"inline code without a sigil which resolves to nothing stays plain, and is no reference"):
+      test
+        ( m"inline code without a sigil which resolves to nothing stays " +
+          m"plain, and is no reference" ):
+
         val plain: Doc = doc(t"See `nothing`.\n")
         (token(plain).let(_(0)), token(plain).let(_(2)), plain.references)
+
       . assert(_ == (t"nothing", Unset, Nil))
+
+      val setup: Inline.Destination = Inline.Destination.Local(t"/doc/doc/a.md", t"setup")
 
       test(m"a name a fence defined links to the fence, by its id"):
         val text: Text = t"```scala fuel\nid setup\n##\nval base: Int = 1\n```\n\nSee `base`.\n"
         val d: Doc = doc(text)
+
         val id: Optional[Text] = d.blocks match
           case Block.Code(_, _, _, _, _, id) :: _ => id
           case _                                  => Unset
+
         (token(d).let(_(2)), id, d.anchors)
-      . assert(_ == (Inline.Destination.Local(t"/doc/doc/a.md", t"setup"), t"setup", List(t"setup")))
+
+      . assert(_ == (setup, t"setup", List(t"setup")))
 
       test(m"a fence without an id is anchored by its number"):
         token(doc(t"```scala\nval base: Int = 1\n```\n\nSee `base`.\n")).let(_(2))
+
       . assert(_ == Inline.Destination.Local(t"/doc/doc/a.md", t"fragment-1"))
 
-      test(m"a fence's definition shadows an entity of the same name, and the latest definition wins"):
-        val text: Text = t"```scala\nval Doc: Int = 1\n```\n```scala\nval Doc: Int = 2\n```\n\nSee `Doc`.\n"
+      test
+        ( m"a fence's definition shadows an entity of the same name, " +
+          m"and the latest definition wins" ):
+
+        val text: Text =
+          t"```scala\nval Doc: Int = 1\n```\n```scala\nval Doc: Int = 2\n```\n\nSee `Doc`.\n"
+
         token(doc(text)).let(_(2))
+
       . assert(_ == Inline.Destination.Local(t"/doc/doc/a.md", t"fragment-2"))
 
       test(m"a sigil picks a fence's definition by its kind"):
-        val text: Text = t"```scala\nval x: Int = 1\nclass Y\n```\n\nSee `#x`, `.x`, `#Y` and `.Y`.\n"
+        val text: Text =
+          t"```scala\nval x: Int = 1\nclass Y\n```\n\nSee `#x`, `.x`, `#Y` and `.Y`.\n"
+
         symbols(doc(text))
+
       . assert(_ == List(t"#x", t".Y"))
 
       test(m"without a page a fence's definition links nowhere, and the API answers instead"):
         token(doc(t"```scala\nval Doc: Int = 1\n```\n\nSee `Doc`.\n", resolver())).let(_(2))
+
       . assert(_ == Inline.Destination.Local(t"/api/sample.Doc"))
 
     suite(m"Anchors and links"):
@@ -1913,16 +2713,28 @@ entry .Doc   a document
         case Block.Diagnostic(_, location, _, _, _) => location.let(_.line)
         case _                                      => Unset
 
+      val slugs: List[Text] = List(t"getting-started", t"set-up--run", t"set-up--run-1")
+
       test(m"a heading is anchored by its slug, numbered when repeated"):
         val d: Doc = doc(t"a.md", t"# Getting started\n\n## Set-up & run\n\n## Set-up & run\n")
         (ids(d), d.anchors)
-      . assert(_ == (List(t"getting-started", t"set-up--run", t"set-up--run-1"), List(t"getting-started", t"set-up--run", t"set-up--run-1")))
+
+      . assert(_ == (slugs, slugs))
+
+      val fragments: List[Inline.Destination] =
+        List
+          ( Inline.Destination.Local(t"/doc/doc/a.md", t"set-up"),
+            Inline.Destination.Local(t"/doc/doc/a.md", t"nope") )
 
       test(m"a `#fragment` link leads to this page, and must name an anchor on it"):
         val d: Doc = doc(t"a.md", t"## Set-up\n\n[here](#set-up)\n\n[there](#nope)\n")
         val corpus: Corpus = Corpus(List(Corpus.Section(t"doc", t"/r", List(d))))
         (links(d), lines(Links.check(corpus, Api.empty, Glossary.none)))
-      . assert(_ == (List(Inline.Destination.Local(t"/doc/doc/a.md", t"set-up"), Inline.Destination.Local(t"/doc/doc/a.md", t"nope")), List(5)))
+
+      . assert(_ == (fragments, List(5)))
+
+      val upward: List[Inline.Destination] =
+        List(Inline.Destination.Local(t"/doc/doc/x.md"), Inline.Destination.External(t"../../x.md"))
 
       test(m"a relative link is resolved against the document's directory, within its section"):
         val a: Doc = doc(t"a.md", t"[b](guide/b.md)\n")
@@ -1930,24 +2742,33 @@ entry .Doc   a document
         val x: Doc = doc(t"x.md", t"# X\n")
         val corpus: Corpus = Corpus(List(Corpus.Section(t"doc", t"/r", List(a, b, x))))
         (links(a), links(b), lines(Links.check(corpus, Api.empty, Glossary.none)))
-      . assert(_ == (List(Inline.Destination.Local(t"/doc/doc/guide/b.md")), List(Inline.Destination.Local(t"/doc/doc/x.md"), Inline.Destination.External(t"../../x.md")), List(3)))
+
+      . assert(_ == (List(Inline.Destination.Local(t"/doc/doc/guide/b.md")), upward, List(3)))
 
       test(m"a site link must name an entity, a member of it, or a glossary term"):
-        val text: Text = t"[a](/api/sample.Doc#parse)\n\n[b](/api/sample.Nope)\n\n[c](/api/sample.Doc#nope)\n\n[d](/glossary#monad)\n"
+        val text: Text =
+          t"[a](/api/sample.Doc#parse)\n\n[b](/api/sample.Nope)\n\n" +
+            t"[c](/api/sample.Doc#nope)\n\n[d](/glossary#monad)\n"
+
         val d: Doc = doc(t"a.md", text)
         val corpus: Corpus = Corpus(List(Corpus.Section(t"doc", t"/r", List(d))))
         val glossary: Glossary = Glossary(List(Glossary.Term(t"monad", t"x", Unset, t"g.tel", 1)))
-        (lines(Links.check(corpus, Tests.this.api0, glossary)), lines(Links.check(corpus, Tests.this.api0, Glossary.none)))
+
+        ( lines(Links.check(corpus, Tests.this.api0, glossary)),
+          lines(Links.check(corpus, Tests.this.api0, Glossary.none)) )
+
       . assert(_ == (List(3, 5), List(3, 5, 7)))
 
       test(m"a URL is recorded, and not fetched unless asked"):
         val d: Doc = doc(t"a.md", t"[s](https://example.com/)\n")
         val corpus: Corpus = Corpus(List(Corpus.Section(t"doc", t"/r", List(d))))
         (links(d), d.references.size, Links.check(corpus, Api.empty, Glossary.none).size)
+
       . assert(_ == (List(Inline.Destination.External(t"https://example.com/")), 1, 0))
 
       test(m"a document's URL encodes each segment"):
         Doc.url(t"doc modules", t"a b/c.md")
+
       . assert(_ == t"/doc/doc%20modules/a%20b/c.md")
 
     suite(m"Glossary"):
@@ -1965,46 +2786,93 @@ define type class
         case _                  => Glossary.none
 
       def doc(text: Text, glossary: Glossary = glossary): Doc =
-        Doc.parse(t"a.md", text, Checker.tokenized, false, Unset, Linker.none, section = t"doc", glossary = glossary)
+        Doc.parse
+          ( t"a.md",
+            text,
+            Checker.tokenized,
+            false,
+            Unset,
+            Linker.none,
+            section = t"doc",
+            glossary = glossary )
 
       // The first paragraph's second inline, after the text which leads to the term.
       def term(doc: Doc): Optional[Inline] = doc.blocks match
         case Block.Paragraph(_ :: inline :: _) :: _ => inline
         case _                                      => Unset
 
+      def failures(problems: List[Block]): List[Optional[(Tone, Optional[Int])]] = problems.map:
+        case Block.Diagnostic(tone, location, _, _, _) => (tone, location.let(_.line))
+        case _                                         => Unset
+
+      val monadText: Text = t"A *monad* is a monoid in the category of endofunctors."
+      val typeClassText: Text = t"A set of operations over a type, given apart from it."
+
+      val terms =
+        List
+          ( (t"monad", t"monad", 1, t"https://example.com/monads", monadText),
+            (t"type class", t"type-class", 6, Unset, typeClassText) )
+
       test(m"a glossary's terms are read, with their lines, links, slugs and definitions"):
-        glossary.terms.map { (term: Glossary.Term) => (term.name, term.slug, term.line, term.link, term.definition.trim) }
-      . assert(_ == List
-          ( (t"monad", t"monad", 1, t"https://example.com/monads", t"A *monad* is a monoid in the category of endofunctors."),
-            (t"type class", t"type-class", 6, Unset, t"A set of operations over a type, given apart from it.") ))
+        glossary.terms.map: (term: Glossary.Term) =>
+          (term.name, term.slug, term.line, term.link, term.definition.trim)
+
+      . assert(_ == terms)
 
       test(m"a term defined twice, or which cannot be a label, is a failure"):
-        val again: Glossary = Glossary(List(Glossary.Term(t"Monad", t"y", Unset, t"other.tel", 4), Glossary.Term(t"a[b]", t"z", Unset, t"other.tel", 9)))
+        val monad: Glossary.Term = Glossary.Term(t"Monad", t"y", Unset, t"other.tel", 4)
+        val unlabelled: Glossary.Term = Glossary.Term(t"a[b]", t"z", Unset, t"other.tel", 9)
+        val again: Glossary = Glossary(List(monad, unlabelled))
         val (merged, problems) = Glossary.merge(List(glossary, again))
-        (merged.terms.size, problems.map { case Block.Diagnostic(tone, location, _, _, _) => (tone, location.let(_.line)); case _ => Unset })
+        (merged.terms.size, failures(problems))
+
       . assert(_ == (2, List((Tone.Failure, 4), (Tone.Failure, 9))))
+
+      val monadPage: Inline.Destination = Inline.Destination.External(t"https://example.com/monads")
+      val monadLink: Inline = Inline.Link(monadPage, Inline.text(t"monad"))
+
+      val monadDefinition: List[Inline] =
+        List
+          ( Inline.Textual(t"A "),
+            Inline.Emphasis(Inline.text(t"monad")),
+            Inline.Textual(t" is a monoid in the category of endofunctors.") )
+
+      val typeClassPage: Inline.Destination = Inline.Destination.Local(t"/glossary", t"type-class")
+      val typeClassLink: Inline = Inline.Link(typeClassPage, Inline.text(t"Type Class"))
+      val typeClassDefinition: List[Inline] = Inline.text(typeClassText)
+      val annotatedMonad: Inline = Inline.Annotated(List(monadLink), monadDefinition)
+      val annotatedTypeClass: Inline = Inline.Annotated(List(typeClassLink), typeClassDefinition)
 
       test(m"a bracketed term is annotated with its definition and leads to its link, in any case"):
         (term(doc(t"A [monad] here.\n")), term(doc(t"A [Type Class] here.\n")))
-      . assert(_ == (
-          Inline.Annotated(List(Inline.Link(Inline.Destination.External(t"https://example.com/monads"), Inline.text(t"monad"))), List(Inline.Textual(t"A "), Inline.Emphasis(Inline.text(t"monad")), Inline.Textual(t" is a monoid in the category of endofunctors."))),
-          Inline.Annotated(List(Inline.Link(Inline.Destination.Local(t"/glossary", t"type-class"), Inline.text(t"Type Class"))), Inline.text(t"A set of operations over a type, given apart from it.")) ))
+
+      . assert(_ == (annotatedMonad, annotatedTypeClass))
+
+      val mine: Inline =
+        Inline.Link(Inline.Destination.External(t"https://mine/"), Inline.text(t"monad"))
 
       test(m"the author's own reference definition wins, and brackets around no term stay text"):
         val plain: Doc = doc(t"A [nothing] here.\n")
+
         val text: Optional[Text] = plain.blocks match
           case Block.Paragraph(content) :: _ => Blocks.plain(content)
           case _                             => Unset
+
         (term(doc(t"A [monad] here.\n\n[monad]: https://mine/\n")), text, plain.references)
-      . assert(_ == (Inline.Link(Inline.Destination.External(t"https://mine/"), Inline.text(t"monad")), t"A [nothing] here.", Nil))
+
+      . assert(_ == (mine, t"A [nothing] here.", Nil))
 
       test(m"the glossary page anchors each term by its slug"):
-        glossary.page(Linker.none).bind { case Block.Heading(2, _, id) => id.let(List(_)).or(Nil); case _ => Nil }
+        glossary.page(Linker.none).bind:
+          case Block.Heading(2, _, id) => id.let(List(_)).or(Nil)
+          case _                       => Nil
+
       . assert(_ == List(t"monad", t"type-class"))
 
       test(m"a fence left open is a failure at its line, and the document is read as written"):
         val d: Doc = doc(t"Text.\n\n```scala\nval x = 1\n")
-        (d.problems.map { case Block.Diagnostic(tone, location, _, _, _) => (tone, location.let(_.line)); case _ => Unset }, d.blocks.size)
+        (failures(d.problems), d.blocks.size)
+
       . assert(_ == (List((Tone.Failure, 3)), 2))
 
     suite(m"Sections"):

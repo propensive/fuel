@@ -54,11 +54,13 @@ object Selection:
     val base: Selection = parse(node.atomTexts.to[List].filter(_ != t"").head.or(t""))
 
     def number(keyword: Text): Optional[Int] =
-      node.fields(keyword).to[List].head.let { (child: Tel) => safely(child.primaryAtom.as[Int]) }
+      node.fields(keyword).to[List].head.let: (child: Tel) => safely(child.primaryAtom.as[Int])
 
     base.copy(line = number(t"line"), occurrence = number(t"occurrence").or(1))
 
-case class Selection(start: Text, end: Optional[Text], line: Optional[Int] = Unset, occurrence: Int = 1):
+case class Selection
+  ( start: Text, end: Optional[Text], line: Optional[Int] = Unset, occurrence: Int = 1 ):
+
   // The offsets of the match: where `start` occurs for the `occurrence`th time (on the line,
   // when one is named), to the end of the first `end` after it; or the literal alone.
   def findIn(code: Text): Optional[(Int, Int)] =
@@ -81,6 +83,7 @@ case class Selection(start: Text, end: Optional[Text], line: Optional[Int] = Uns
     region.let: (region: (Int, Int)) =>
       def nth(remaining: Int, from: Int): Int =
         val index: Int = text.indexOf(start.s, from)
+
         if index < 0 || index + start.length > region(1) then -1
         else if remaining <= 1 then index
         else nth(remaining - 1, index + 1)

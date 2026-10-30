@@ -2,7 +2,7 @@ tel 1.0
 
 # Flare checks fuel's Scala sources: everything under src/, against Consequent Style, with the
 # licence header every file begins with (etc/header.txt). `make check` runs the
-# profile; CI does not, since findings are warnings and the count is not yet zero.
+# profile, and finds nothing; CI does not run it.
 
 rule cast
   invokes asInstanceOf
@@ -18,20 +18,27 @@ rule imperative
 profile default
   source src/**/*.scala
 
+  # The two casts from the compiler's types and symbols to the quotes API's, which no pattern
+  # match can make (the API's types are abstract, with no `TypeTest`), live alone in this file,
+  # which is otherwise laid out in Consequent Style; excluding it keeps `cast` enforced
+  # everywhere else.
+  exclude src/api/fuel.Reflection.scala
+
   # The `-language` features the build compiles with, so flare parses the sources exactly as the
   # build does. Kept in step with `settings.scalaOptions` in build.mill — without capture and
   # separation checking, which build.mill explains.
   language implicitConversions
   language experimental.modularity
   language experimental.dependent
-  language experimental.relaxedLambdaSyntax
   language experimental.genericNumberLiterals
-  language experimental.into
   language experimental.erasedDefinitions
   language experimental.saferExceptions
-  language experimental.strictEqualityPatternMatching
   language experimental.subCases
   language experimental.multiSpreads
+
+  # The build enables the relaxed lambda syntax (`f: x => …` on one line) with `-preview`, but
+  # flare cannot yet be given `-preview`, so it parses with the language feature that preceded it.
+  language experimental.relaxedLambdaSyntax
 
   style consequent
     header etc/header.txt

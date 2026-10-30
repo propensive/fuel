@@ -32,9 +32,9 @@
                                                                                                   */
 package fuel
 
-import soundness.{Language as _, Token as _, *}
+import soundness.*
 
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 import pyrocosm.{Block, Tone}
 
 // Every link of every document, checked once every document is converted, when every target
@@ -67,9 +67,14 @@ object Links:
       case Linkage.Target.Sigil(text)          => text
 
     def report(tone: Tone, message: Text): Block =
-      val style: Block.Note.Style = if tone == Tone.Failure then Block.Note.Style.Erroneous else Block.Note.Style.Caution
-      val excerpt: List[Block] = if doc.text == t"" then Nil else Excerpts.plainAt(doc.text, reference.line, written, style)
-      Block.Diagnostic(tone, Block.Location(doc.path, reference.line), List(Block.paragraph(message)), excerpt)
+      val style: Block.Note.Style =
+        if tone == Tone.Failure then Block.Note.Style.Erroneous else Block.Note.Style.Caution
+
+      val excerpt: List[Block] =
+        if doc.text == t"" then Nil else Excerpts.plainAt(doc.text, reference.line, written, style)
+
+      val location: Block.Location = Block.Location(doc.path, reference.line)
+      Block.Diagnostic(tone, location, List(Block.paragraph(message)), excerpt)
 
     def failure(message: Text): Block = report(Tone.Failure, message)
 
@@ -80,7 +85,8 @@ object Links:
       corpus.doc(section, path) match
         case target: Doc =>
           fragment.let: (fragment: Text) =>
-            if target.anchors.has(fragment) then Unset else failure(t"There is no `#$fragment` on `$path`.")
+            if target.anchors.has(fragment) then Unset
+            else failure(t"There is no `#$fragment` on `$path`.")
 
         case _ =>
           failure(t"There is no document `$path` in the section `$section`.")
@@ -90,7 +96,8 @@ object Links:
         document(section, path, fragment)
 
       case Linkage.Target.Anchor(fragment) =>
-        if doc.anchors.has(fragment) then Unset else failure(t"There is no `#$fragment` on this page.")
+        if doc.anchors.has(fragment) then Unset
+        else failure(t"There is no `#$fragment` on this page.")
 
       case Linkage.Target.Site(path, fragment) =>
         if path.starts(t"/doc/") then
@@ -107,8 +114,10 @@ object Links:
               failure(t"There is no API page at `$path`.")
         else if path == t"/glossary" then
           fragment.let: (fragment: Text) =>
-            if glossary(fragment).present then Unset else failure(t"The glossary has no term `$fragment`.")
-        else failure(t"There is no page at `$path`.")
+            if glossary(fragment).present then Unset
+            else failure(t"The glossary has no term `$fragment`.")
+        else
+          failure(t"There is no page at `$path`.")
 
       case Linkage.Target.Url(url) =>
         if !external then Unset else fetch(url).let(failure(_))
@@ -137,6 +146,8 @@ object Links:
           . GET.nn
           . build.nn
 
-        val status: Int = client.send(request, java.net.http.HttpResponse.BodyHandlers.discarding).nn.statusCode
+        val status: Int =
+          client.send(request, java.net.http.HttpResponse.BodyHandlers.discarding).nn.statusCode
+
         if status < 400 then Unset else t"`$url` answered ${status.show}."
       catch case error: Exception => t"`$url` could not be fetched: ${error.toString.tt}"
