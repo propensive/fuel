@@ -436,8 +436,12 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
         try Checking.session(config.classpath, config.options): (checker: Checker) =>
           val (api, sources) = model(config, checker, progress)
           val key: Text = environment(sources, api)
-          val pages: sci.Map[Text, List[Block]] = rendered(api, checker, store, key, progress)
-          val scope: Scope = Scope.document(config.imports)
+          val standard: List[Designator] = Scope.standardOf(config.options)
+
+          val pages: sci.Map[Text, List[Block]] =
+            rendered(api, checker, store, key, progress, standard)
+
+          val scope: Scope = Scope.document(config.imports, standard)
 
           val linker: (Text, Text) -> Linker =
             (section: Text, path: Text) => Resolver(api, scope, Doc.url(section, path))
@@ -467,9 +471,13 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
 
     val glossaryPage: List[Block] =
       if glossary.terms.nil then Nil
-      else glossary.page(Resolver(api, Scope.document(config.imports), t"/glossary"))
+      else
+        val scope: Scope = Scope.document(config.imports, Scope.standardOf(config.options))
+        glossary.page(Resolver(api, scope, t"/glossary"))
 
-    Server.publish(corpus, api, outcome.let(_(2)).or(sci.Map()), config.imports, glossaryPage)
+    Server.publish
+      ( corpus, api, outcome.let(_(2)).or(sci.Map()), config.imports, glossaryPage,
+        Scope.standardOf(config.options) )
 
     corpus.sections.each: (section: Corpus.Section) =>
       Out.println(t"${section.name}: ${section.docs.size.show} documents from ${section.root}")
@@ -628,7 +636,11 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
           val excerpt = source.map: (_, text) => Excerpts.scala(text, from, from + length, style)
           excerpt.getOrElse(unplaced)
 
-        val file: Text = source.map(_(0)).getOrElse(notice.file)
+        // The file is named relative to the project root, as a reader knows it.
+        val file: Text =
+          source.map(_(0)).getOrElse(notice.file).pipe: (path: Text) =>
+            if path.starts(t"${config.root}/") then path.skip(config.root.length + 1) else path
+
         val (line, column) = (placed(0).let(_(0)), placed(0).let(_(1)))
         val location: Block.Location = Block.Location(file, line, column)
 
@@ -710,11 +722,16 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
 // the key of its inputs: everything the compile depends on (`environment`), the entity, and the
 // members its page lists. Their problems are kept with them.
 private def rendered
-  ( api: Api, checker: Checker, store: Optional[Store], environment: Text, progress: Progress )
+  ( api:         Api,
+    checker:     Checker,
+    store:       Optional[Store],
+    environment: Text,
+    progress:    Progress,
+    standard:    List[Designator] )
 :   sci.Map[Text, List[Block]] =
 
   def render(entity: Api.Entity): (List[Block], List[Block]) =
-    val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Nil))
+    val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Nil), standard)
     val resolver: Resolver = Resolver(api, scope)
     val place: Text = entity.doc.let(_.file).or(entity.key)
     val scala: Embedding.ScalaCode = Embedding.ScalaCode(checker, place, false, Unset, resolver)
@@ -796,7 +813,7 @@ private def search(text: Text)(using Stdio): Exit | UsageError.type =
           Exit.Ok
         else
           val outcome: Search.Outcome = api.search(query)
-          val scope: Scope = Scope.document(Server.imports)
+          val scope: Scope = Scope.document(Server.imports, Server.standard)
           outcome.notices.each: (notice: Text) => Out.println(t"fuel: $notice")
 
           outcome.hits.each: (hit: Search.Hit) =>

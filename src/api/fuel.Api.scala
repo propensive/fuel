@@ -264,6 +264,29 @@ case class Api(entities: sci.Map[Text, Api.Entity]):
       designator.parent.let: (parent: Designator) =>
         apply(Api.key(parent.companionType, designator.name))
 
+  // The entities which forward to each entity, by the key of what they forward to: the
+  // packages and objects a name may be reached through besides its own. A forwarder is an
+  // export, or a type alias standing for another type over exactly its own parameters, as an
+  // exported type is compiled to (`type Optional[value] = vacuous.Optional[value]`).
+  lazy val exporters: sci.Map[Text, List[Api.Entity]] =
+    def forwards(entity: Api.Entity): Optional[Text] =
+      entity.alias.let(Api.key(_)).or:
+        entity.template.let: (d: Api.Declaration) =>
+          d.aliasOf.let:
+            case Api.Shape.Named(key, args) if key != entity.key =>
+              val params: List[Text] = args.map:
+                case Api.Shape.Param(name, _) => name
+                case _                        => t""
+
+              if params == d.aliasParams then key else Unset
+
+            case _ => Unset
+
+    val forwarders = entities.values.toList.filter(forwards(_).present)
+
+    forwarders.groupBy { (e: Api.Entity) => forwards(e).or(t"") }.map: (key, group) =>
+      (key, List.from(group))
+
   // Every entity of a simple name, for a reference to be resolved among and for search.
   lazy val byName: sci.Map[Text, List[Api.Entity]] =
     entities.values.toList.groupBy(_.name).map: (name, group) =>

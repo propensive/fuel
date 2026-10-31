@@ -63,7 +63,7 @@ object ApiPages:
 
     val exported: Boolean = d.exported || member.alias.present
     val keyword: Text = if exported then t"export" else d.kind.keyword
-    val kind: List[Inline] = List(Inline.Toned(Tone.Muted, Inline.text(keyword)))
+    val kind: List[Inline] = List(Signatures.code(List(Token(keyword, Token.Accent.Keyword))))
     val accent: Token.Accent = if d.kind.isType then Token.Accent.Typal else Token.Accent.Term
 
     val where: List[Inline] =
@@ -83,10 +83,10 @@ object ApiPages:
     val info: List[Inline] = member.doc.let(_.info).let(Blocks.inline(_, resolver)).or(Nil)
     val tone: Optional[Tone] = if member.removed then Tone.Muted else Unset
 
-    val cells: List[Block.Cell] =
-      List(Block.Cell(kind), Block.Cell(name), Block.Cell(signature), Block.Cell(info))
-
-    Block.Row(cells, tone, Unset, if anchored then member.name else Unset)
+    // The description is the row's note, a line beneath it across the table, rather than a
+    // column: it reads as prose, and the signature keeps the width.
+    val cells: List[Block.Cell] = List(Block.Cell(kind), Block.Cell(name), Block.Cell(signature))
+    Block.Row(cells, tone, Unset, if anchored then member.name else Unset, info)
 
   // A member's rows: one for the member, whether it is a term, a type or both (a type and its
   // companion, an export of both), from its type where it has one, and one for each overload
@@ -110,10 +110,9 @@ object ApiPages:
   def table(heading: Text, signature: Text, rows: List[Block.Row]): List[Block] =
     val columns: List[Block.Column] =
       List
-        ( Block.Column(Inline.text(t""), sizing = Block.Sizing.Fixed(10)),
-          Block.Column(Inline.text(heading), sizing = Block.Sizing.Fixed(20)),
-          Block.Column(Inline.text(signature), sizing = Block.Sizing.Fixed(45)),
-          Block.Column(Inline.text(t"Description"), sizing = Block.Sizing.Fixed(25)) )
+        ( Block.Column(Inline.text(t""), sizing = Block.Sizing.Fixed(14)),
+          Block.Column(Inline.text(heading), sizing = Block.Sizing.Fixed(22)),
+          Block.Column(Inline.text(signature), sizing = Block.Sizing.Fixed(64)) )
 
     if rows.nil then Nil else List(Block.Table(columns, rows, Unset))
 
@@ -400,7 +399,13 @@ object ApiPages:
         if entity.key == current then Tone.Accent else if entity.removed then Tone.Muted else Unset
 
       val destination: Inline.Destination = Inline.Destination.Local(entity.url)
-      Block.TreeNode(Inline.text(entity.name), children, tone, Unset, open, destination)
+
+      // The name is code, a type's in the type accent and a term's in the term's.
+      val accent: Token.Accent =
+        if entity.template.present then Token.Accent.Typal else Token.Accent.Term
+
+      val label: List[Inline] = List(Signatures.code(List(Token(entity.name, accent))))
+      Block.TreeNode(label, children, tone, Unset, open, destination)
 
     val roots: List[Api.Entity] = api.roots
     val (own, dependencies) = roots.partition(ownBeneath(api, _))

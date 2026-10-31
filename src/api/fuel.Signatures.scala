@@ -81,10 +81,29 @@ object Signatures:
 
       Token(designator.name, accent, Unset, destination)
 
+    // A name reached through an export — `vacuous.Optional`, which `soundness` exports — is
+    // written as the export whose package is in scope or imported, `Optional` or
+    // `soundness.Optional`, since that is how the project's sources name it, and what a
+    // reader's purview can elide; its link is still the entity's own page.
+    def exported(designator: Designator): Optional[Designator] =
+      val forwarders: List[Api.Entity] = api.exporters.get(Api.key(designator)).getOrElse(Nil)
+
+      def through(parents: List[Designator]): Optional[Api.Entity] =
+        forwarders.seek: (e: Api.Entity) => e.parent.let(parents.has(_)).or(false)
+
+      through(scope.enclosing + scope.standard).or(through(scope.imports)).let: (e: Api.Entity) =>
+        if isType then e.tpe else e.term
+
     designator.parent match
       case parent: Designator =>
-        if scope.has(parent) then List(linked(designator, accent))
-        else
+        // A leaf alone hints at the whole name it was shortened from.
+        if scope.has(parent) then List(linked(designator, accent).copy(hint = designator.qualified))
+        else exported(designator).let: (alias: Designator) =>
+          this.designator(alias, api, scope) match
+            case head :: tail => head.copy(hint = designator.qualified) :: tail
+            case _            => Nil
+
+        . or:
           val separator: Text = parent match
             case Designator.Type(_, _) => t"#"
             case _                     => t"."

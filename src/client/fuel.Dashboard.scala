@@ -37,7 +37,7 @@ import java.util.concurrent as juc
 import soundness.{Query as _, *}
 
 import dysasymptotics.linearSize
-import pyrocosm.{Block, Control, Event, Inline, Input, Interface, Live, Panel, Tone, Tool}
+import pyrocosm.{Block, Control, Event, Hints, Inline, Input, Interface, Live, Panel, Tone, Tool}
 
 // The documents and the API as the web front-end `Tool` serves from the daemon: launched once,
 // for as long as the daemon lives, when a config says `serve`, and stopped by `fuel quit`. It
@@ -53,7 +53,7 @@ object Dashboard:
   // The results of a search, as a page; or what is wrong with the query.
   def searchPage(text: Text): List[Block] =
     val api: Api = Server.api
-    val scope: Scope = Scope.document(Server.imports)
+    val scope: Scope = Scope.document(Server.imports, Server.standard)
 
     Query.read(text) match
       case error: Query.Error =>
@@ -123,7 +123,7 @@ object Dashboard:
   private def render(entity: Api.Entity): List[Block] =
     Checking.exclusive:
       val api: Api = Server.api
-      val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Nil))
+      val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Nil), Server.standard)
       val resolver: Resolver = Resolver(api, scope)
 
       val scala: Embedding.ScalaCode =
@@ -176,14 +176,16 @@ final class Dashboard():
                 Panel.Role.Navigation,
                 Inline.text(t"Documents"),
                 navigation,
-                Panel.Priority.Important,
-                controls = List(search) ),
+                Panel.Priority.Important ),
+            // The search heads the main column, the full width of it, with its results beneath.
             Panel
               ( Panel.Id(t"content"),
                 Panel.Role.Primary,
                 Unset,
                 content,
-                Panel.Priority.Essential ) ),
+                Panel.Priority.Essential,
+                controls = List(search),
+                hints = Hints(pyrocosm.hints.web.Leading) ) ),
         // Every page is read under the reader's purview, which begins as the project's imports.
         purview = Scope.purview(Server.imports) )
 

@@ -39,6 +39,7 @@ import scala.collection.immutable as sci
 import soundness.*
 
 import pyrocosm.Block
+import stenography.Designator
 
 // The daemon's state: the corpus and the API model the latest `fuel compile` produced, from
 // whichever shell, the pages it rendered for the project's own documented entities (whose
@@ -65,6 +66,10 @@ object Server:
 
   @scala.caps.unsafe.untrackedCaptures
   @volatile
+  private var standard0: List[Designator] = Scope.standard
+
+  @scala.caps.unsafe.untrackedCaptures
+  @volatile
   private var glossary0: List[Block] = Nil
 
   private val edition0: juc.atomic.AtomicLong = juc.atomic.AtomicLong(0L)
@@ -75,7 +80,8 @@ object Server:
       api:      Api                        = Api.empty,
       pages:    sci.Map[Text, List[Block]] = sci.Map(),
       imports:  List[Text]                 = Nil,
-      glossary: List[Block]                = Nil )
+      glossary: List[Block]                = Nil,
+      standard: List[Designator]           = Scope.standard )
   :   Unit =
 
     corpus0 = corpus
@@ -83,6 +89,7 @@ object Server:
     pages0 = pages
     imports0 = imports
     glossary0 = glossary
+    standard0 = standard
     edition0.incrementAndGet()
 
     // The search index is built now, apart, rather than at the first keystroke.
@@ -94,6 +101,7 @@ object Server:
   def corpus: Optional[Corpus] = corpus0
   def api: Api = api0
   def imports: List[Text] = imports0
+  def standard: List[Designator] = standard0
   def glossary: List[Block] = glossary0
   def edition: Long = edition0.get
 
