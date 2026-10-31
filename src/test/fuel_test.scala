@@ -1958,7 +1958,7 @@ extension (doc: Doc) def titled: String = doc.title
             case Block.Table(columns, _, _) => columns.map(_.sizing)
             case _                          => Nil
 
-        . assert(_ == List(10, 20, 45, 25).map(Block.Sizing.Fixed(_)))
+        . assert(_ == List(14, 22, 64).map(Block.Sizing.Fixed(_)))
 
         test(m"a hierarchy's boxes are square-cornered and the drawing fits its width"):
           val svg: Text = chainSvg
@@ -2487,6 +2487,19 @@ entry .Doc   a document
         Scope.purview(List(t"sample", t"scala.Predef")).imports
 
       . assert(_ == purview)
+
+      test(m"the standard scope follows the project's -Yimports and -Yno-predef options"):
+        ( Scope.standardOf(Nil),
+          Scope.standardOf(List(t"-Yno-predef")),
+          Scope.standardOf(List(t"-Yimports:java.lang,proscenium,soundness")),
+          Scope.standardOf(List(t"-Yno-imports")) )
+
+      . assert: result =>
+          result ==
+            ( Scope.standard,
+              List(Designator(t"scala"), Designator(t"java.lang")),
+              List(Designator(t"java.lang"), Designator(t"proscenium"), Designator(t"soundness")),
+              Nil )
 
       val qualifiedSample: List[(Text, Optional[Text], Boolean)] =
         List

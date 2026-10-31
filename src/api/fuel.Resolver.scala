@@ -49,29 +49,56 @@ object Scope:
   val standard: List[Designator] =
     List(Designator(t"scala"), Designator(t"scala.Predef"), Designator(t"java.lang"))
 
+  // What every source of a project sees without importing it: the compiler's own three
+  // packages, or those the project's `-Yimports` option names instead, less `scala.Predef`
+  // under `-Yno-predef` and all of them under `-Yno-imports`. A name from one of them is
+  // written by its leaf, as the project's sources write it.
+  def standardOf(options: List[Text]): List[Designator] =
+    // The option is written `-Yimports:a,b` or as two words, which is how the configuration
+    // keeps it, since its options are cut at colons.
+    def value(options: List[Text]): Optional[Text] = options match
+      case option :: rest if option.starts(t"-Yimports:") => option.skip(t"-Yimports:".length)
+      case t"-Yimports" :: value :: _                     => value
+      case _ :: rest                                      => value(rest)
+      case _                                              => Unset
+
+    val named: Optional[List[Designator]] =
+      value(options).let: (value: Text) => value.cut(t",").filter(_ != t"").map(Designator(_))
+
+    val base: List[Designator] =
+      if options.has(t"-Yno-imports") then Nil else named.or(standard)
+
+    if options.has(t"-Yno-predef") then base.filter(_ != Designator(t"scala.Predef")) else base
+
   // An entity's scope: itself and its parents, with the imports its overlay gives it.
-  def of(entity: Api.Entity, imports: List[Text]): Scope =
+  def of(entity: Api.Entity, imports: List[Text], standard: List[Designator] = standard): Scope =
     def parents(designator: Optional[Designator]): List[Designator] =
       designator.lay(Nil: List[Designator]): (d: Designator) => List(d) + parents(d.parent)
 
-    Scope(List(entity.term, entity.tpe) + parents(entity.parent), imports.map(Designator(_)))
+    val enclosing: List[Designator] = List(entity.term, entity.tpe) + parents(entity.parent)
+    Scope(enclosing, imports.map(Designator(_)), standard)
 
   // A document's scope: no enclosing entity, and the project's imports.
-  def document(imports: List[Text]): Scope = Scope(Nil, imports.map(Designator(_)))
+  def document(imports: List[Text], standard: List[Designator] = standard): Scope =
+    Scope(Nil, imports.map(Designator(_)), standard)
 
   // The imports as a reader's starting purview: each is the page of the package or object it
   // names, which is where a renderer elides them from, and what a reader may toggle.
   def purview(imports: List[Text]): Purview =
     Purview(imports.map { (name: Text) => Purview.Entry(t"/api/$name", name) })
 
-case class Scope(enclosing: List[Designator], imports: List[Designator]):
-  def all: List[Designator] = enclosing + imports + Scope.standard
+case class Scope
+  ( enclosing: List[Designator],
+    imports:   List[Designator],
+    standard:  List[Designator] = Scope.standard ):
+
+  def all: List[Designator] = enclosing + imports + standard
 
   // Whether a designator's members may be named by their leaf in this scope, which is what
   // decides how a signature elides a qualifier. The imports resolve a reference but do not
   // elide: a page is rendered once and read under each reader's purview (Pyrocosm's), which
   // begins as these imports and is what elides them, so a signature writes them in full.
-  def has(designator: Designator): Boolean = (enclosing + Scope.standard).has(designator)
+  def has(designator: Designator): Boolean = (enclosing + standard).has(designator)
 
 // `page` is the URL of the page the references are on, which a name the page's own fragments
 // define leads to.
@@ -173,7 +200,7 @@ class Resolver(api: Api, scope0: Scope, page: Optional[Text] = Unset) extends Li
     val own: List[Api.Entity] = fit(entity(designator).let(List(_)).or(Nil))
 
     val tiers: List[List[Api.Entity]] =
-      List(own, tier(scope.enclosing), tier(scope.imports), tier(Scope.standard))
+      List(own, tier(scope.enclosing), tier(scope.imports), tier(scope.standard))
 
     tiers.seek(!_.nil).or(Nil)
 
