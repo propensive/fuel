@@ -460,10 +460,11 @@ object Hierarchy:
     val w: Text = layout.width.toString.tt
     val h: Text = layout.height.toString.tt
 
-    // Drawn at its own size where there is room, and scaled down to the width there is where
-    // there is not; the inline style outranks the stylesheet's sizing of a drawing.
+    // Drawn at its own size, as every hierarchy is, never scaled down to the width there is:
+    // one wider than its column is panned across by the pointer (Pyrocosm's holder). The
+    // inline style outranks the stylesheet's sizing of a drawing.
     val xmlns: Text = t"http://www.w3.org/2000/svg"
-    val style: Text = t"width: min(100%, ${w}px); height: auto"
+    val style: Text = t"width: ${w}px; height: auto"
     val open: Text = t"""<svg xmlns="$xmlns" viewBox="0 0 $w $h" role="img" style="$style">"""
     t"""$open<g>$edges$stems</g><g>$boxes</g><g>$labels</g></svg>"""
 

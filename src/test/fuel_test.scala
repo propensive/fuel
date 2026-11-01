@@ -1960,11 +1960,11 @@ extension (doc: Doc) def titled: String = doc.title
 
         . assert(_ == List(14, 22, 64).map(Block.Sizing.Fixed(_)))
 
-        test(m"a hierarchy's boxes are square-cornered and the drawing fits its width"):
+        test(m"a hierarchy's boxes are square-cornered and the drawing keeps its own width"):
           val svg: Text = chainSvg
-          (svg.contains(t"rx="), svg.contains(t"width: min(100%"))
+          (svg.contains(t"rx="), svg.contains(t"width: min("), svg.contains(t"px; height: auto"))
 
-        . assert(_ == (false, true))
+        . assert(_ == (false, false, true))
 
       suite(m"Results"):
         test(m"+Shape finds what returns a Doc"):
