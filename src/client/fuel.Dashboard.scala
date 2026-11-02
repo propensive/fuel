@@ -32,11 +32,10 @@
                                                                                                   */
 package fuel
 
-import java.util.concurrent as juc
-
 import soundness.{Query as _, *}
 
 import dysasymptotics.linearSize
+import pyrocosm.WebService
 import pyrocosm.{Block, Control, Event, Hints, Inline, Input, Interface, Live, Panel, Tone, Tool}
 
 // The documents and the API as the web front-end `Tool` serves from the daemon: launched once,
@@ -63,57 +62,15 @@ object Dashboard:
       case query: Query =>
         ApiPages.search(api, text, api.search(query), Resolver(api, scope), scope)
 
-  // Where the documents on `port` are found: under the hub's origin for port 0, which the hub
-  // holds, and at the port itself otherwise.
-  def address(port: Int): Text =
-    if port == 0 then t"http://localhost:${pyrocosm.Hubs.port}/fuel/"
-    else t"http://localhost:${port.toString.tt}/"
+  // Where the documents on `port` are found.
+  def address(port: Int): Text = Fuel.address(port)
 
-  val web: Tool.Web = new Tool.Web:
-    def port: Int = 0
-
-    // The frontend holds the monitor and the error page, which outlive it; vouched pure so it
-    // can be stopped from another invocation.
-    @scala.caps.unsafe.untrackedCaptures
-    @volatile
-    private var frontend: Optional[pyrocosm.WebFrontend] = Unset
-
-    // Serves until `stop`. A ticker drives every live dashboard a few times a second for as
-    // long as the front-end runs: it is what notices a new compile.
-    def serve(port: Int)(using Monitor, Probate): Unit =
-      import webserverErrorPages.minimalErrorPage
-
-      val serving: juc.atomic.AtomicBoolean = juc.atomic.AtomicBoolean(true)
-      val live: juc.ConcurrentHashMap[Dashboard, Boolean] = juc.ConcurrentHashMap()
-
-      val running: pyrocosm.WebFrontend =
-        scala.caps.unsafe.unsafeAssumePure:
-          pyrocosm.WebFrontend(port)
-
-      frontend = running
-
-      try
-        async:
-          while serving.get do
-            live.keySet.nn.forEach: dashboard => dashboard.nn.tick()
-            snooze(0.25*Second)
-
-        running.serve: () =>
-          val dashboard = Dashboard()
-          live.put(dashboard, true)
-
-          // The handler lives as long as the session; vouched pure, as the frontend's are.
-          val handle: Event -> Unit = scala.caps.unsafe.unsafeAssumePure: (event: Event) =>
-            event match
-              case Event.Closed => live.remove(dashboard)
-              case _            => ()
-
-            dashboard.handle(event)
-
-          (dashboard.interface, handle)
-      finally serving.set(false)
-
-    def stop(): Unit = frontend.let(_.stop())
+  // Served until `stop`, as every tool's web front-end is (`WebService`): every tab has a
+  // session of its own, since every page has a URL of its own, and the ticker drives each a
+  // few times a second for as long as the front-end runs, which is what notices a new compile.
+  val web: Tool.Web = WebService(): () =>
+    val dashboard = Dashboard()
+    WebService.Session(dashboard.interface, dashboard.handle, () => dashboard.tick())
 
   // The URL of a document: its section and its path, each segment encoded.
   def docUrl(section: Text, path: Text): Text = Doc.url(section, path)

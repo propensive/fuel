@@ -37,7 +37,7 @@ package fuel
 import soundness.{Language as _, Token as _, *}
 
 import dysasymptotics.{linearAccess, linearSize}
-import pyrocosm.{Block, Inline, Language, Token, Tone}
+import pyrocosm.{Block, Digests, Inline, Language, Token, Tone}
 
 object Embedding:
   // A Scala fence, highlighted by the checker — typechecked, in a compile with a classpath —
@@ -95,7 +95,7 @@ object Embedding:
     // The units of kept fragments not yet entered into the session, newest first, and the key
     // of the last fence in a session's chain.
     private var pending: List[(Text, Text)] = Nil
-    private var chain: Text = Hashes.of(base, t"fixture", fixture.let(_(1)).or(t""))
+    private var chain: Text = Digests.of(base, t"fixture", fixture.let(_(1)).or(t""))
 
     // The kept fragments' units, entered before a fence is compiled after them.
     private def flush(): Unit =
@@ -417,8 +417,8 @@ object Embedding:
       val key: Text =
         val own: Text = info.join(t" ")
 
-        if session then Hashes.of(chain, own, content)
-        else Hashes.of(base, own, content, preamble.follows.map(fragment(_)).join(t"\u0000"))
+        if session then Digests.of(chain, own, content)
+        else Digests.of(base, own, content, preamble.follows.map(fragment(_)).join(t"\u0000"))
 
       if session then chain = key
 

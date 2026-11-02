@@ -35,6 +35,7 @@ package fuel
 import soundness.*
 
 import codepages.utf8Codepage
+import pyrocosm.Tels
 import pyrocosm.{Block, Inline, Tone}
 
 // The glossary: terms defined in TEL files, each `define <term>` holding a Markdown
@@ -59,10 +60,9 @@ object Glossary:
   val scheme: Text = t"glossary:"
 
   // The lines `headed` adds before the file's own.
-  private def headed(text: Text): Text =
-    if text.trim.starts(t"tel ") then text else t"tel 1.0\n\n$text"
+  private def headed(text: Text): Text = Tels.headed(text)(0)
 
-  private def added(text: Text): Int = if text.trim.starts(t"tel ") then 0 else 2
+  private def added(text: Text): Int = Tels.headed(text)(1)
 
   // The text of a node's child by keyword: its atoms, inline then the indented source, joined.
   private def child(node: Tel, keyword: Text): Optional[Text] =

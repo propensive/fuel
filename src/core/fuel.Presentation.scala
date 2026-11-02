@@ -36,6 +36,7 @@ import soundness.*
 
 import codepages.utf8Codepage
 import dysasymptotics.{linearAccess, linearSize}
+import pyrocosm.Tels
 import pyrocosm.{Block, Inline, Tone}
 
 // A presentation: a TEL document of `slide`s, each holding Markdown or a block of code, shown in
@@ -80,10 +81,9 @@ object Presentation:
   case class Slide(parts: List[Part], line: Int)
 
   // The lines `headed` adds before the file's own.
-  private def headed(text: Text): Text =
-    if text.trim.starts(t"tel ") then text else t"tel 1.0\n\n$text"
+  private def headed(text: Text): Text = Tels.headed(text)(0)
 
-  private def added(text: Text): Int = if text.trim.starts(t"tel ") then 0 else 2
+  private def added(text: Text): Int = Tels.headed(text)(1)
 
   // A presentation read from its text, with a diagnostic for each part not understood; or the
   // diagnostic which says the text is not TEL.

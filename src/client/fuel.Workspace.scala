@@ -34,6 +34,9 @@ package fuel
 
 import soundness.*
 
+import pyrocosm.Tool
+import pyrocosm.decodables.boolean
+
 // The project as the settings describe it: its root (the parent of the `.pyrocosm` holding
 // `fuel/config.tel`, or the invocation's directory where there is none), the classpath — the
 // dependencies the project's sources, and the embedded code, are compiled against — the
@@ -56,30 +59,22 @@ object Workspace:
       checkLinks: Boolean       = false )
 
   def load(directory: Text)(using Cli, Interpreter, Configurator): Config =
-    // The file's directory is `.pyrocosm/fuel`, so the root is three levels up.
-    val root: Text =
-      Fuel.repoFile(directory).lay(directory): (file: Path on Linux) =>
-        val pyrocosm: Optional[Path on Linux] = file.parent.let: (dir: Path on Linux) => dir.parent
-        val project: Optional[Path on Linux] = pyrocosm.let: (dir: Path on Linux) => dir.parent
-        project.lay(directory): (dir: Path on Linux) => dir.encode
+    // The project the directory is in, as `Tool` finds it: its root is what every path in the
+    // configuration resolves against.
+    val project: Tool.Project = Fuel.project(directory)
+    val root: Text = project.root.encode
 
-    def entries(setting: Optional[Text]): List[Text] =
-      val split: List[Text] =
-        setting.lay(Nil: List[Text]): (text: Text) => text.cut(t":").filter(_ != t"")
-
-      split.map: (entry: Text) => if entry.starts(t"/") then entry else t"$root/$entry"
+    def entries(setting: Optional[Text]): List[Text] = project.entries(setting).map(_.encode)
 
     val options: List[Text] =
       ui.ScalacOption().lay(Nil: List[Text]): (text: Text) => text.cut(t":").filter(_ != t"")
 
-    val fixtures: Optional[Text] =
-      ui.Fixtures().let: (entry: Text) => if entry.starts(t"/") then entry else t"$root/$entry"
+    val fixtures: Optional[Text] = ui.Fixtures().let(project.resolve(_).encode)
 
     val imports: List[Text] =
       ui.Imports().lay(Nil: List[Text]): (text: Text) => text.cut(t":").filter(_ != t"")
 
-    val output: Optional[Text] =
-      ui.Output().let: (entry: Text) => if entry.starts(t"/") then entry else t"$root/$entry"
+    val output: Optional[Text] = ui.Output().let(project.resolve(_).encode)
 
     Config
       ( root,
