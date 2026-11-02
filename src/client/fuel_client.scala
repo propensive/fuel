@@ -62,7 +62,6 @@ object CompileFailed extends Status(4, t"a code fragment did not do as its pream
 // Fuel's user interface, in one namespace: its subcommands, flags and settings.
 object ui:
   val Compile = Subcommand("compile", "compile the configured directories of Markdown documents")
-  val Serve   = Subcommand("serve", "serve the compiled documents on the web until Ctrl+C")
   val Show    = Subcommand("show", "render one document in the terminal")
   val Present = Subcommand("present", "show a presentation's slides in a browser until Ctrl+C")
 
@@ -77,8 +76,6 @@ object ui:
 
   val Document =
     Setting[Text](t"document", t"a directory of Markdown documents, relative to the project root")
-
-  val Port = Setting[Text](t"port", t"the port on which `fuel serve` serves the documents")
 
   val ScalacOption =
     Setting[Text](t"scalacOption", t"a compiler option for the fragments, as `-deprecation`")
@@ -188,41 +185,6 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
   val tty: Boolean = summon[Resident].cliInput == ethereal.Terminus.Terminal
 
   arguments match
-    // `fuel serve [--port]`: the compiled documents, served until Ctrl+C.
-    case ui.Serve() :: _ =>
-      val port: Int = ui.Port() match
-        case text: Text => safely(text.as[Int]).or(fuel.Dashboard.web.port)
-        case _          => fuel.Dashboard.web.port
-
-      execute:
-        given Stdio = summon[Invocation].stdio
-        val stdio: Stdio = summon[Stdio]
-        val aborted: juc.atomic.AtomicBoolean = juc.atomic.AtomicBoolean(false)
-
-        trap:
-          case Signal(Interrupt.Int, _, _, _) =>
-            aborted.set(true)
-            SignalResponse.Accept
-
-        async(fuel.Dashboard.web.serve(port))
-        val address: Text = fuel.Dashboard.address(port)
-        Out.println(t"fuel: serving the documents at $address (Ctrl+C to stop)")
-
-        // On a terminal the launcher forwards Ctrl+C as a byte rather than a signal, so the
-        // input is read for it here.
-        def loop(): Unit =
-          if tty then
-            while stdio.in.available() > 0 do if stdio.in.read() == 3 then aborted.set(true)
-
-          if !aborted.get then
-            snooze(0.25*Second)
-            loop()
-
-        loop()
-        fuel.Dashboard.web.stop()
-        Out.println(t"fuel: the server has stopped")
-        Exit.Ok
-
     // `fuel present <file>`: a presentation's slides in a browser, until Ctrl+C.
     case ui.Present() :: rest =>
       val config: Workspace.Config = Workspace.load(directory)

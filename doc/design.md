@@ -520,9 +520,9 @@ src/test/
    running one shared `Interface`. The navigation panel's `Block.Tree` has a root per section
    and a node per document, each with an `Action`; `handle(Event.Pressed(action))` sets the
    primary panel's `Live[List[Block]]` to that document's blocks. A compile while serving
-   rebuilds the tree and re-shows the same document if it still exists. `fuel serve` runs the
-   same in the foreground until Ctrl+C; a bare `serve` in config runs it from the daemon's
-   start (`Tool` does this given the `web` field).
+   rebuilds the tree and re-shows the same document if it still exists. `fuel serve` starts it
+   in the daemon, in the background, until `fuel serve stop`; a bare `serve` in config runs it
+   from the daemon's start (`Tool` does both, given the `web` field).
 6. **`fuel show <file>`** (cheap, and proves principle 1): convert one file and run a
    one-panel `Interface` on `TerminalFrontend`. Can slip to M4 if the terminal frontend needs
    anything Fuel does not have.
