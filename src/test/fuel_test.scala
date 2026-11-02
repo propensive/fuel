@@ -835,7 +835,7 @@ slide
         first.prose(t"k2", prose)
         first.finish(t"1.0", t"classpath", t"environment")
         val second = Store(output, false)
-        (second.fragment(t"k1") == fragment, second.prose(t"k2") == prose, second.hits.get)
+        (second.fragment(t"k1") == fragment, second.prose(t"k2") == prose, second.hits())
 
       . assert(_ == (true, true, 2))
 

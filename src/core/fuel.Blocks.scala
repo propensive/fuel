@@ -35,7 +35,7 @@ package fuel
 import soundness.{Language as _, Token as _, *}
 
 import dysasymptotics.linearSize
-import pyrocosm.{Block, Inline, Language, Token}
+import pyrocosm.{Block, Inline, Language, Markdowns, Token}
 
 // A link a document makes, by the line it is on — its paragraph's first, since phrasing has no
 // line of its own — for the check which runs once every document is converted, when every
@@ -54,10 +54,9 @@ object Linkage:
 
 case class Linkage(line: Int, target: Linkage.Target)
 
-// A Markdown document as Pyrocosm blocks, node for node: Pyrocosm's own conversion
-// (`Presentable`'s `markdown`), with the fenced code blocks dispatched to the embeddings in
-// scope. Inline HTML is dropped, as the parser already comments it out; an inline image becomes
-// a link to it. To be offered upstream once it has settled here.
+// A Markdown document as Pyrocosm blocks: Pyrocosm's own conversion (`Markdowns`), with its
+// hooks answered here — the fenced code blocks dispatched to the embeddings in scope, inline
+// code linked through the linker, links resolved against the page, and headings anchored.
 object Blocks:
   // Where a document is on the site, by its section and its path within it: what a relative
   // link and a `#fragment` resolve against.
@@ -108,58 +107,50 @@ object Blocks:
     // An anchor a fence chose for itself, noted so that a link to it is known to land.
     def anchored(id: Text): Unit = if !anchors0.has(id) then anchors0 = id :: anchors0
 
+    // This conversion's answers to Pyrocosm's hooks, with the embeddings in scope.
+    def hooks(embeddings: List[Embedding]): Markdowns.Hooks = new Markdowns.Hooks:
+      private val context: Context = Context.this
+
+      // A fence's anchor is the id its embedding gave it (or its sentinel carries), which a
+      // reference to a name it defines leads to. The embeddings count lines from zero.
+      override def fence(info: List[Text], content: Text, line: Int): List[Block] =
+        val blocks: List[Block] = Blocks.fence(info, content, line - 1, embeddings)
+
+        blocks.each: (block: Block) =>
+          block match
+            case Block.Code(_, _, _, _, _, id) => id.let(context.anchored(_))
+            case _                             => ()
+
+        blocks
+
+      override def code(code: Text, line: Int): Inline = snippet(code, context, line)
+
+      override def link(destination: Text, content: List[Inline], line: Int): Inline =
+        Blocks.link(destination, content, context, line)
+
+      override def heading(level: Int, content: List[Inline], line: Int): Block =
+        Block.Heading(level, content, context.anchor(slug(plain(content))))
+
   def of(markdown: Markdown of Layout, embeddings: List[Embedding], context: Context): List[Block] =
-    all(markdown.children, embeddings, context)
+    Markdowns.convert(markdown, context.hooks(embeddings))
 
   def of(markdown: Markdown of Layout, embeddings: List[Embedding], linker: Linker = Linker.none)
   :   List[Block] =
 
     of(markdown, embeddings, Context(linker))
 
-  // A heading's anchor from its text, as GitHub makes one: lowercased, every character which
-  // is not a letter, a digit, a space or a hyphen dropped, and each space a hyphen.
-  def slug(text: Text): Text =
-    val kept: String = text.s.toLowerCase.nn.filter: c => c.isLetterOrDigit || c == ' ' || c == '-'
-
-    Text(kept.replace(' ', '-').nn)
+  // A heading's anchor from its text, as GitHub makes one.
+  def slug(text: Text): Text = Markdowns.slug(text)
 
   // The first heading's text, of whatever level, which is what a document is called.
-  def title(blocks: List[Block]): Optional[Text] = blocks match
-    case Block.Heading(_, content, _) :: _ => plain(content)
-    case _ :: tail                         => title(tail)
-    case _                                 => Unset
+  def title(blocks: List[Block]): Optional[Text] = Markdowns.title(blocks)
 
   // The text of a run of phrasing, with no styling.
-  def plain(inlines: List[Inline]): Text = inlines.map(plainInline).join(t"")
+  def plain(inlines: List[Inline]): Text = Markdowns.plain(inlines)
 
-  private def plainInline(inline: Inline): Text = inline match
-    case Inline.Textual(text)         => text
-    case Inline.Phrase(content)       => plain(content)
-    case Inline.Emphasis(content)     => plain(content)
-    case Inline.Strong(content)       => plain(content)
-    case Inline.Toned(_, content)     => plain(content)
-    case Inline.Link(_, content)      => plain(content)
-    case Inline.Annotated(content, _) => plain(content)
-    case Inline.Snippet(_, tokens)    => tokens.map(_.text).join(t"")
-    case _                            => t""
-
-  private def all(nodes: List[Layout], embeddings: List[Embedding], context: Context): List[Block] =
-    nodes match
-      case head :: tail => layout(head, embeddings, context) + all(tail, embeddings, context)
-      case _            => Nil
-
-  private def phrasing(nodes: List[Prose], context: Context, line: Int): List[Inline] =
-    nodes.map(prose(_, context, line))
-
-  // A run of Markdown phrasing — a frame's label, say — as inlines: the first paragraph the
-  // text parses to, or the text itself when it has none.
+  // A run of Markdown phrasing — a frame's label, say — as inlines, linked through the linker.
   def inline(text: Text, linker: Linker = Linker.none): List[Inline] =
-    def first(nodes: List[Layout]): List[Inline] = nodes match
-      case Layout.Paragraph(_, prose*) :: _ => phrasing(List.from(prose), Context(linker), 1)
-      case _ :: tail                        => first(tail)
-      case _                                => Inline.text(text)
-
-    first(Parser.parse(text).children)
+    Markdowns.inline(text, Context(linker).hooks(Nil))
 
   // Inline code, whose tokens link when the linker says it is a reference: a qualified name a
   // link for each segment. A sigil (`#Name` for a type, `.name` for a term) says what is meant
@@ -172,22 +163,6 @@ object Blocks:
     then context.refer(line, Linkage.Target.Sigil(code))
 
     Inline.Snippet(Language.Plain, tokens)
-
-  private def prose(node: Prose, context: Context, line: Int): Inline = node match
-    case Prose.Textual(text)       => Inline.Textual(text)
-    case Prose.Emphasis(children*) => Inline.Emphasis(phrasing(List.from(children), context, line))
-    case Prose.Strong(children*)   => Inline.Strong(phrasing(List.from(children), context, line))
-    case Prose.Code(code)          => snippet(code, context, line)
-    case Prose.Softbreak           => Inline.Textual(t" ")
-    case Prose.Linebreak           => Inline.Break()
-    case Prose.HtmlInline(_)       => Inline.Textual(t"")
-
-    case Prose.Link(destination, _, content*) =>
-      link(destination, phrasing(List.from(content), context, line), context, line)
-
-    case Prose.Image(destination, _, content*) =>
-      val phrases: List[Inline] = phrasing(List.from(content), context, line)
-      Inline.Link(Inline.Destination.External(destination), phrases)
 
   // A destination's path and its fragment, after `#`.
   private def split(destination: Text): (Text, Optional[Text]) =
@@ -278,22 +253,9 @@ object Blocks:
 
   // Every fenced block of a document, in the order its conversion meets them: depth first,
   // through block quotes and list items.
-  def fences(markdown: Markdown of Layout): List[Fence] = gathered(markdown.children)
-
-  private def gathered(nodes: List[Layout]): List[Fence] = nodes match
-    case head :: tail => within(head) + gathered(tail)
-    case _            => Nil
-
-  private def within(node: Layout): List[Fence] = node match
-    case Layout.CodeBlock(line, info, content)  => List(Fence(info, content, line.n0))
-    case Layout.BlockQuote(_, layouts*)         => gathered(List.from(layouts))
-    case Layout.BulletList(_, _, items*)        => listed(List.from(items))
-    case Layout.OrderedList(_, _, _, _, items*) => listed(List.from(items))
-    case _                                      => Nil
-
-  private def listed(items: List[List[Layout]]): List[Fence] = items match
-    case head :: tail => gathered(head) + listed(tail)
-    case _            => Nil
+  def fences(markdown: Markdown of Layout): List[Fence] =
+    Markdowns.fences(markdown).map: (fence: Markdowns.Fence) =>
+      Fence(fence.info, fence.content, fence.line - 1)
 
   // An embedding which answers every fence with its sentinel, numbered in the order the
   // conversion meets them, which is the order of `fences`: a document's prose, with a place for
@@ -321,82 +283,11 @@ object Blocks:
       List(sentinel)
 
   // A document's prose with each sentinel replaced by its fence's output.
-  def fill(blocks: List[Block], outputs: List[List[Block]]): List[Block] = blocks match
-    case head :: tail => filled(head, outputs) + fill(tail, outputs)
-    case _            => Nil
+  def fill(blocks: List[Block], outputs: List[List[Block]]): List[Block] =
+    Markdowns.rewrite(blocks):
+      case Block.Code(Output.fence, _, _, index: Int, _, _) =>
+        val empty: List[Block] = Nil
+        outputs.skip(index).head.or(empty)
 
-  private def filled(block: Block, outputs: List[List[Block]]): List[Block] = block match
-    case Block.Code(Output.fence, _, _, index: Int, _, _) =>
-      val empty: List[Block] = Nil
-      outputs.skip(index).head.or(empty)
-
-    case Block.Quotation(content) =>
-      List(Block.Quotation(fill(content, outputs)))
-
-    case Block.Group(content) =>
-      List(Block.Group(fill(content, outputs)))
-
-    case Block.Listing(ordered, items) =>
-      val refilled: List[Block.Item] = items.map: (item: Block.Item) =>
-        item.copy(content = fill(item.content, outputs))
-
-      List(Block.Listing(ordered, refilled))
-
-    case other =>
-      List(other)
-
-  // Inline HTML (an HTML comment the parser read inline, say) is for the author, not the
-  // reader: a paragraph of nothing else is no paragraph.
-  private def hidden(node: Prose): Boolean = node match
-    case Prose.HtmlInline(_) => true
-    case Prose.Softbreak     => true
-    case _                   => false
-
-  private def layout(node: Layout, embeddings: List[Embedding], context: Context): List[Block] =
-    node match
-      case Layout.Paragraph(_, prose*) if prose.nonEmpty && prose.forall(hidden) =>
-        Nil
-
-      case Layout.Paragraph(line, prose*) =>
-        List(Block.Paragraph(phrasing(List.from(prose), context, line.n1)))
-
-      case Layout.Heading(line, level, prose*) =>
-        val content: List[Inline] = phrasing(List.from(prose), context, line.n1)
-        List(Block.Heading(level, content, context.anchor(slug(plain(content)))))
-
-      case Layout.BlockQuote(_, layouts*) =>
-        List(Block.Quotation(all(List.from(layouts), embeddings, context)))
-
-      case Layout.ThematicBreak(_) =>
-        List(Block.Rule())
-
-      // An HTML comment is for the author, not the reader; other HTML is shown as it is.
-      case Layout.HtmlBlock(_, html) if html.trim.starts(t"<!--") && html.trim.ends(t"-->") =>
-        Nil
-
-      case Layout.HtmlBlock(_, html) =>
-        List(Block.Code(Language(t"html"), Embedding.lines(html)))
-
-      // A fence's anchor is the id its embedding gave it (or its sentinel carries), which a
-      // reference to a name it defines leads to.
-      case Layout.CodeBlock(line, info, content) =>
-        val blocks: List[Block] = fence(info, content, line.n0, embeddings)
-
-        blocks.each: (block: Block) =>
-          block match
-            case Block.Code(_, _, _, _, _, id) => id.let(context.anchored(_))
-            case _                             => ()
-
-        blocks
-
-      case Layout.BulletList(_, _, items*) =>
-        val listed: List[Block.Item] =
-          List.from(items).map: (item: List[Layout]) => Block.Item(all(item, embeddings, context))
-
-        List(Block.Listing(false, listed))
-
-      case Layout.OrderedList(_, _, _, _, items*) =>
-        val listed: List[Block.Item] =
-          List.from(items).map: (item: List[Layout]) => Block.Item(all(item, embeddings, context))
-
-        List(Block.Listing(true, listed))
+      case _ =>
+        Unset

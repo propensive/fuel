@@ -32,16 +32,10 @@
                                                                                                   */
 package fuel
 
-import java.util.concurrent as juc
-
-import scala.collection.mutable as scm
-
 import soundness.*
 
-import palettes.solarizedDarkGaugePalette
-import pyrocosm.{Block, Board, Status, TerminalRenderer}
-import tableStyles.thickTableStyle
-import textMetrics.uniformMetric
+import pyrocosm.standardRendering.given
+import pyrocosm.{Block, Board, Boards}
 
 // What a compile has done against what it has to do, and where its problems go. The work is
 // counted in units of fixed weight — a dependency jar walked, the sources built, their output
@@ -76,50 +70,31 @@ object Progress:
 final class Progress(board: Optional[Board], width: Int)(using Stdio):
   import Progress.Phase
 
-  // The counts, read and written under the lock, from the compiler's thread and the board's.
-  private val totals: scm.HashMap[Phase, Int] = scm.HashMap()
-  private val done: scm.HashMap[Phase, Int] = scm.HashMap()
-  private val found: juc.ConcurrentLinkedQueue[Block] = juc.ConcurrentLinkedQueue()
-  private val renderer: TerminalRenderer = TerminalRenderer()
+  private val gauge: pyrocosm.Progress[Phase] = pyrocosm.Progress[Phase](_.weight, _.caption)
+  private val reporter: Boards.Reporter = Boards.reporter(board, width)
+
+  private def shown(): Unit = board.let(_.gauge(gauge.status, gauge.text))
 
   // How much of a phase there is; said again when a guess gives way to a count.
-  def plan(phase: Phase, total: Int): Unit = synchronized { totals(phase) = total.max(0) }
+  def plan(phase: Phase, total: Int): Unit = gauge.plan(phase, total)
 
   // One more unit of a phase done, and the gauge brought up to date.
   def step(phase: Phase, count: Int = 1): Unit =
-    val (now, total, part) = synchronized:
-      val now: Int = done.getOrElse(phase, 0) + count
-      done(phase) = now
-      (now, totals.getOrElse(phase, now), fraction)
-
-    val caption: Text = t"${phase.caption}, ${now.toString.tt} of ${total.toString.tt}"
-    board.let(_.gauge(Status.Fraction(part), caption))
+    gauge.step(phase, count)
+    shown()
 
   // A phase done whole, whatever was planned for it.
   def finish(phase: Phase): Unit =
-    synchronized { done(phase) = totals.getOrElse(phase, 1) }
-    step(phase, 0)
+    gauge.finish(phase)
+    shown()
 
-  // The weight done over the weight planned; under the lock, or by a caller holding it.
-  def fraction: Double = synchronized:
-    val planned: Double =
-      totals.iterator.map { (phase, total) => (total*phase.weight).toDouble }.sum
-
-    val completed: Double =
-      totals.iterator
-      . map: (phase, total) => (done.getOrElse(phase, 0).min(total)*phase.weight).toDouble
-      . sum
-
-    if planned == 0.0 then 0.0 else (completed/planned).min(1.0)
+  // The weight done over the weight planned.
+  def fraction: Double = gauge.fraction
 
   // A problem, shown as it is found: on the board, or on the terminal where there is none.
-  def report(block: Block): Unit =
-    found.add(block)
-    def print(): Unit = renderer.blocks(List(block), width).each(Out.println(_))
-    board.lay(print()): (board: Board) => board.append(block)
-
-  def reports(blocks: List[Block]): Unit = blocks.each(report)
+  def report(block: Block): Unit = reporter.report(block)
+  def reports(blocks: List[Block]): Unit = reporter.reports(blocks)
 
   // Every problem found, in order; and whether they were already printed as they came.
-  def problems: List[Block] = List.from(found.iterator.nn.asScala)
-  def streamed: Boolean = board.absent
+  def problems: List[Block] = reporter.problems
+  def streamed: Boolean = reporter.streamed

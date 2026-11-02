@@ -36,6 +36,7 @@ import soundness.*
 
 import codepages.utf8Codepage
 import dysasymptotics.linearSize
+import pyrocosm.Tels
 import pyrocosm.{Block, Inline}
 
 // The TEL preamble a fenced block may begin with, before a line holding `##` alone, when its
@@ -103,11 +104,10 @@ object Preamble:
       (lines.keep(index.n0).join(t"\n"), lines.skip(index.n0 + 1).join(t"\n"))
 
   // The `tel 1.0` line a preamble need not repeat, supplied when absent.
-  private def headed(text: Text): Text =
-    if text.trim.starts(t"tel ") then text else t"tel 1.0\n\n$text"
+  private def headed(text: Text): Text = Tels.headed(text)(0)
 
   // The lines `headed` adds before the preamble's own.
-  private def added(text: Text): Int = if text.trim.starts(t"tel ") then 0 else 2
+  private def added(text: Text): Int = Tels.headed(text)(1)
 
   // A preamble parsed from its text, or the TEL error if it is not TEL.
   def parse(text: Text): Preamble | Tel.Error =

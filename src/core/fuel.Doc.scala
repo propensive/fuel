@@ -34,7 +34,7 @@ package fuel
 
 import soundness.*
 
-import pyrocosm.{Block, Tone}
+import pyrocosm.{Block, Digests, Tone}
 
 object Doc:
   // The URL of a document on the site: its section and its path, each segment encoded.
@@ -153,9 +153,11 @@ object Doc:
 
     val bare: Blocks.Context = Blocks.Context(Linker.none, page, glossary)
     val unlinked: List[Block] = Blocks.of(markdown, List(Blocks.sentinels()), bare)
-    val shape: Text = Hashes.of(Output.Prose.encode(Output.Prose(unlinked, Nil)))
+    val shape: Text = Digests.of(Output.Prose.encode(Output.Prose(unlinked, Nil)))
     val url: Text = page.let(_.url).or(t"")
-    val key: Text = Hashes.of(base, t"prose", url, shape, imports.join(t"\n"), declared.join(t"\n"))
+
+    val key: Text =
+      Digests.of(base, t"prose", url, shape, imports.join(t"\n"), declared.join(t"\n"))
 
     val prose: Output.Prose = cache.prose(key).or:
       linker.learn(imports)

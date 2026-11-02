@@ -38,7 +38,7 @@ import scala.collection.immutable as sci
 
 import soundness.*
 
-import pyrocosm.Block
+import pyrocosm.{Block, Digests}
 import stenography.Designator
 
 // The daemon's state: the corpus and the API model the latest `fuel compile` produced, from
@@ -115,10 +115,12 @@ object Server:
   def hash(entry: Text): Text =
     val path = java.nio.file.Path.of(entry.s).nn
 
-    if !java.nio.file.Files.isRegularFile(path) then Hashes.path(entry) else
+    def tree: Text = Digests.tree(unsafely(entry.as[Path on Linux]))
+
+    if !java.nio.file.Files.isRegularFile(path) then tree else
       val modified: Long = java.nio.file.Files.getLastModifiedTime(path).nn.toMillis
       val key: (Text, Long, Long) = (entry, java.nio.file.Files.size(path), modified)
-      hashes.computeIfAbsent(key, _ => Hashes.path(entry)).nn
+      hashes.computeIfAbsent(key, _ => tree).nn
 
   // A jar's model, walked once per version of the jar.
   def jar(path: Text, shadowed: List[Text] = Nil)(walk: => Api): Api =
