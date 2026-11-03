@@ -72,6 +72,7 @@ frame                   # a frame of an animation: its code, which must be there
 restart                 # in a session, a fresh one begins at this fence
 typecheck               # how far the compiler goes: parse, typecheck (the default) or compile;
 feature experimental.captureChecking   # a language import from this fence on
+run                     # compile the fence and run it: what it prints is shown beneath it
 ```
 
 `caution` and `param` mark ranges as `highlight` and `error` do. Repeated `frame`s make the
@@ -83,7 +84,11 @@ which a bar at the foot of the page plays. Each Scala frame is compiled on its o
 is highlighted. With `session` configured, every fence follows the ones before it, so a
 tutorial reads as one REPL session; a fence which names a mode is checked but, to a checker
 which runs fences, not run; and a line ending `// does not compile` is compiled alone and must
-fail. [`doc/markdown.md`](../doc/markdown.md) shows each.
+fail. A fence which says `run` is compiled through every phase and run, as Flame runs a line,
+and what it writes to the standard streams is shown beneath it as a terminal would show it,
+styled, a colour it leaves to the terminal being the reader's own; what it throws is an error,
+as `errors` says. Its output is captured once, with the fence, and changes only when the fence
+does, or with `--force`. [`doc/markdown.md`](../doc/markdown.md) shows each.
 
 ## Presentations
 

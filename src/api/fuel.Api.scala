@@ -199,6 +199,11 @@ object Api:
 
     def hidden: Boolean = doc.let(_.hidden).or(false)
 
+    // Whether this is an export: every declaration a forwarder, however many the clause made (a
+    // type and a term, or one per overload), which is one member of what it forwards to.
+    def exported: Boolean =
+      alias.present || (!declarations.nil && !declarations.exists(!_.exported))
+
     // A parameter, which its parent's page lists apart from its members.
     def isParameter: Boolean = !declarations.nil && declarations.all(_.kind.isParameter)
 

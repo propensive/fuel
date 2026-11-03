@@ -62,7 +62,13 @@ object ApiPages:
   :   Block.Row =
 
     val exported: Boolean = d.exported || member.alias.present
-    val keyword: Text = if exported then t"export" else d.kind.keyword
+
+    // An extension's row says `def`: the clause it extends is said once, above its group.
+    val keyword: Text =
+      if exported then t"export"
+      else if d.kind == Api.Kind.Extension then t"def"
+      else d.kind.keyword
+
     val kind: List[Inline] = List(Signatures.code(List(Token(keyword, Token.Accent.Keyword))))
     val accent: Token.Accent = if d.kind.isType then Token.Accent.Typal else Token.Accent.Term
 
@@ -90,14 +96,16 @@ object ApiPages:
 
   // A member's rows: one for the member, whether it is a term, a type or both (a type and its
   // companion, an export of both), from its type where it has one, and one for each overload
-  // of a method — a companion object, which the type's row covers, is not one.
+  // of a method — a companion object, which the type's row covers, is not one; and an export
+  // is one row however many forwarders its clause made.
   def rows(member: Api.Entity, anchored: Boolean, api: Api, scope: Scope, resolver: Resolver)
   :   List[Block.Row] =
 
     val principal: Optional[Api.Declaration] = member.template.or(member.definition)
 
     val overloads: List[Api.Declaration] =
-      if member.template.absent then member.overloads
+      if member.exported then Nil
+      else if member.template.absent then member.overloads
       else
         member.overloads.filter: d =>
           d.kind == Api.Kind.Def || d.kind == Api.Kind.Given || d.kind == Api.Kind.Extension
@@ -110,7 +118,11 @@ object ApiPages:
   def table(heading: Text, signature: Text, rows: List[Block.Row]): List[Block] =
     val columns: List[Block.Column] =
       List
-        ( Block.Column(Inline.text(t""), sizing = Block.Sizing.Fixed(14)),
+        ( Block.Column
+            ( Inline.text(t""),
+              alignment = Block.Alignment.End,
+              sizing    = Block.Sizing.Fixed(14),
+              minor     = true ),
           Block.Column(Inline.text(heading), sizing = Block.Sizing.Fixed(22)),
           Block.Column(Inline.text(signature), sizing = Block.Sizing.Fixed(64)) )
 
@@ -255,7 +267,10 @@ object ApiPages:
     val overloads: List[Block] = entity.overloads.bind: (d: Api.Declaration) =>
       List(Signatures.block(entity.name, d, api, scope))
 
-    val sections: List[Block] = definition + template + overloads
+    // An export is one signature, of what it exports, whatever forwarders its clause made.
+    val sections: List[Block] =
+      if entity.exported then List(Signatures.exported(entity, api, scope))
+      else definition + template + overloads
 
     // A link to an entity by its name, where it has a page.
     def link(key: Text): List[Inline] = api(key).lay(Inline.text(key)): (e: Api.Entity) =>

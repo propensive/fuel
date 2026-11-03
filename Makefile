@@ -64,6 +64,10 @@ tools:
 # of the commit, at version `<next version>-<hex>` — for a dependent repository to pin in its
 # etc/refs before the next release. `LOCAL=1` stages and installs without publishing. The last line
 # printed is the pin. See snapshot.sh in propensive/.github.
+# Install every library pinned in etc/refs, transitively, from GitHub Releases, as CI does.
+sync-deps:
+	./etc/shared sync-deps.sh
+
 snapshot:
 	./etc/shared snapshot.sh fuel "$$(./mill show fuel.core.publishVersion | tr -d '"')"
 

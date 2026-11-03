@@ -119,6 +119,16 @@ experimental.captureChecking` turns a language feature on from that fence onward
 joins the session when it compiled as its preamble asked; one marked `errors show` never does,
 and one which failed leaves only its imports.
 
+A fence which says `run` is compiled through every phase and run, and what it prints is shown
+beneath it, as a terminal would show it:
+
+```scala fuel
+run
+##
+import stdios.javaLangSystemStdio, termcapDefinitions.xterm256Termcap
+Out.println(e"$Bold(Hello), world!")
+```
+
 A line ending in `// does not compile` is left out of its fence and compiled alone, in its
 place: it must fail, and its error is shown as a note on it.
 

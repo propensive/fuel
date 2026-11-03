@@ -65,7 +65,11 @@ object Signatures:
     enclosed(t"{", listed(refs, api, scope), t"}")
 
   // A designator's tokens: its leaf, or its segments each linked.
-  def designator(designator: Designator, api: Api, scope: Scope): List[Token] =
+  // A name is written `through` its export unless the export itself is being written, when its
+  // target is named as it is.
+  def designator(designator: Designator, api: Api, scope: Scope, through: Boolean = true)
+  :   List[Token] =
+
     val isType: Boolean = designator match
       case Designator.Type(_, _) => true
       case _                     => false
@@ -86,12 +90,15 @@ object Signatures:
     // `soundness.Optional`, since that is how the project's sources name it, and what a
     // reader's purview can elide; its link is still the entity's own page.
     def exported(designator: Designator): Optional[Designator] =
+      if through then exported0(designator) else Unset
+
+    def exported0(designator: Designator): Optional[Designator] =
       val forwarders: List[Api.Entity] = api.exporters.get(Api.key(designator)).getOrElse(Nil)
 
-      def through(parents: List[Designator]): Optional[Api.Entity] =
+      def via(parents: List[Designator]): Optional[Api.Entity] =
         forwarders.seek: (e: Api.Entity) => e.parent.let(parents.has(_)).or(false)
 
-      through(scope.enclosing + scope.standard).or(through(scope.imports)).let: (e: Api.Entity) =>
+      via(scope.enclosing + scope.standard).or(via(scope.imports)).let: (e: Api.Entity) =>
         if isType then e.tpe else e.term
 
     designator.parent match
@@ -113,7 +120,7 @@ object Signatures:
           val next: Token = linked(designator, accent).copy(chained = true)
           val continued: List[Token] = List(symbol(separator).copy(chained = true), next)
 
-          this.designator(parent, api, scope) + continued
+          this.designator(parent, api, scope, through) + continued
 
       case _ => List(linked(designator, accent))
 
@@ -220,6 +227,18 @@ object Signatures:
 
       case kind =>
         modifiers + List(keyword(kind.keyword), space, named) + clauses + result + parents
+
+  // An export's signature on its page: the clause which made it, naming what it forwards to —
+  // its alias, or else what its forwarder results in.
+  def exported(entity: Api.Entity, api: Api, scope: Scope): Block.Code =
+    val fallback: List[Token] =
+      entity.template.or(entity.definition).let(_.result).lay(List(plain(entity.name))):
+        (result: Syntax) => tokens(result, api, scope)
+
+    val target: List[Token] =
+      entity.alias.lay(fallback): (target: Designator) => designator(target, api, scope, false)
+
+    line(List(keyword(t"export"), space) + target)
 
   // The clauses an extension extends, after its keyword: `extension (text: String)`.
   def group(group: List[Syntax], api: Api, scope: Scope): List[Token] =

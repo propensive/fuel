@@ -74,13 +74,6 @@ entry .Linkage   a link a document makes, by the line it is on, for the check
       entry #url
     entry .Sigil     a sigilled reference nothing resolved
       entry #reference
-    entry .telSchematic   the schema BinTEL writes a target under, in the member form
-
-entry .TargetSchema   the derived schema of a link's target, wrapped by `atMember`
-  entry .derived
-entry .atMember       a derived sum's schematic, typed at a member position as TEL types a sum there
-entry .membered       definitions with each member typed as a reference to a select retyped as the member form
-entry .selectMember   a sum's type at a member position: a struct holding a select reference
 
 entry .Glossary   terms defined in TEL files, each with a definition and perhaps a link, which prose names in brackets
   entry #terms
@@ -113,6 +106,7 @@ entry .Linker   where a reference in a document leads: the hook by which prose a
 entry .Checker   how a Scala fragment is highlighted: tokenized, or in a warm compiler session
   entry #check    a fragment highlighted as far as its mode asks
   entry #enter    a unit compiled into the session, in scope for every later check
+  entry #run      a class the session compiled, loaded and initialised: an object's body run
   entry #build    a project's own sources compiled and saved
   entry #compiles whether this checker compiles at all
   entry #context  the session's own context, good only on the compiler's thread
@@ -166,6 +160,7 @@ entry .Preamble   the TEL preamble a ` ```scala fuel ` fence begins with: Amok's
   entry #loop          whether it starts again at its end
   entry #restart       whether a fresh session begins at this fence
   entry #features      the language features turned on from this fence
+  entry #run           whether the fragment is run, its output shown beneath it
   entry .Errors   what a diagnostic means: `Fail` (the default), `Show` (errors are expected) or `Ignore`
   entry .Mode     how far the compiler goes: `Parse`, `Typecheck` or `Compile`
   entry .Mark     a range of the fragment marked with a style and a caption
@@ -183,6 +178,13 @@ entry .Preamble   the TEL preamble a ` ```scala fuel ` fence begins with: Amok's
   entry .split      a fence's content as its preamble and its code, at the `##` line
   entry .parse      a preamble from its text, or the TEL error
   entry .diagnostic a preamble's TEL error as a diagnostic at its place in the file
+
+entry .Runner   runs a fragment's object as Flame runs a line, and reads what it wrote as a terminal would
+  entry .run      a body run on its own thread, its standard streams captured as one text
+  entry .styled   captured text as the lines and styled runs of an output block
+  entry .Outcome  what a run wrote, and what it threw
+    entry #text
+    entry #error
 
 entry .Selection   a range of a fragment, named by its first and last characters or literally, refined by line and occurrence
   entry #start       the text the range begins with

@@ -201,22 +201,34 @@ object Embedding:
       if !session then
         Framing(preamble.follows.map(fragment(_)).join(t"", t"\n", t"\n"), t"", wrapper, context)
       else
-        val followed: List[Text] = preamble.follows.map(fragment(_))
         val (fileScope, inner) = replayed
-        // A `feature` is recorded (a checker which runs fragments turns it on) but not turned
-        // on in fuel's own compile: a feature whose checking is a phase after typer, such as
-        // capture checking, would reject in the session's full compile a fragment typer
-        // accepted, and fuel checks only as far as typer.
-        val imports: Text = fileScope.map { (line: Text) => t"$line\n" }.join(t"")
-        val opening: Text = t"object ${objectName(count)} {\n"
-        val body: Text = (inner + followed).map { (text: Text) => t"$text\n" }.join(t"")
+        enclosed(preamble, context, fileScope, inner)
 
-        val (open, close) = context match
-          case harlequin.Scala.Context.Term => (t"val x${count.show} = {\n", t"\n}")
-          case harlequin.Scala.Context.Type => (t"type X${count.show} =\n", t"")
-          case _                            => (t"", t"")
+    // A fragment as the session compiles it: an object of its name holding the imports in scope
+    // (the file's, then the session's), what it follows, and the fragment, as a value or a type
+    // where its context says so — which is also how a fragment is compiled to be run.
+    private def enclosed
+      ( preamble:  Preamble,
+        context:   Optional[harlequin.Scala.Context],
+        fileScope: List[Text],
+        inner:     List[Text] )
+    :   Framing =
 
-        Framing(imports + opening + body + open, close + t"\n}", 0, Unset)
+      val followed: List[Text] = preamble.follows.map(fragment(_))
+      // A `feature` is recorded (a checker which runs fragments turns it on) but not turned
+      // on in fuel's own compile: a feature whose checking is a phase after typer, such as
+      // capture checking, would reject in the session's full compile a fragment typer
+      // accepted, and fuel checks only as far as typer.
+      val imports: Text = fileScope.map { (line: Text) => t"$line\n" }.join(t"")
+      val opening: Text = t"object ${objectName(count)} {\n"
+      val body: Text = (inner + followed).map { (text: Text) => t"$text\n" }.join(t"")
+
+      val (open, close) = context match
+        case harlequin.Scala.Context.Term => (t"val x${count.show} = {\n", t"\n}")
+        case harlequin.Scala.Context.Type => (t"type X${count.show} =\n", t"")
+        case _                            => (t"", t"")
+
+      Framing(imports + opening + body + open, close + t"\n}", 0, Unset)
 
     // The fixture, compiled before the document's first fragment: it opens the session when it
     // compiles, and is a problem at its own place, and left out, when it does not.
@@ -370,7 +382,11 @@ object Embedding:
       val id: Text = preamble.id.or(t"fragment-${count.show}")
       val context: Optional[harlequin.Scala.Context] = preamble.scalaContext
       val language: Text = preamble.language.or(info.head.or(t"scala"))
-      val mode: Preamble.Mode = preamble.mode.or(Preamble.Mode.Typecheck)
+      // A fragment to be run is compiled through every phase, since it is run from what that
+      // emits; one only parsed cannot be.
+      val mode: Preamble.Mode =
+        if preamble.run && preamble.mode != Preamble.Mode.Parse then Preamble.Mode.Compile
+        else preamble.mode.or(Preamble.Mode.Typecheck)
 
       val wrapper: Int = context match
         case harlequin.Scala.Context.Term => 10  // `val x = {\n`
@@ -399,10 +415,26 @@ object Embedding:
         else if code.trim == t"" then described
         else described + List(Preamble.Frame(code))
 
+      // A fragment is run when its preamble asks and it can be: one only parsed, a type, or an
+      // animation cannot, which is a problem at the preamble's `run` line.
+      val runnable: Boolean = preamble.run && {
+        val line: Int = header.lay(fence + 1): (text: Text) =>
+          fence + 2 + text.cut(t"\n").indexed.seek(_(0).trim == t"run").let(_(1).n0).or(0)
+
+        val reason: Optional[Text] =
+          if mode == Preamble.Mode.Parse then t"A fragment which is only parsed cannot be run."
+          else if context == harlequin.Scala.Context.Type then t"A type cannot be run."
+          else if !frames.nil then t"An animated fragment cannot be run."
+          else Unset
+
+        reason.let: (text: Text) => report(Block.Location(path, line), text)
+        reason.absent
+      }
+
       def compile(): List[Block] =
         if !frames.nil then animated(frames, preamble, language, framed, mode, checked, id, start)
         else if language == t"scala"
-        then embedPlain(code, preamble, framed, mode, checked, id, start)
+        then embedPlain(code, preamble, framed, mode, checked, id, start, runnable)
         else
           val bare: Framing = Framing(t"", t"", 0, Unset)
 
@@ -556,7 +588,8 @@ object Embedding:
         mode:     Preamble.Mode,
         checked:  Boolean,
         id:       Text,
-        start:    Int )
+        start:    Int,
+        run:      Boolean )
     :   List[Block] =
 
       // The lines marked as not compiling are blanked out of the fragment proper, so that
@@ -591,10 +624,56 @@ object Embedding:
           val restored: Block.Code = marked.fold(block): (block: Block.Code, index: Int) =>
             negativeLine(block, code, marked, index, framing, mode, start)
 
-          restored :: reports
+          val output: List[Block] =
+            if run && checked && !failed then ran(positive, framing, preamble, start) else Nil
+
+          restored :: reports + output
 
         case _ =>
           List(Block.Code(Language.Scala, lines(code), Nil, start, Unset, id))
+
+    // A fragment run, once it compiled: entered into the session as an object where `join` did
+    // not already enter it (a `context term` fragment, one whose errors are shown, or any
+    // outside a session), then its object loaded, which runs its body, with what it writes
+    // shown beneath it; what it throws is a failure, as its `errors` says.
+    private def ran(code: Text, framing: Framing, preamble: Preamble, start: Int): List[Block] =
+      val name: Text = objectName(count)
+
+      val entered: Boolean = history match
+        case Joined.Object(`name`, _, _) :: _ => true
+
+        case _ =>
+          val unit: Text =
+            if session then framing.unit(code)
+            else enclosed(preamble, preamble.scalaContext, Nil, Nil).unit(code)
+
+          checker.enter(t"$name.scala", unit)
+
+      if !entered then
+        report(Block.Location(path, start), t"The fragment could not be compiled to be run.")
+        Nil
+      else
+        val outcome: Runner.Outcome = Runner.run(checker.run(t"$name$$"))
+        val (text, runs) = Runner.styled(outcome.text)
+
+        val output: List[Block] =
+          if text == t"" then Nil else List(Block.Output(text, false, runs))
+
+        val failure: List[Block] = outcome.error.lay(Nil): (error: Throwable) =>
+          val message: Text = t"The fragment threw ${error.toString.tt}."
+          val location: Block.Location = Block.Location(path, start)
+
+          val diagnostic: Block =
+            Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(message)))
+
+          if preamble.errors == Preamble.Errors.Fail then problems0 = diagnostic :: problems0
+          List(diagnostic)
+
+        if preamble.errors == Preamble.Errors.Show && outcome.error.absent then
+          val message: Text = t"This fragment is marked `errors show`, but it ran without error."
+          report(Block.Location(path, start), message)
+
+        output + failure
 
     // One line marked as not compiling, compiled in its place: it must fail, and its first
     // error is a note on it, in the block whose line is now taken from that run, so that its
@@ -696,8 +775,9 @@ object Embedding:
         case Preamble.Errors.Fail =>
           errors.each: (error: Block) => problems0 = error :: problems0
 
+        // A fragment to be run may show the error it throws instead.
         case Preamble.Errors.Show =>
-          if checked && errors.nil then
+          if checked && errors.nil && !preamble.run then
             val message: Text = t"This fragment is marked `errors show`, but it compiled."
             report(Block.Location(path, start), message)
 

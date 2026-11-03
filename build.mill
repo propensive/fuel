@@ -133,6 +133,7 @@ object settings:
     "anthology-core",            // the compiler: Scalac, Universe
     "anthology-scala",           // and its session
     "hellenism-jvm",             // LocalClasspath
+    "yossarian-core",            // Pty: a run fragment's output, as a terminal shows it
     "stratiform-core",           // TEL: a fence's preamble
     "ambience-core",             // systems.javaBaseSystem
     "galilei-jvm",               // the filesystem: the document directories

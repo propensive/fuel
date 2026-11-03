@@ -49,6 +49,7 @@ object Checker:
       harlequin.Scala.highlight(code, context)
 
     def enter(name: Text, unit: Text): Boolean = false
+    def run(name: Text): Unit = ()
     def build(sources: Map[Text, Text], output: Text): List[Notice] = Nil
     def context: Optional[Contexts.Context] = Unset
     def compiles: Boolean = false
@@ -63,6 +64,11 @@ trait Checker:
   // Compiles a unit into the session under its own source name, so that what it defines stays
   // in scope for every later check, as a REPL's lines do for one another; true if it compiled.
   def enter(name: Text, unit: Text): Boolean
+
+  // Loads a class the session compiled — an object's, `fuel_x_3$` — over the session's
+  // classpath, and initialises it, which runs an object's body; nothing where the session keeps
+  // no classes.
+  def run(name: Text): Unit
 
   // Compiles a project's own sources, as one compile in the session, and writes what it emits
   // — classfiles and TASTy — beneath `output`, so that they can be inspected and put on a
@@ -147,6 +153,26 @@ object Checking:
             def compiler(): dotty.tools.dotc.Compiler = frontend.compiler
             override def context(): Optional[Contexts.Context] = frontend.context
 
+      // What every entered unit compiled, by the path of its classfile, and the loader which
+      // runs a fragment over it: parent-first over the session's classpath, on which nothing the
+      // session compiles is found; one loader for the session, so that an earlier object's
+      // state outlives its fence, as the compiler's symbol for it does.
+      val entered: juc.ConcurrentHashMap[String, Data] = juc.ConcurrentHashMap()
+
+      lazy val loader: ClassLoader =
+        val urls: scala.Array[java.net.URL | Null] =
+          classpath.entries.stdlib.map { (entry: Classpath.Entry) => entry.javaUrl }.toArray
+
+        val parent: ClassLoader = java.net.URLClassLoader(urls, ClassLoader.getPlatformClassLoader)
+
+        new ClassLoader(parent):
+          override def findClass(name: String | Null): Class[?] =
+            import scala.unsafeExceptions.canThrowAny
+            val data: Data | Null = entered.get(name.nn.replace('.', '/').nn + ".class")
+            if data == null then throw ClassNotFoundException(name)
+            val bytes: scala.Array[Byte] = Array.unsafeJvm(data)
+            defineClass(name, bytes, 0, bytes.length).nn
+
       // The checker captures the session, which `body` never outlives: it is vouched pure so
       // that `body` may take a plain `Checker`.
       val checker: Checker = scala.caps.unsafe.unsafeAssumePure:
@@ -162,7 +188,16 @@ object Checking:
                 harlequin.Scala.highlight(code, context)(using compiled)
 
           def enter(name: Text, unit: Text): Boolean =
-            compilation.compile(Map(name -> unit)).errors == 0
+            val process = compilation.compile(Map(name -> unit))
+
+            if process.errors == 0 then
+              process.classfiles.each: (path, data) =>
+                entered.put(path.encode.s, data)
+                ()
+
+            process.errors == 0
+
+          def run(name: Text): Unit = Class.forName(name.s, true, loader)
 
           def build(sources: Map[Text, Text], output: Text): List[Notice] =
             val process = compilation.compile(sources)

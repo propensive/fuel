@@ -69,9 +69,12 @@ import pyrocosm.{Block, Inline}
 //                                 # `typecheck` (the default when none is said) or `compile`
 //                                 # (every phase, which is where capture checking reports)
 //   feature experimental.captureChecking   # a language import, this fragment onward
+//   run                           # compile the fragment and run it: what it writes to the
+//                                 # standard streams is shown beneath it, styled as it was
 //
 // A fragment which says a mode is checked by fuel but never run by a checker which runs
-// fragments, so `typecheck` on its own marks one which opens a socket or a browser.
+// fragments, so `typecheck` on its own marks one which opens a socket or a browser; `run`
+// implies `compile`, and cannot be said with `parse`.
 object Preamble:
   // How far the compiler takes a fragment.
   enum Mode:
@@ -208,7 +211,8 @@ object Preamble:
           atoms(t"language").head,
           mode,
           flag(t"restart"),
-          atoms(t"feature") )
+          atoms(t"feature"),
+          flag(t"run") )
 
 case class Preamble
   ( context:  Optional[Text],
@@ -222,7 +226,8 @@ case class Preamble
     language: Optional[Text]       = Unset,
     mode:     Optional[Preamble.Mode] = Unset,
     restart:  Boolean              = false,
-    features: List[Text]           = Nil ):
+    features: List[Text]           = Nil,
+    run:      Boolean              = false ):
 
   def scalaContext: Optional[harlequin.Scala.Context] = context match
     case t"term" => harlequin.Scala.Context.Term

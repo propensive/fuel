@@ -232,6 +232,33 @@ object Inspection:
         parent.lay(Designator.Top(name)): (parent: Designator) =>
           if term then Designator.Term(parent, name) else Designator.Type(parent, name)
 
+    // What an export forwarder forwards to: the member its right-hand side selects, beneath the
+    // arguments it passes on; nothing where the tree cannot be read.
+    private def forwarded(symbol: Symbol): Optional[Designator] =
+      def target(tree: Tree): Optional[Symbol] = tree match
+        case Apply(fun, _)       => target(fun)
+        case TypeApply(fun, _)   => target(fun)
+        case Typed(expr, _)      => target(expr)
+        case Inlined(_, _, expr) => target(expr)
+        case Select(_, _)        => tree.symbol
+        case Ident(_)            => tree.symbol
+        case _                   => Unset
+
+      try
+        symbol.tree match
+          case DefDef(_, _, _, Some(rhs)) => target(rhs).let(designator(_))
+          case ValDef(_, _, Some(rhs))    => target(rhs).let(designator(_))
+          case _                          => Unset
+      catch case _: Throwable => Unset
+
+    // An exported term is a page elsewhere, as an exported type is; the first forwarder to say
+    // where names it for both.
+    private def forward(parent: Optional[Designator], name: Text, symbol: Symbol): Unit =
+      if symbol.flags.is(Flags.Exported) then forwarded(symbol).let: (target: Designator) =>
+        collected.computeIfPresent
+          ( Api.key(parent, name),
+            (_, e) => if e.nn.alias.present then e.nn else e.nn.copy(alias = target) )
+
     private def modifiers(symbol: Symbol): List[Text] =
       val flags = symbol.flags
 
@@ -756,6 +783,7 @@ object Inspection:
                 accepts  = accepts(symbol) )
 
           record(parent, name, own, declaration, false, where)
+          forward(parent, name, symbol)
           parameters(typeForm(parent, name), symbol.paramSymss, own)
         else if symbol.isValDef then
           val kind: Api.Kind =
@@ -802,6 +830,7 @@ object Inspection:
                 returns  = shape(result(symbol.info)) )
 
           record(parent, name, own, declaration, false, where)
+          forward(parent, name, symbol)
 
     // An alias's right-hand side, a bound type's bounds, or nothing for an opaque type's
     // underlying (which is not the API).

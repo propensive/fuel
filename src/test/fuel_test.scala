@@ -553,6 +553,93 @@ error oops
 
       . assert(_ == 1)
 
+    suite(m"Running"):
+      def parsed(markdown: Text, session: Boolean = true): Doc =
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          Doc.parse(t"doc/run.md", markdown, checker, session)
+
+      def outputs(doc: Doc): List[Block.Output] = doc.blocks.bind:
+        case output: Block.Output => List(output)
+        case _                    => Nil
+
+      def thrown(doc: Doc): List[Text] = doc.blocks.bind:
+        case Block.Diagnostic(Tone.Failure, _, Block.Paragraph(content) :: _, _, _) =>
+          List(Blocks.plain(content))
+
+        case _ =>
+          Nil
+
+      def fence(preamble: Text, code: Text): Text = t"```scala fuel\n$preamble\n##\n$code\n```\n"
+
+      test(m"a fragment run shows what it printed beneath its code"):
+        val doc: Doc = parsed(fence(t"run", t"println(\"hi\")"))
+        (outputs(doc), doc.problems)
+
+      . assert(_ == (List(Block.Output(t"hi\n")), Nil))
+
+      test(m"the standard streams are shown in the order written"):
+        val code: Text = t"println(\"a\")\nSystem.err.println(\"b\")\nprintln(\"c\")"
+        outputs(parsed(fence(t"run", code))).map(_.text)
+
+      . assert(_ == List(t"a\nb\nc\n"))
+
+      test(m"styled output keeps its colour and weight; a colour left to the terminal is unset"):
+        val esc: Text = t"27.toChar.toString"
+        val code: Text = t"println($esc + \"[1;31mred\" + $esc + \"[0m plain\")"
+        val found: List[Block.Output] = outputs(parsed(fence(t"run", code)))
+
+        val runs: List[(Int, Boolean, Boolean)] =
+          found.head.let(_.runs).or(Nil).map: (run: Block.Run) =>
+            (run.length, run.foreground.present, run.bold)
+
+        (found.map(_.text), runs)
+
+      . assert(_ == (List(t"red plain\n"), List((3, true, true), (7, false, false))))
+
+      test(m"a thrown exception is a failure at the fence, shown beneath the output"):
+        val doc: Doc = parsed(fence(t"run", t"println(\"before\")\nthrow Exception(\"boom\")"))
+        (outputs(doc).map(_.text), doc.problems.size, thrown(doc).exists(_.contains(t"boom")))
+
+      . assert(_ == (List(t"before\n"), 1, true))
+
+      test(m"with errors show, the exception is shown and is no problem"):
+        val doc: Doc = parsed(fence(t"run\nerrors show", t"throw Exception(\"boom\")"))
+        (doc.problems, thrown(doc).exists(_.contains(t"boom")))
+
+      . assert(_ == (Nil, true))
+
+      test(m"a fragment which is only parsed cannot be run"):
+        val doc: Doc = parsed(fence(t"parse\nrun", t"val x = 1"))
+        (outputs(doc), doc.problems.size)
+
+      . assert(_ == (Nil, 1))
+
+      test(m"a term fragment is run as an expression"):
+        outputs(parsed(fence(t"run\ncontext term", t"{ println(\"x\"); 1 + 1 }"))).map(_.text)
+
+      . assert(_ == List(t"x\n"))
+
+      test(m"a fragment run in a session sees what came before it"):
+        val first: Text = t"```scala\nval base = 41\n```\n\n"
+        val markdown: Text = first + fence(t"run", t"println(base + 1)")
+        outputs(parsed(markdown, true)).map(_.text)
+
+      . assert(_ == List(t"42\n"))
+
+      test(m"a fragment's output is kept with it, and not run again from the cache"):
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          val cache: Cache = Cache.Transient()
+          val text: Text = fence(t"run", t"println(System.nanoTime)")
+
+          def parse(): Doc =
+            Doc.parse(t"doc/run.md", text, checker, true, Unset, Linker.none, cache, t"base")
+
+          val one: List[Block.Output] = outputs(parse())
+          val two: List[Block.Output] = outputs(parse())
+          (one == two, one.size)
+
+      . assert(_ == (true, 1))
+
     suite(m"Showing"):
       test(m"a document is compiled by its path, and an animated block has steps in the terminal"):
         import hyphenations.englishHyphenation
@@ -724,6 +811,7 @@ slide
           inner.check(code, mode, context)
 
         def enter(name: Text, unit: Text): Boolean = inner.enter(name, unit)
+        def run(name: Text): Unit = inner.run(name)
 
         def build(sources: Map[Text, Text], output: Text): List[Notice] =
           inner.build(sources, output)
@@ -1181,6 +1269,32 @@ extension (doc: Doc) def titled: String = doc.title
           case api: Api => Applicables.decorate(api)
           case _        => Api.empty
 
+      // A package of exports, compiled on its own so that the other fixtures' counts stay as
+      // they are.
+      val exporting: Text = t"""package exporting
+
+case class Doc(title: String)
+
+object Doc:
+  def parse(text: String): Doc = Doc(text)
+  def parse(text: String, size: Int): Doc = Doc(text)
+
+object Exports:
+  export exporting.Doc
+  export exporting.Doc.parse
+"""
+
+      lazy val exported: Api =
+        val output3: Text =
+          Text(java.nio.file.Files.createTempDirectory("fuel-api3").nn.toString)
+
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          checker.build(Map(t"Exporting.scala" -> exporting), output3)
+
+        Inspection.walk(List(output3), Nil, entries) match
+          case api: Api => api
+          case _        => Api.empty
+
       def applicable(key: Text): List[(Text, Int, Int, Int, Optional[Text])] =
         decorated(key).lay(Nil: List[Api.Applicable])(_.extensions).map: (e: Api.Applicable) =>
           (e.key, e.tier, e.distance, e.reach, e.via)
@@ -1296,6 +1410,48 @@ extension (doc: Doc) def titled: String = doc.title
         . or(Nil)
 
       . assert(_.has(t"extension (text: String)"))
+
+      test(m"an extension's row says def, beneath the clause it extends"):
+        api0(t"sample.Util").let: (util: Api.Entity) =>
+          val scope: Scope = Scope.of(util, Nil)
+          val page: List[Block] = ApiPages.page(api0, util, Resolver(api0, scope), scope, Nil)
+
+          def cell(row: Block.Row, index: Int): Text = Blocks.plain(row.cells.stdlib(index).content)
+
+          page.bind:
+            case Block.Table(_, rows, _) =>
+              rows.filter { (row: Block.Row) => cell(row, 1) == t"twice" }.map(cell(_, 0))
+
+            case _ =>
+              Nil
+
+        . or(Nil)
+
+      . assert(_ == List(t"def"))
+
+      test(m"an export is one row, whatever forwarders it made, and its page one signature"):
+        val keys: List[Text] = List(t"exporting.Exports.Doc", t"exporting.Exports.parse")
+
+        val found: List[List[Text]] = keys.map: (key: Text) =>
+          exported(key).lay(Nil: List[Text]): (entity: Api.Entity) =>
+            val scope: Scope = Scope.of(entity, Nil)
+            val resolver: Resolver = Resolver(exported, scope)
+
+            val kinds: List[Text] =
+              ApiPages.rows(entity, true, exported, scope, resolver).map: (row: Block.Row) =>
+                Blocks.plain(row.cells.stdlib.head.content)
+
+            val signatures: List[Text] =
+              ApiPages.page(exported, entity, resolver, scope, Nil).bind:
+                case code: Block.Code => code.lines.map(_.tokens.map(_.text).join)
+                case _                => Nil
+
+            kinds + signatures
+
+        found
+
+      . assert: (found: List[List[Text]]) =>
+          found == List(List(t"export", t"export Doc"), List(t"export", t"export Doc.parse"))
 
       val sampleMarks: List[Inline] =
         List(Inline.Import(t"/api/sample", t"sample"), Inline.Bookmark(t"/api/sample", t"sample"))
@@ -1932,6 +2088,7 @@ extension (doc: Doc) def titled: String = doc.title
                 true,
                 definition = aliasTerm,
                 template = aliasType,
+                overloads = List(Api.Declaration(Api.Kind.Def, exported = true)),
                 alias = Designator(t"q.Text") )
 
           val paired: Api.Entity =
@@ -1953,12 +2110,23 @@ extension (doc: Doc) def titled: String = doc.title
 
         . assert(_ == (List(t"export"), List(t"case class")))
 
-        test(m"member tables share fixed column widths"):
+        test(m"member tables share fixed column widths, the keyword's minor and at the end"):
           ApiPages.table(t"Name", t"Signature", List(Block.Row(Nil))).bind:
-            case Block.Table(columns, _, _) => columns.map(_.sizing)
-            case _                          => Nil
+            case Block.Table(columns, _, _) =>
+              columns.map: (column: Block.Column) =>
+                (column.sizing, column.alignment, column.minor)
 
-        . assert(_ == List(14, 22, 64).map(Block.Sizing.Fixed(_)))
+            case _ =>
+              Nil
+
+        . assert: (columns: List[(Block.Sizing, Block.Alignment, Boolean)]) =>
+            val expected: List[(Block.Sizing, Block.Alignment, Boolean)] =
+              List
+                ( (Block.Sizing.Fixed(14), Block.Alignment.End, true),
+                  (Block.Sizing.Fixed(22), Block.Alignment.Start, false),
+                  (Block.Sizing.Fixed(64), Block.Alignment.Start, false) )
+
+            columns == expected
 
         test(m"a hierarchy's boxes are square-cornered and the drawing keeps its own width"):
           val svg: Text = chainSvg
