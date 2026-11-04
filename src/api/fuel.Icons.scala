@@ -56,7 +56,11 @@ import pyrocosm.Inline
 //                 one band; st-trait)
 //   lazy          undecided (l-val, l-given: the corners rounded; l-object, l-package: as they are)
 //   protected     undecided (p-given: a bar on the left; p-val, p-var, p-type: as they are)
-//   open, override, erased, infix, implicit   undecided (nothing drawn for them)
+//   erased        a slash through the glyph, at 45°, with a gap about it so that it shows
+//   override      a line beneath the glyph
+//   infix         a small square at mid-height either side, as if the glyph were placed infix
+//   implicit      nothing: it is deprecated
+//   open          undecided (nothing drawn for it)
 //   extension     a def with a small plus at the top right (e-def)
 //   enum case     a dot (c-case); on a class or object, a dot at the centre (c-class, c-object)
 object Icons:
@@ -199,7 +203,26 @@ object Icons:
 
         sheared.within(t"""$stripes<g mask="url(#fuel-striped)">""", t"</g>")
 
-    if has(t"final") then striped.copy(width = grid + 4).add(disc(1.2, 16, 11.3)) else striped
+    // A slash is cut through the glyph before it is drawn, so that it shows on a filled shape.
+    val slashed: Drawing =
+      if !has(t"erased") then striped else
+        val gap: Text =
+          t"""<defs><mask id="fuel-slashed"><rect width="100%" height="100%" fill="#fff"/>""" +
+            t"""<rect x="5.8" y="0.2" width="2.4" height="13.6" fill="#000" """ +
+            t"""transform="rotate(45 7 7)"/></mask></defs>"""
+
+        val slash: Text =
+          t"""<rect x="6.6" y="0.6" width="0.8" height="12.8" transform="rotate(45 7 7)"/>"""
+
+        striped.within(t"""$gap<g mask="url(#fuel-slashed)">""", t"</g>").add(slash)
+
+    val underlined: Drawing = if has(t"override") then slashed.add(rect(3, 12.6, 8, 1)) else slashed
+
+    val placed: Drawing =
+      if has(t"infix") then underlined.add(rect(0, 6.25, 1.5, 1.5), rect(12.5, 6.25, 1.5, 1.5))
+      else underlined
+
+    if has(t"final") then placed.copy(width = grid + 4).add(disc(1.2, 16, 11.3)) else placed
 
   // The glyph for a declaration, as an icon with no description of its own: the keyword beside
   // it says what it is, so a plain rendering says nothing twice.
