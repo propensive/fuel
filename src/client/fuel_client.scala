@@ -205,7 +205,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
     // `fuel search <query>`: the daemon's API, searched; `-Type` is a term of the query, so only
     // a `--flag` is not.
     case ui.Search() :: rest =>
-      ambient(search(rest.map(_()).filter(!_.starts(t"--")).join(t" ")))
+      ambient(searchApi(rest.map(_()).filter(!_.starts(t"--")).join(t" ")))
 
     case ui.Compile() :: _ =>
       val config: Workspace.Config = Workspace.load(directory)
@@ -671,7 +671,7 @@ private def show(config: Workspace.Config, directory: Text, operand: Optional[Te
 
 // Searches the API the daemon last compiled, printing each declaration found over its key and
 // its page.
-private def search(text: Text)(using Stdio): Exit | Tool.UsageError.type =
+private def searchApi(text: Text)(using Stdio): Exit | Tool.UsageError.type =
   if text.trim == t"" then
     Out.println(t"fuel: usage: fuel search <query>")
     Tool.UsageError

@@ -45,7 +45,7 @@ object Output:
   // under capture checking (Pyrocosm's `Channel.derivation.throwing` is the same).
   object derivation:
     given throwing: [error <: Hazard] => Tactic[error] =
-      scala.caps.unsafe.unsafeAssumePure[Tactic[error]](ThrowTactic[error, Any]())
+      scala.caps.unsafe.unsafeAssumePure[Tactic[error]](ThrowTactic[error]())
 
   // Each record's BinTEL is derived in its companion, once, where Pyrocosm's package-level
   // codecs are in scope as the model's own derivations see them; `decode` is `Unset` for bytes
