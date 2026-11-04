@@ -79,7 +79,8 @@ object ApiPages:
         List(Inline.Toned(Tone.Muted, Inline.text(Text(member.key.s.substring(0, end).nn))))
 
     val token: Token = Token(member.name, accent, Unset, Inline.Destination.Local(member.url))
-    val name: List[Inline] = where + List(Inline.Strong(List(Signatures.code(List(token)))))
+    val glyph: Inline = Icons.of(d.kind, d.modifiers)
+    val name: List[Inline] = where + List(glyph, Inline.Strong(List(Signatures.code(List(token)))))
 
     // An export's signature is what it exports, linked; any other's its clauses and result.
     val signature: List[Inline] =
@@ -179,7 +180,12 @@ object ApiPages:
       if entity.isPackage then List(Inline.Import(entity.url, entity.key), bookmark)
       else List(bookmark)
 
-    val title: List[Inline] = Inline.text(entity.name) + List(Inline.Textual(t" ")) + marks
+    // The glyph of the entity's principal declaration — its type's, where it has one — before
+    // its name.
+    val glyph: List[Inline] =
+      entity.template.or(entity.definition).let { d => List(Icons.of(d.kind, d.modifiers)) }.or(Nil)
+
+    val title: List[Inline] = glyph + Inline.text(entity.name) + List(Inline.Textual(t" ")) + marks
     val heading: Block = Block.Heading(1, title)
 
     val info: List[Block] = doc.let(_.info).lay(Nil: List[Block]): (text: Text) =>

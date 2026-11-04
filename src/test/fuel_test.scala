@@ -2110,6 +2110,40 @@ object Exports:
 
         . assert(_ == (List(t"export"), List(t"case class")))
 
+        test(m"a glyph of the keyword precedes a member's name, and the page's title"):
+          val declaration: Api.Declaration = Api.Declaration(Api.Kind.CaseClass)
+
+          val entity: Api.Entity =
+            Api.Entity(Designator.Top(t"p"), t"Doc", true, template = declaration)
+
+          val api: Api = Api(sci.Map(entity.key -> entity))
+          val resolver: Resolver = Resolver(api, scope)
+          val row: Block.Row = ApiPages.row(entity, declaration, true, api, scope, resolver)
+
+          val first: Optional[Inline] = row.cells.stdlib(1).content.head
+
+          first match
+            case Inline.Icon(source, alt) => (source.starts(t"<svg"), alt)
+            case _                        => (false, t"?")
+
+        . assert(_ == (true, t""))
+
+        test(m"a glyph is drawn on the grid, and its modifiers transform it"):
+          val plain: Text = Icons.markup(Api.Kind.Def, Nil)
+          val finished: Text = Icons.markup(Api.Kind.Def, List(t"final"))
+          val inlined: Text = Icons.markup(Api.Kind.Def, List(t"inline"))
+          val translucent: Text = Icons.markup(Api.Kind.Def, List(t"transparent"))
+          val hollow: Text = Icons.markup(Api.Kind.Def, List(t"abstract"))
+
+          ( plain.contains(t"""viewBox="0 0 14 14""""),
+            plain.contains(t"<rect"),
+            finished.contains(t"""viewBox="0 0 18 14"""") && finished.contains(t"<circle"),
+            inlined.contains(t"skewX"),
+            translucent.contains(t"<mask"),
+            hollow.contains(t"evenodd") )
+
+        . assert(_ == (true, true, true, true, true, true))
+
         test(m"member tables share fixed column widths, the keyword's minor and at the end"):
           ApiPages.table(t"Name", t"Signature", List(Block.Row(Nil))).bind:
             case Block.Table(columns, _, _) =>
