@@ -42,8 +42,9 @@ compile` prints it as the terminal renders one (`path:line:col: error`, the mess
 lines concerned numbered from the file, with the place underlined), and in the served document
 it follows the fragment, whose lines are numbered from the file too. Every link is checked
 too, once every document is compiled: a link to another document (`guide/x.md`, `../x.md`,
-resolved against the document's directory within its section) or to a place on one
-(`#set-up`, a heading's slug as GitHub makes it, or a fence's `id`), to an API page
+resolved against the document's directory as the files on disk relate, so that
+`../philosophy/x.md` from `doc/modules` leads into the section `doc/philosophy`) or to a place
+on one (`#set-up`, a heading's slug as GitHub makes it, or a fence's `id`), to an API page
 (`/api/gossamer.Text#length`) or a glossary term (`/glossary#interface`) must have a target, or
 it is a failure at its line; a link to the web is fetched only when `check-links` is set. A
 fence marked

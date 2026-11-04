@@ -2985,6 +2985,34 @@ entry .Doc   a document
 
       . assert(_ == (List(Inline.Destination.Local(t"/doc/doc/guide/b.md")), upward, List(3)))
 
+      test(m"a relative link leaving its section leads to the section holding its file"):
+        val sections: List[(Text, Text)] =
+          List((t"modules", t"/r/doc/modules"), (t"philosophy", t"/r/doc/philosophy"))
+
+        def placed(section: Text, path: Text, text: Text): Doc =
+          Doc.parse
+            ( path, text, Checker.tokenized, false, Unset, Linker.none, section = section,
+              root = t"/r/doc/$section", sections = sections )
+
+        val text: Text = t"[s](../../philosophy/safety.md#why)\n\n[n](../../nope/x.md)\n"
+        val a: Doc = placed(t"modules", t"guide/a.md", text)
+
+        val s: Doc = placed(t"philosophy", t"safety.md", t"# Safety\n\n## Why\n")
+
+        val corpus: Corpus =
+          Corpus
+            ( List
+                ( Corpus.Section(t"modules", t"/r/doc/modules", List(a)),
+                  Corpus.Section(t"philosophy", t"/r/doc/philosophy", List(s)) ) )
+
+        (links(a), lines(Links.check(corpus, Api.empty, Glossary.none)))
+
+      . assert:
+          _ == ( List
+                  ( Inline.Destination.Local(t"/doc/philosophy/safety.md", t"why"),
+                    Inline.Destination.External(t"../../nope/x.md") ),
+                 List(3) )
+
       test(m"a site link must name an entity, a member of it, or a glossary term"):
         val text: Text =
           t"[a](/api/sample.Doc#parse)\n\n[b](/api/sample.Nope)\n\n" +

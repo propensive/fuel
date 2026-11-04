@@ -48,8 +48,9 @@ object Doc:
   // session, each following the ones before it, when `session` says so, with the fixture
   // (its path and text) compiled first; `problems` are the fragments which did not do as
   // their preambles said. `section` is the section the document is in, which is what its
-  // anchors and relative links are resolved against; `glossary` has the terms its prose may
-  // name in brackets.
+  // anchors and relative links are resolved against, `root` its directory and `sections`
+  // every section's name and directory, which a link climbing out of it resolves through;
+  // `glossary` has the terms its prose may name in brackets.
   def parse
     ( path:     Text,
       text:     Text,
@@ -60,10 +61,12 @@ object Doc:
       cache:    Optional[Cache]          = Unset,
       base:     Text                     = t"",
       section:  Optional[Text]           = Unset,
-      glossary: Glossary                 = Glossary.none )
+      glossary: Glossary                 = Glossary.none,
+      root:     Optional[Text]           = Unset,
+      sections: List[(Text, Text)]       = Nil )
   :   Doc =
 
-    val page: Optional[Blocks.Page] = section.let(Blocks.Page(_, path))
+    val page: Optional[Blocks.Page] = section.let(Blocks.Page(_, path, root, sections))
 
     // The glossary's reference definitions follow the text, so that `[term]` is a link the
     // parser makes and no line of the document moves. A fence left open runs to the end of the
@@ -156,9 +159,11 @@ object Doc:
     val unlinked: List[Block] = Blocks.of(markdown, List(Blocks.sentinels()), bare)
     val shape: Text = Digests.of(Output.Prose.encode(Output.Prose(unlinked, Nil)))
     val url: Text = page.let(_.url).or(t"")
+    val sections: Text = page.let(_.context).or(t"")
 
     val key: Text =
-      Digests.of(base, t"prose", url, shape, imports.join(t"\n"), declared.join(t"\n"))
+      Digests.of
+        ( base, t"prose", url, sections, shape, imports.join(t"\n"), declared.join(t"\n") )
 
     val prose: Output.Prose = cache.prose(key).or:
       linker.learn(imports)

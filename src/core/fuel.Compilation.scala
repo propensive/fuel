@@ -45,7 +45,9 @@ object Compilation:
   // `linker` gives each document, by its section and its path, the linker its references
   // resolve through; with a `cache`, a document's prose and each of its fences is compiled only
   // when the key of its inputs is not kept, `base` giving the key of everything a document
-  // depends on beyond its own text, by its path; `glossary` has the terms its prose may name.
+  // depends on beyond its own text, by its path; `glossary` has the terms its prose may name;
+  // `sections` is every section's name and directory, which a relative link leaving its own
+  // section resolves through (a corpus gives its own when the regime gives none).
   case class Regime
     ( session:  Boolean                  = false,
       fixtures: Optional[Text]           = Unset,
@@ -53,7 +55,8 @@ object Compilation:
       linker:   (Text, Text) => Linker   = (_: Text, _: Text) => Linker.none,
       cache:    Optional[Cache]          = Unset,
       base:     Text => Text             = (_: Text) => t"",
-      glossary: Glossary                 = Glossary.none )
+      glossary: Glossary                 = Glossary.none,
+      sections: List[(Text, Text)]       = Nil )
 
   // A section's name is its directory's last segment.
   def name(root: Text): Text = root.cut(t"/").filter(_ != t"").reverse.head.or(root)
@@ -98,7 +101,8 @@ object Compilation:
             val doc: Doc =
               Doc.parse
                 ( within, text, checker, regime.session, fixture(path), linker, regime.cache,
-                  regime.base(t"${name(root)}/$within"), name(root), regime.glossary )
+                  regime.base(t"${name(root)}/$within"), name(root), regime.glossary, root,
+                  regime.sections )
 
             regime.progress(within, doc)
             recur(tail, docs + List(doc), skipped)
@@ -131,7 +135,7 @@ object Compilation:
 
         Doc.parse
           ( path, text, checker, regime.session, fixture, linker, regime.cache, regime.base(path),
-            section, regime.glossary )
+            section, regime.glossary, directory, regime.sections )
 
   // A document's fixture, when the regime names a directory holding one: the file at the
   // document's section and path within it (`<fixtures>/modules/logging.scala` for
@@ -165,4 +169,9 @@ object Compilation:
   def corpus(roots: List[Text], checker: Checker = Checker.tokenized, regime: Regime = Regime())
   :   Corpus =
 
-    Corpus(roots.map(section(_, checker, regime)))
+    val sections: List[(Text, Text)] =
+      if !regime.sections.nil then regime.sections
+      else roots.map { (root: Text) => (name(root), root) }
+
+    val complete: Regime = regime.copy(sections = sections)
+    Corpus(roots.map(section(_, checker, complete)))

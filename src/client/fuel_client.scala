@@ -714,8 +714,11 @@ private def compiled(config: Workspace.Config, path: Text): Optional[Doc] =
   val checked: Boolean = !config.classpath.nil && config.classpath.all(exists(_))
   val glossary: Glossary = glossaries(config)(0)
 
+  val sections: List[(Text, Text)] =
+    config.documents.map { (root: Text) => (Compilation.name(root), root) }
+
   val regime: Compilation.Regime =
-    Compilation.Regime(config.session, config.fixtures, glossary = glossary)
+    Compilation.Regime(config.session, config.fixtures, glossary = glossary, sections = sections)
 
   if checked then
     try Checking.session(config.classpath, config.options): (checker: Checker) =>
