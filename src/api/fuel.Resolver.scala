@@ -49,10 +49,11 @@ import stenography.{Designator, Syntax}
 // link, several are an ambiguity, none is plain text.
 object Scope:
   val standard: List[Designator] =
-    List(Designator(t"scala"), Designator(t"scala.Predef"), Designator(t"java.lang"))
+    List(Designator(t"java.lang"), Designator(t"scala"), Designator(t"scala.Predef"))
 
-  // What every source of a project sees without importing it: the compiler's own three
-  // packages, or those the project's `-Yimports` option names instead, less `scala.Predef`
+  // What every source of a project sees without importing it, in the order the compiler
+  // imports them, each shadowing those before it: the compiler's own three packages, or those
+  // the project's `-Yimports` option names instead, less `scala.Predef`
   // under `-Yno-predef` and all of them under `-Yno-imports`. A name from one of them is
   // written by its leaf, as the project's sources write it.
   def standardOf(options: List[Text]): List[Designator] =
@@ -184,7 +185,7 @@ class Resolver(api: Api, scope0: Scope, page: Optional[Text] = Unset) extends Li
   private def reachable: sci.Set[Text] = sci.Set.from(scope.all.stdlib.map(Api.key(_)))
 
   // Whether an extension reaches its receiver here: without an import (it is in the companion
-  // of the receiver or of a base), or through what is in scope — the object or package which
+  // of the receiver or of a base, or in an object enclosing it), or through what is in scope — the object or package which
   // declares it, or one which exports it.
   private def admitted(applicable: Api.Applicable): Boolean =
     val keys: sci.Set[Text] = reachable
@@ -193,7 +194,7 @@ class Resolver(api: Api, scope0: Scope, page: Optional[Text] = Unset) extends Li
       api.exporters.get(applicable.key).exists: (forwarders: List[Api.Entity]) =>
         forwarders.exists(_.parent.lay(false) { (p: Designator) => keys.contains(Api.key(p)) })
 
-    applicable.reach == 0 || applicable.importFrom.lay(false)(keys.contains(_)) || exported
+    api.implicitly(applicable) || applicable.importFrom.lay(false)(keys.contains(_)) || exported
 
   // The extensions of a name which apply to a receiver, written as its members
   // (`Angle#principal`): the receiver's own (an alias seen through) and those of every value,
@@ -263,13 +264,18 @@ class Resolver(api: Api, scope0: Scope, page: Optional[Text] = Unset) extends Li
     def tier(prefixes: List[Designator]): List[Api.Entity] =
       prefixes.bind { (prefix: Designator) => lookup(under(prefix, designator)) }.distinct
 
+    // The standard imports shadow one another, a later one the earlier — `scala.Double`
+    // shadows `java.lang.Double` — so each is a tier of its own, the last first.
+    val standard: List[List[Api.Entity]] =
+      scope.standard.reverse.map { (prefix: Designator) => tier(List(prefix)) }
+
+    // An extension is named by its leaf alone only where a sigil says the name is a term.
+    val extension: List[Api.Entity] =
+      if kind == Linker.Kind.Term then fit(bare(designator)) else Nil
+
     val tiers: List[List[Api.Entity]] =
-      List
-        ( lookup(designator),
-          tier(scope.enclosing),
-          tier(scope.imports),
-          tier(scope.standard),
-          fit(bare(designator)) )
+      List(lookup(designator), tier(scope.enclosing), tier(scope.imports)) + standard +
+        List(extension)
 
     tiers.seek(!_.nil).or(Nil)
 

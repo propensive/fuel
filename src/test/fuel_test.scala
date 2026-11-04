@@ -1352,6 +1352,10 @@ case class Note(text: String)
 object Note:
   extension (note: Note) def size: Int = 0
 
+object Coding:
+  opaque type Code = Int
+  extension (code: Code) def digits: Int = code
+
 object Exports:
   export exporting.Doc
   export exporting.Doc.parse
@@ -1561,6 +1565,30 @@ object Exports:
         (destination(decorated, Nil, t".describe"), ambiguous, resolver.ambiguities)
 
       . assert(_ == (t"/api/extended.Shape.describe", Unset, List(t".size")))
+
+      test(m"an extension in an object enclosing its receiver needs no import"):
+        val api: Api = Applicables.decorate(exported)
+        (destination(api, Nil, t"#exporting.Coding.Code#digits"), destination(api, Nil, t".digits"))
+
+      . assert(_ == (t"/api/exporting.Coding.digits", t"/api/exporting.Coding.digits"))
+
+      test(m"a name without a sigil is not sought among the extensions"):
+        val resolver: Resolver = Resolver(Applicables.decorate(exported), Scope.document(Nil))
+        (resolver.link(t"size"), resolver.ambiguities)
+
+      . assert(_ == (Unset, Nil))
+
+      test(m"a later standard import shadows an earlier one"):
+        def named(parent: Text, name: Text): Api.Entity =
+          Api.Entity
+            ( Designator(parent), name, template = Api.Declaration(Api.Kind.Class) )
+
+        val scala: Api.Entity = named(t"scala", t"Double")
+        val java: Api.Entity = named(t"java.lang", t"Double")
+        val api: Api = Api(sci.Map(scala.key -> scala, java.key -> java))
+        destination(api, Nil, t"#Double")
+
+      . assert(_ == t"/api/scala.Double")
 
       val sampleMarks: List[Inline] =
         List(Inline.Import(t"/api/sample", t"sample"), Inline.Bookmark(t"/api/sample", t"sample"))
@@ -2814,7 +2842,7 @@ entry .Doc   a document
       . assert: result =>
           result ==
             ( Scope.standard,
-              List(Designator(t"scala"), Designator(t"java.lang")),
+              List(Designator(t"java.lang"), Designator(t"scala")),
               List(Designator(t"java.lang"), Designator(t"proscenium"), Designator(t"soundness")),
               Nil )
 

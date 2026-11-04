@@ -311,10 +311,18 @@ case class Api(entities: sci.Map[Text, Api.Entity]):
 
     first(entity.bases)
 
-  // The keys of the extensions some type reaches without an import — those in the companion of
-  // the type or of a base of it — which a bare reference to an extension may name.
+  // Whether an extension reaches its receiver without an import: from the companion of the
+  // type or of a base of it, or from an object enclosing the type, which is a prefix of it and
+  // so in its implicit scope — as an opaque type's object is, which declares its extensions —
+  // though a package enclosing it is not.
+  def implicitly(applicable: Api.Applicable): Boolean =
+    applicable.reach == 0 || applicable.reach == 1 &&
+      applicable.importFrom.let(apply).let(!_.isPackage).or(false)
+
+  // The keys of the extensions some type reaches without an import, which a bare reference to
+  // an extension may name.
   lazy val unimported: sci.Set[Text] =
-    entities.values.flatMap(_.extensions.stdlib.filter(_.reach == 0).map(_.key)).toSet
+    entities.values.flatMap(_.extensions.stdlib.filter(implicitly).map(_.key)).toSet
 
   // The entities which forward to each entity, by the key of what they forward to: the
   // packages and objects a name may be reached through besides its own. A forwarder is an

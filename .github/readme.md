@@ -256,7 +256,8 @@ make), then `scala`, `scala.Predef` and `java.lang` — a name which several ent
 in the same scope is a caution and stays plain. A name is followed through an export in its
 prefix (`soundness.Text.s` is the `s` of the `anticipation.internal.Text` it exports), a member
 of a type after `#` is found where the type inherits it (`#List#toList`) or among the
-extensions which apply to the type and reach it — from its companion, or from what is imported —
+extensions which apply to the type and reach it — from its companion or an object enclosing it,
+or from what is imported —
 (`#Angle#principal`), and a bare name, last, among the extensions in reach (`.stdlib`, an
 ambiguity when several receivers have one); and the typed tokens of a compiled fence, when
 the token is the name of what its type names. A sigil says what is meant: `` `#Name` `` is a
