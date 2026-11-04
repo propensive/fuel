@@ -2134,15 +2134,21 @@ object Exports:
           val inlined: Text = Icons.markup(Api.Kind.Def, List(t"inline"))
           val translucent: Text = Icons.markup(Api.Kind.Def, List(t"transparent"))
           val hollow: Text = Icons.markup(Api.Kind.Def, List(t"abstract"))
+          val slashed: Text = Icons.markup(Api.Kind.Def, List(t"erased"))
+          val overridden: Text = Icons.markup(Api.Kind.Def, List(t"override"))
+          val placed: Text = Icons.markup(Api.Kind.Def, List(t"infix"))
 
           ( plain.contains(t"""viewBox="0 0 14 14""""),
             plain.contains(t"<rect"),
             finished.contains(t"""viewBox="0 0 18 14"""") && finished.contains(t"<circle"),
             inlined.contains(t"skewX"),
             translucent.contains(t"<mask"),
-            hollow.contains(t"evenodd") )
+            hollow.contains(t"evenodd"),
+            slashed.contains(t"rotate(45 7 7)"),
+            overridden.contains(t"""y="12.6""""),
+            placed.contains(t"""x="12.5"""") )
 
-        . assert(_ == (true, true, true, true, true, true))
+        . assert(_ == (true, true, true, true, true, true, true, true, true))
 
         test(m"member tables share fixed column widths, the keyword's minor and at the end"):
           ApiPages.table(t"Name", t"Signature", List(Block.Row(Nil))).bind:
