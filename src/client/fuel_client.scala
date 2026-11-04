@@ -509,6 +509,17 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
     progress.step(Phase.Jars)
     acc.merge(walked)
 
+  // The JDK's public classes, which every Scala source sees, and which a document may name.
+  val jdk: Api = Server.jdk:
+    Checking.session(config.classpath, config.options): (walker: Checker) =>
+      walker.context.lay(Api.empty): (context: dotty.tools.dotc.core.Contexts.Context) =>
+        Inspection.jdk(context) match
+          case api: Api => api
+
+          case error: Throwable =>
+            report(failed(t"The JDK could not be inspected", error))
+            Api.empty
+
   val built: Boolean =
     if sources.nil then false else
       // A fresh output: what the sources no longer declare must not linger.
@@ -540,7 +551,7 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
         Api.empty
 
   progress.finish(Phase.Inspect)
-  val inspected: Api = dependencies.merge(own)
+  val inspected: Api = jdk.merge(dependencies).merge(own)
 
   Inspection.failures() match
     case (count, error: Throwable) if count > 0 =>

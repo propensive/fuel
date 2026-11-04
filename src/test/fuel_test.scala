@@ -1183,6 +1183,31 @@ object Util:
 
       . assert(_ == (true, false, Api.Kind.Class, true, t"scala.Option[B]"))
 
+      test(m"the JDK's public classes are walked, and named as Scala names them"):
+        val result: Api | Throwable =
+          Checking.session(classpath, Nil): (checker: Checker) =>
+            checker.context.lay[Api | Throwable](Api.empty)(Inspection.jdk(_))
+
+        result match
+          case api: Api =>
+            val scope: Scope = Scope.document(Nil)
+
+            def linked(reference: Text): Optional[Text] =
+              Resolver(api, scope).link(reference) match
+                case Inline.Destination.Local(path, _) => path
+                case _                                 => Unset
+
+            ( api(t"java.lang.String#getBytes").present,
+              api(t"java.lang.String.valueOf").present,
+              api(t"java.lang.StringLatin1").present,
+              linked(t"#String#getBytes"),
+              linked(t".java.lang.String.getBytes") )
+
+          case error: Throwable =>
+            error.toString
+
+      . assert(_ == (true, true, false, t"/api/java.lang.String~getBytes", Unset))
+
       // A companion's members bring a few types stenography cannot render (a literal type, a
       // type with a companion's prefix): under one in a thousand, and under one in ten
       // thousand shown as `?`.
