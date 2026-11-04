@@ -248,7 +248,12 @@ signature; inline code in prose (`` `Text` ``), resolved as a name in code would
 written, then under the page's own entity and those enclosing it, then under the `import`s of
 the overlay (or, for a Markdown document, the `imports` setting and the imports its own fences
 make), then `scala`, `scala.Predef` and `java.lang` — a name which several entities answer to
-in the same scope is a caution and stays plain; and the typed tokens of a compiled fence, when
+in the same scope is a caution and stays plain. A name is followed through an export in its
+prefix (`soundness.Text.s` is the `s` of the `anticipation.internal.Text` it exports), a member
+of a type after `#` is found where the type inherits it (`#List#toList`) or among the
+extensions which apply to the type and reach it — from its companion, or from what is imported —
+(`#Angle#principal`), and a bare name, last, among the extensions in reach (`.stdlib`, an
+ambiguity when several receivers have one); and the typed tokens of a compiled fence, when
 the token is the name of what its type names. A sigil says what is meant: `` `#Name` `` is a
 type (or a member of one), `` `.name` `` a term (or a member of one), and the sigil is not shown
 once it resolves — on an entity's page, Amok's `` `#member` `` and `` `.member` `` name a member

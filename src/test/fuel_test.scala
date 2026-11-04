@@ -1292,11 +1292,20 @@ extension (doc: Doc) def titled: String = doc.title
       // they are.
       val exporting: Text = t"""package exporting
 
-case class Doc(title: String)
+trait Titled:
+  def heading: String = ""
+
+case class Doc(title: String) extends Titled
 
 object Doc:
   def parse(text: String): Doc = Doc(text)
   def parse(text: String, size: Int): Doc = Doc(text)
+  extension (doc: Doc) def size: Int = 0
+
+case class Note(text: String)
+
+object Note:
+  extension (note: Note) def size: Int = 0
 
 object Exports:
   export exporting.Doc
@@ -1471,6 +1480,42 @@ object Exports:
 
       . assert: (found: List[List[Text]]) =>
           found == List(List(t"export", t"export Doc"), List(t"export", t"export Doc.parse"))
+
+      def destination(api: Api, imports: List[Text], reference: Text): Optional[Text] =
+        Resolver(api, Scope.document(imports)).link(reference) match
+          case Inline.Destination.Local(path, _) => path
+          case _                                 => Unset
+
+      test(m"a member is named through the export of what declares it"):
+        destination(exported, Nil, t".exporting.Exports.Doc.parse")
+
+      . assert(_ == t"/api/exporting.Doc.parse")
+
+      test(m"a member of a type is named through the type which inherits it"):
+        ( destination(exported, Nil, t"#exporting.Doc#heading"),
+          exported(t"exporting.Titled#heading").let(_.url) )
+
+      . assert { (found, expected) => found.present && found == expected }
+
+      test(m"an extension in a base's companion is named as a member of the type it extends"):
+        ( destination(decorated, Nil, t"#extended.Doc#describe"),
+          destination(decorated, Nil, t".extended.Doc.describe") )
+
+      . assert(_ == (t"/api/extended.Shape.describe", Unset))
+
+      test(m"an extension which needs an import is named as a member only where it is imported"):
+        ( destination(decorated, Nil, t"#extended.Doc#titled"),
+          destination(decorated, List(t"extended"), t"#extended.Doc#titled") )
+
+      . assert(_ == (Unset, t"/api/extended.titled"))
+
+      test(m"an extension is named by its leaf, and is ambiguous on several receivers"):
+        val api: Api = Applicables.decorate(exported)
+        val resolver: Resolver = Resolver(api, Scope.document(Nil))
+        val ambiguous: Optional[Inline.Destination] = resolver.link(t".size")
+        (destination(decorated, Nil, t".describe"), ambiguous, resolver.ambiguities)
+
+      . assert(_ == (t"/api/extended.Shape.describe", Unset, List(t".size")))
 
       val sampleMarks: List[Inline] =
         List(Inline.Import(t"/api/sample", t"sample"), Inline.Bookmark(t"/api/sample", t"sample"))

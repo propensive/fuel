@@ -269,24 +269,71 @@ case class Api(entities: sci.Map[Text, Api.Entity]):
       designator.parent.let: (parent: Designator) =>
         apply(Api.key(parent.companionType, designator.name))
 
+  // The entity a designator names, as `find` finds it, else through what its prefix forwards
+  // to — an export or an exported type's alias, so that `soundness.Text.s` is the member `s`
+  // of `anticipation.internal.Text`, which `soundness.Text` exports — and, for a member of a
+  // type, among the members it inherits, from the nearest base which declares one.
+  def resolve(designator: Designator): Optional[Api.Entity] =
+    def recur(designator: Designator, depth: Int): Optional[Api.Entity] =
+      find(designator).or:
+        if depth <= 0 then Unset else designator.parent.let: (parent: Designator) =>
+          recur(parent, depth - 1).let: (owner: Api.Entity) =>
+            val target: Api.Entity = through(owner)
+
+            // A designator's parent is a type where `#` follows it, and a term where `.` does.
+            val ofType: Boolean = parent match
+              case Designator.Type(_, _) => true
+              case _                     => false
+
+            val rebased: Designator = if ofType then target.tpe else target.term
+
+            val forwarded: Optional[Api.Entity] =
+              if target.key == owner.key then Unset else designator match
+                case Designator.Term(_, name) => find(Designator.Term(rebased, name))
+                case Designator.Type(_, name) => find(Designator.Type(rebased, name))
+                case _                        => Unset
+
+            forwarded.or(if ofType then inherited(target, designator.name) else Unset)
+
+    recur(designator, 16)
+
+  // What an entity forwards to, through every export and exported type's alias, to a depth
+  // which ends a cycle; the entity itself when it forwards to nothing in the model.
+  def through(entity: Api.Entity, depth: Int = 8): Api.Entity =
+    forwards(entity).let(apply).lay(entity): (target: Api.Entity) =>
+      if depth <= 0 || target.key == entity.key then target else through(target, depth - 1)
+
+  // A member a type inherits by its name: the first of its bases, nearest first, to declare one.
+  def inherited(entity: Api.Entity, name: Text): Optional[Api.Entity] =
+    def first(bases: List[Text]): Optional[Api.Entity] = bases match
+      case base :: rest => apply(t"$base#$name").or(first(rest))
+      case _            => Unset
+
+    first(entity.bases)
+
+  // The keys of the extensions some type reaches without an import — those in the companion of
+  // the type or of a base of it — which a bare reference to an extension may name.
+  lazy val unimported: sci.Set[Text] =
+    entities.values.flatMap(_.extensions.stdlib.filter(_.reach == 0).map(_.key)).toSet
+
   // The entities which forward to each entity, by the key of what they forward to: the
   // packages and objects a name may be reached through besides its own. A forwarder is an
   // export, or a type alias standing for another type over exactly its own parameters, as an
   // exported type is compiled to (`type Optional[value] = vacuous.Optional[value]`).
+  def forwards(entity: Api.Entity): Optional[Text] =
+    entity.alias.let(Api.key(_)).or:
+      entity.template.let: (d: Api.Declaration) =>
+        d.aliasOf.let:
+          case Api.Shape.Named(key, args) if key != entity.key =>
+            val params: List[Text] = args.map:
+              case Api.Shape.Param(name, _) => name
+              case _                        => t""
+
+            if params == d.aliasParams then key else Unset
+
+          case _ => Unset
+
   lazy val exporters: sci.Map[Text, List[Api.Entity]] =
-    def forwards(entity: Api.Entity): Optional[Text] =
-      entity.alias.let(Api.key(_)).or:
-        entity.template.let: (d: Api.Declaration) =>
-          d.aliasOf.let:
-            case Api.Shape.Named(key, args) if key != entity.key =>
-              val params: List[Text] = args.map:
-                case Api.Shape.Param(name, _) => name
-                case _                        => t""
-
-              if params == d.aliasParams then key else Unset
-
-            case _ => Unset
-
     val forwarders = entities.values.toList.filter(forwards(_).present)
 
     forwarders.groupBy { (e: Api.Entity) => forwards(e).or(t"") }.map: (key, group) =>
