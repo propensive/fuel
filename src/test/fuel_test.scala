@@ -208,6 +208,26 @@ error oops
 
       . assert(_ == (t"doc/check.md", 2, 1))
 
+      test(m"a fragment whose typed highlighting fails is checked by the typer, not lost"):
+        val messages: List[Text] =
+          problems:
+            t"```scala\nimport soundness.*\nimport dysasymptotics.linearSize\n\n" +
+              t"case class Issues(items: List[Int] = Nil)(using Diagnostics)\n" +
+              t"extends Error(m\"$${items.size} problems\"):\n" +
+              t"  def +(item: Int): Issues = Issues(items :+ item)\n```\n"
+
+          . bind:
+              case Block.Diagnostic(_, _, content, _, _) => content.map:
+                case Block.Paragraph(inlines) => Blocks.plain(inlines)
+                case _                        => t""
+
+              case _ =>
+                Nil
+
+        messages.filter(_.starts(t"The fragment could not be highlighted"))
+
+      . assert(_ == Nil)
+
       test(m"an ill-typed fragment expected to fail is not a problem"):
         problems(t"```scala fuel\nerrors show\n##\nval n: Int = \"oops\"\n```\n")
 
