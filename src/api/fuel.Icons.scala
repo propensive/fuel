@@ -203,12 +203,13 @@ object Icons:
 
         sheared.within(t"""$stripes<g mask="url(#fuel-striped)">""", t"</g>")
 
-    // A slash is cut through the glyph before it is drawn, so that it shows on a filled shape.
+    // A slash is drawn over the glyph, with a gap cut beneath it so that it shows on a filled
+    // shape, as a stroke lifts off the page.
     val slashed: Drawing =
       if !has(t"erased") then striped else
         val gap: Text =
           t"""<defs><mask id="fuel-slashed"><rect width="100%" height="100%" fill="#fff"/>""" +
-            t"""<rect x="5.8" y="0.2" width="2.4" height="13.6" fill="#000" """ +
+            t"""<rect x="6.6" y="0.6" width="1.6" height="12.8" fill="#000" """ +
             t"""transform="rotate(45 7 7)"/></mask></defs>"""
 
         val slash: Text =
