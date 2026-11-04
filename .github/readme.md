@@ -307,7 +307,8 @@ document doc
 document doc/modules
 
 # Compile each document's fences as one session, each following the ones before it (as a
-# REPL would), with `doc/fixtures/<document>.scala` compiled first where there is one.
+# REPL would), with `doc/fixtures/<section>/<document>.scala` (else
+# `doc/fixtures/<document>.scala`) compiled first where there is one.
 session
 fixtures doc/fixtures
 

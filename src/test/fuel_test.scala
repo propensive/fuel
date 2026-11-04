@@ -491,6 +491,25 @@ error oops
 
       . assert(_ == (t"doc/fixtures/check.scala", 1))
 
+      test(m"two documents of one name, in different sections, keep apart in one session"):
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          val first: Text =
+            t"```scala\ncase class Event(n: Int)\n```\n\n```scala\nval e: Int = Event(1).n\n```\n"
+
+          val second: Text =
+            t"```scala\ncase class Event(s: String)\n```\n\n" +
+              t"```scala\nval e: String = Event(\"x\").s\n```\n"
+
+          val a: List[Block] =
+            Doc.parse(t"logging.md", first, checker, true, section = t"modules").problems
+
+          val b: List[Block] =
+            Doc.parse(t"logging.md", second, checker, true, section = t"standards").problems
+
+          a + b
+
+      . assert(_ == Nil)
+
       test(m"an `errors show` fragment does not join the session"):
         val text: Text =
           t"```scala\nval a: Int = 1\n```\n" +
@@ -3097,6 +3116,23 @@ define type class
       . assert(_ == (List((Tone.Failure, 3)), 2))
 
     suite(m"Sections"):
+      test(m"a fixture is found by the document's section and path before its file name"):
+        val directory = java.nio.file.Files.createTempDirectory("fuel-fixtures").nn
+        val nested = java.nio.file.Files.createDirectories(directory.resolve("modules")).nn
+        java.nio.file.Files.writeString(directory.resolve("logging.scala"), "val shared = 1")
+        java.nio.file.Files.writeString(nested.resolve("logging.scala"), "val own = 1")
+        val regime = Compilation.Regime(fixtures = directory.toString.nn.tt)
+
+        val own: Optional[Text] =
+          Compilation.fixture(regime, t"modules", t"logging.md").let(_(1))
+
+        val shared: Optional[Text] =
+          Compilation.fixture(regime, t"standards", t"logging.md").let(_(1))
+
+        (own, shared)
+
+      . assert(_ == (t"val own = 1", t"val shared = 1"))
+
       test(m"a section is named by its directory's last segment"):
         Compilation.name(t"/home/me/project/doc/modules/")
 

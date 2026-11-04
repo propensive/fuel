@@ -85,7 +85,8 @@ object ui:
   val Fixtures =
     Setting[Text]
       ( t"fixtures",
-        t"a directory of `<document>.scala` fixtures, compiled before each document's fragments" )
+        t"a directory of `<section>/<document>.scala` (or `<document>.scala`) fixtures, " +
+          t"compiled before each document's fragments" )
 
   val Source =
     Setting[Text]

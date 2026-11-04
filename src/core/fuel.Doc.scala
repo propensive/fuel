@@ -92,11 +92,11 @@ object Doc:
       case cache: Cache =>
         kept
           ( path, text, markdown, checker, session, fixture, linker, cache, base, page, glossary,
-            open )
+            open, section )
 
       case _ =>
         val context: Blocks.Context = Blocks.Context(linker, page, glossary)
-        val scala = Embedding.ScalaCode(checker, path, session, fixture, linker)
+        val scala = Embedding.ScalaCode(checker, path, session, fixture, linker, section = section)
         val embeddings: List[Embedding] = List(scala, Embedding.JavaCode)
         val blocks: List[Block] = Blocks.of(markdown, embeddings, context)
         val problems: List[Block] = scala.problems + ambiguous(path, linker) + open
@@ -125,7 +125,8 @@ object Doc:
       base:     Text,
       page:     Optional[Blocks.Page],
       glossary: Glossary,
-      open:     List[Block] )
+      open:     List[Block],
+      section:  Optional[Text] )
   :   Doc =
 
     val fences: List[Blocks.Fence] = Blocks.fences(markdown)
@@ -168,7 +169,7 @@ object Doc:
       cache.prose(key, prose)
       prose
 
-    val scala = Embedding.ScalaCode(checker, path, session, fixture, linker, cache, base)
+    val scala = Embedding.ScalaCode(checker, path, session, fixture, linker, cache, base, section)
     val embeddings: List[Embedding] = List(scala, Embedding.JavaCode)
 
     val outputs: List[List[Block]] = fences.map: (fence: Blocks.Fence) =>

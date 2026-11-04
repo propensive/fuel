@@ -40,8 +40,8 @@ import pyrocosm.{Block, Tone}
 // The compile step: every `*.md` beneath a document directory, read, parsed and converted.
 object Compilation:
   // How a corpus's fragments are compiled: as one session per document, each fragment
-  // following the ones before it, and with the document's fixture (`<fixtures>/<name>.scala`)
-  // first.
+  // following the ones before it, and with the document's fixture
+  // (`<fixtures>/<section>/<path>.scala`, else `<fixtures>/<name>.scala`) first.
   // `linker` gives each document, by its section and its path, the linker its references
   // resolve through; with a `cache`, a document's prose and each of its fences is compiled only
   // when the key of its inputs is not kept, `base` giving the key of everything a document
@@ -82,13 +82,8 @@ object Compilation:
 
     def relative(path: Text): Text = path.skip(root.length + 1)
 
-    // The document's fixture, when the regime names a directory and the file is there.
     def fixture(path: Text): Optional[(Text, Text)] =
-      regime.fixtures.let: (directory: Text) =>
-        val file: Text = t"$directory/${Doc.filename(relative(path))}.scala"
-
-        safely(file.as[Path on Linux]).let { (file: Path on Linux) => safely(file.read[Text]) }.let:
-          (text: Text) => (file, text)
+      Compilation.fixture(regime, name(root), relative(path))
 
     def recur(rest: List[Text], docs: List[Doc], skipped: List[Text]): Corpus.Section = rest match
       case path :: tail =>
@@ -103,7 +98,7 @@ object Compilation:
             val doc: Doc =
               Doc.parse
                 ( within, text, checker, regime.session, fixture(path), linker, regime.cache,
-                  regime.base(within), name(root), regime.glossary )
+                  regime.base(t"${name(root)}/$within"), name(root), regime.glossary )
 
             regime.progress(within, doc)
             recur(tail, docs + List(doc), skipped)
@@ -125,15 +120,10 @@ object Compilation:
     import charsets.utf8Charset
     import textSanitizers.skipSanitizer
 
-    val fixture: Optional[(Text, Text)] =
-      regime.fixtures.let: (directory: Text) =>
-        val file: Text = t"$directory/${Doc.filename(path)}.scala"
-
-        safely(file.as[Path on Linux]).let { (file: Path on Linux) => safely(file.read[Text]) }.let:
-          (text: Text) => (file, text)
-
     val directory: Text = Text(path.s.substring(0, path.s.lastIndexOf('/').max(0)).nn)
     val section: Text = name(directory)
+    val leaf: Text = Text(path.s.substring(path.s.lastIndexOf('/') + 1).nn)
+    val fixture: Optional[(Text, Text)] = Compilation.fixture(regime, section, leaf)
 
     safely(path.as[Path on Linux]).let { (file: Path on Linux) => safely(file.read[Text]) }.let:
       (text: Text) =>
@@ -142,6 +132,30 @@ object Compilation:
         Doc.parse
           ( path, text, checker, regime.session, fixture, linker, regime.cache, regime.base(path),
             section, regime.glossary )
+
+  // A document's fixture, when the regime names a directory holding one: the file at the
+  // document's section and path within it (`<fixtures>/modules/logging.scala` for
+  // `logging.md` in the section `modules`), else the one named by its file name alone
+  // (`<fixtures>/logging.scala`), so that two documents of one name in different sections may
+  // each have their own.
+  def fixture(regime: Regime, section: Text, path: Text): Optional[(Text, Text)] =
+    import charsets.utf8Charset
+    import textSanitizers.skipSanitizer
+
+    regime.fixtures.let: (directory: Text) =>
+      val stem: Text = if path.ends(t".md") then path.keep(path.length - 3) else path
+
+      val candidates: List[Text] =
+        List(t"$directory/$section/$stem.scala", t"$directory/${Doc.filename(path)}.scala")
+
+      def read(file: Text): Optional[(Text, Text)] =
+        safely(file.as[Path on Linux]).let { (file: Path on Linux) => safely(file.read[Text]) }.let:
+          (text: Text) => (file, text)
+
+      val found: List[(Text, Text)] = candidates.bind: (file: Text) =>
+        read(file).let(List(_)).or(Nil)
+
+      found.head
 
   // A file that could not be read or parsed, as a diagnostic.
   def unreadable(path: Text): Block =
