@@ -299,28 +299,30 @@ final class Lattice private
       else if isSubtype(sub, sup) then supers(sub).length + 1
       else -1
 
-  private def all: Iterator[Int] = Iterator.range(0, size)
+  // The standard library's iterators: these are walked lazily and joined, which Soundness's
+  // one-shot `Iterator` (the bare name, since 0.75.0) does not offer.
+  private def all: scala.collection.Iterator[Int] = scala.collection.Iterator.range(0, size)
 
   // Every type beneath a type, itself included — but not `Nothing` or `Null`, which are beneath
   // every type and would make every `throw` a result of any type asked for; they are found only
   // by asking for them.
-  def beneath(id: Int): Iterator[Int] =
+  def beneath(id: Int): scala.collection.Iterator[Int] =
     if isTop(id) then all.filter: i => i != nothingId && i != nullId
     else if isRefTop(id) then all.filter(isReferable(_))
-    else if isValTop(id) then all.filter(value(_)) ++ Iterator(anyValId)
-    else if id == nothingId then Iterator(nothingId)
-    else if id == nullId then Iterator(nullId)
-    else Iterator(id) ++ subs(id).iterator
+    else if isValTop(id) then all.filter(value(_)) ++ scala.collection.Iterator(anyValId)
+    else if id == nothingId then scala.collection.Iterator(nothingId)
+    else if id == nullId then scala.collection.Iterator(nullId)
+    else scala.collection.Iterator(id) ++ subs(id).iterator
 
   // Every type above a type, itself included, the universal ones among them.
-  def above(id: Int): Iterator[Int] =
-    if isTop(id) then Iterator(anyId, matchableId)
+  def above(id: Int): scala.collection.Iterator[Int] =
+    if isTop(id) then scala.collection.Iterator(anyId, matchableId)
     else if id == nothingId then all
     else if id == nullId then all.filter: i => isReferable(i) || isTop(i) || i == nullId
     else
-      val tops: Iterator[Int] =
-        if isValTop(id) then Iterator(anyId, matchableId)
-        else if value(id) then Iterator(anyValId, anyId, matchableId)
-        else Iterator(anyRefId, objectId, anyId, matchableId)
+      val tops: scala.collection.Iterator[Int] =
+        if isValTop(id) then scala.collection.Iterator(anyId, matchableId)
+        else if value(id) then scala.collection.Iterator(anyValId, anyId, matchableId)
+        else scala.collection.Iterator(anyRefId, objectId, anyId, matchableId)
 
-      Iterator(id) ++ supers(id).iterator ++ tops
+      scala.collection.Iterator(id) ++ supers(id).iterator ++ tops
