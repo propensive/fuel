@@ -132,8 +132,15 @@ object Checking:
 
     given (CompileEvent is Loggable) = Loggable.silent[CompileEvent]
 
+    // Macros resolve their classes from the session's classpath, not from fuel's own: fuel
+    // carries its own Soundness, and a macro on the project's classpath, run against fuel's
+    // copy of a library it uses, fails wherever the two versions differ (Proscala's
+    // `-Zisolated-macros`).
+    val isolated: List[Text] =
+      if options.has(t"-Zisolated-macros") then options else t"-Zisolated-macros" :: options
+
     val scalac: Scalac[3.9, Universe.Classfile] =
-      Scalac[3.9](options.map { (option: Text) => Scalac.Option[3.9](option) })
+      Scalac[3.9](isolated.map { (option: Text) => Scalac.Option[3.9](option) })
 
     scalac.on(classpath).session:
       val frontend: Scalac.Session.Frontend = compilation.frontend
