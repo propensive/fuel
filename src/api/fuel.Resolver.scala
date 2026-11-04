@@ -34,6 +34,8 @@ package fuel
 
 import java.util.concurrent as juc
 
+import scala.collection.immutable as sci
+
 import soundness.{Token as _, *}
 
 import dysasymptotics.linearSize
@@ -47,10 +49,11 @@ import stenography.{Designator, Syntax}
 // link, several are an ambiguity, none is plain text.
 object Scope:
   val standard: List[Designator] =
-    List(Designator(t"scala"), Designator(t"scala.Predef"), Designator(t"java.lang"))
+    List(Designator(t"java.lang"), Designator(t"scala"), Designator(t"scala.Predef"))
 
-  // What every source of a project sees without importing it: the compiler's own three
-  // packages, or those the project's `-Yimports` option names instead, less `scala.Predef`
+  // What every source of a project sees without importing it, in the order the compiler
+  // imports them, each shadowing those before it: the compiler's own three packages, or those
+  // the project's `-Yimports` option names instead, less `scala.Predef`
   // under `-Yno-predef` and all of them under `-Yno-imports`. A name from one of them is
   // written by its leaf, as the project's sources write it.
   def standardOf(options: List[Text]): List[Designator] =
@@ -172,9 +175,57 @@ class Resolver(api: Api, scope0: Scope, page: Optional[Text] = Unset) extends Li
 
     scope = scope.copy(imports = (scope.imports + learned).distinct)
 
-  // The entity a designator written in prose names: through an exported alias to its target.
+  // The entity a designator written in prose names, through what its prefix forwards to and
+  // what a type inherits, then through an exported alias to its target.
   private def entity(designator: Designator): Optional[Api.Entity] =
-    api.find(designator).let: (found: Api.Entity) => found.alias.let(api.find).or(found)
+    api.resolve(designator).let: (found: Api.Entity) => found.alias.let(api.find).or(found)
+
+  // The keys of the packages and objects whose members are in scope, which an extension
+  // declared in one of them is reached through.
+  private def reachable: sci.Set[Text] = sci.Set.from(scope.all.stdlib.map(Api.key(_)))
+
+  // Whether an extension reaches its receiver here: without an import (it is in the companion
+  // of the receiver or of a base, or in an object enclosing it), or through what is in scope — the object or package which
+  // declares it, or one which exports it.
+  private def admitted(applicable: Api.Applicable): Boolean =
+    val keys: sci.Set[Text] = reachable
+
+    def exported: Boolean =
+      api.exporters.get(applicable.key).exists: (forwarders: List[Api.Entity]) =>
+        forwarders.exists(_.parent.lay(false) { (p: Designator) => keys.contains(Api.key(p)) })
+
+    api.implicitly(applicable) || applicable.importFrom.lay(false)(keys.contains(_)) || exported
+
+  // The extensions of a name which apply to a receiver, written as its members
+  // (`Angle#principal`): the receiver's own (an alias seen through) and those of every value,
+  // as far as they reach it here, of the closest tier which has any.
+  private def extensions(receiver: Api.Entity, name: Text): List[Api.Entity] =
+    val target: Api.Entity = api.through(receiver)
+    val universal: List[Api.Applicable] = api(Lattice.any).let(_.extensions).or(Nil)
+
+    val applicable: List[Api.Applicable] = (target.extensions + universal).filter:
+      (applicable: Api.Applicable) =>
+        api(applicable.key).let(_.name == name).or(false) && admitted(applicable)
+
+    val tiers: scala.List[Int] = applicable.stdlib.map(_.tier)
+
+    tiers.minOption.fold(Nil: List[Api.Entity]): (lowest: Int) =>
+      val closest: List[Api.Applicable] = applicable.filter(_.tier == lowest)
+      closest.bind { (a: Api.Applicable) => api(a.key).let(List(_)).or(Nil) }.distinct
+
+  // An extension named by its leaf alone (`.stdlib`): every one of the name which reaches some
+  // receiver without an import, or which is declared in what is in scope.
+  private def bare(designator: Designator): List[Api.Entity] = designator match
+    case Designator.Top(name) =>
+      val keys: sci.Set[Text] = reachable
+
+      api.byName.getOrElse(name, Nil).filter: (entity: Api.Entity) =>
+        val extension: Boolean = entity.declarations.exists(_.kind == Api.Kind.Extension)
+        val inScope: Boolean = entity.parent.lay(false) { (p: Designator) => keys.contains(Api.key(p)) }
+        extension && (api.unimported.contains(entity.key) || inScope)
+
+    case _ =>
+      Nil
 
   // A designator rebased under a prefix: its first segment becomes a child of the prefix.
   private def under(prefix: Designator, designator: Designator): Designator = designator match
@@ -187,20 +238,44 @@ class Resolver(api: Api, scope0: Scope, page: Optional[Text] = Unset) extends Li
   // in code resolves in its innermost scope, so an outer match is no ambiguity. A sigil keeps
   // only the entities of its kind in every tier, which is how `#title` on `Doc`'s page finds
   // `Doc#title` through the enclosing tier, and `#Doc` under an import finds the type.
+  //
+  // A member of a type which no entity answers (`Angle#principal`) is sought among the
+  // extensions which apply to the type; and last, a bare name is sought among the extensions
+  // in reach (`.stdlib`), several of them on different receivers being an ambiguity.
   private def candidates(designator: Designator, kind: Optional[Linker.Kind]): List[Api.Entity] =
     def fit(entities: List[Api.Entity]): List[Api.Entity] =
       kind.lay(entities): (kind: Linker.Kind) => entities.filter(suits(_, kind))
 
+    // A member written after `#` is a member of a type, which an extension of the type is, as
+    // a reference to it is written: so a `.` sigil, which says a term, admits none.
+    val typeMember: Boolean = kind.lay(true)(_ == Linker.Kind.Type)
+
+    def lookup(designator: Designator): List[Api.Entity] =
+      val found: List[Api.Entity] = fit(entity(designator).let(List(_)).or(Nil))
+
+      // A name after `#` is a member of the type before it.
+      if !found.nil then found else designator.parent match
+        case parent@Designator.Type(_, _) if typeMember =>
+          entity(parent).lay(Nil: List[Api.Entity])(extensions(_, designator.name))
+
+        case _ =>
+          Nil
+
     def tier(prefixes: List[Designator]): List[Api.Entity] =
-      val found: List[Api.Entity] = prefixes.bind: (prefix: Designator) =>
-        entity(under(prefix, designator)).let(List(_)).or(Nil)
+      prefixes.bind { (prefix: Designator) => lookup(under(prefix, designator)) }.distinct
 
-      fit(found.distinct)
+    // The standard imports shadow one another, a later one the earlier — `scala.Double`
+    // shadows `java.lang.Double` — so each is a tier of its own, the last first.
+    val standard: List[List[Api.Entity]] =
+      scope.standard.reverse.map { (prefix: Designator) => tier(List(prefix)) }
 
-    val own: List[Api.Entity] = fit(entity(designator).let(List(_)).or(Nil))
+    // An extension is named by its leaf alone only where a sigil says the name is a term.
+    val extension: List[Api.Entity] =
+      if kind == Linker.Kind.Term then fit(bare(designator)) else Nil
 
     val tiers: List[List[Api.Entity]] =
-      List(own, tier(scope.enclosing), tier(scope.imports), tier(scope.standard))
+      List(lookup(designator), tier(scope.enclosing), tier(scope.imports)) + standard +
+        List(extension)
 
     tiers.seek(!_.nil).or(Nil)
 

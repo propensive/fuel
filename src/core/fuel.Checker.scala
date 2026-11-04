@@ -180,12 +180,20 @@ object Checking:
           def check(code: Text, mode: Preamble.Mode, context: Optional[harlequin.Scala.Context])
           :   SourceCode =
 
+            // Typed highlighting which fails on its own account — a tree the typer left
+            // untyped, which harlequin visits (`UnAssignedTypeException`) — falls back to the
+            // compiler's own word: the fragment typechecked as far as the typer, its errors
+            // reported as any fragment's are, and its tokens highlighted without types.
+            def typed(highlight: => SourceCode): SourceCode =
+              try highlight
+              catch case scala.util.control.NonFatal(_) => stopped(frontend, code, context, "typer")
+
             mode match
-              case Preamble.Mode.Typecheck => harlequin.Scala.highlight(code, context)
-              case Preamble.Mode.Parse     => parsed(frontend, code, context)
+              case Preamble.Mode.Typecheck => typed(harlequin.Scala.highlight(code, context))
+              case Preamble.Mode.Parse     => stopped(frontend, code, context, "parser")
 
               case Preamble.Mode.Compile =>
-                harlequin.Scala.highlight(code, context)(using compiled)
+                typed(harlequin.Scala.highlight(code, context)(using compiled))
 
           def enter(name: Text, unit: Text): Boolean =
             val process = compilation.compile(Map(name -> unit))
@@ -216,10 +224,14 @@ object Checking:
 
       body(checker)
 
-  // A fragment parsed and no more, in the session: its syntax errors, from a run stopped after
-  // the parser, on its tokens highlighted without types.
-  private def parsed
-    ( frontend: Scalac.Session.Frontend, code: Text, context: Optional[harlequin.Scala.Context] )
+  // A fragment compiled in the session as far as a `phase` and no more — the parser, for a
+  // fragment which is only parsed, or the typer — with its tokens highlighted without types:
+  // the diagnostics of a run stopped after that phase.
+  private def stopped
+    ( frontend: Scalac.Session.Frontend,
+      code:     Text,
+      context:  Optional[harlequin.Scala.Context],
+      phase:    String )
   :   SourceCode =
 
     import dotty.tools.dotc.interfaces.Diagnostic.{ERROR, WARNING}
@@ -248,7 +260,7 @@ object Checking:
 
     val base: Contexts.FreshContext = frontend.context.fresh
     base.setReporter(reporter)
-    base.setSetting(base.settings.YstopAfter, scala.collection.immutable.List("parser"))
+    base.setSetting(base.settings.YstopAfter, scala.collection.immutable.List(phase))
     given Contexts.Context = base
     val source: SourceFile = SourceFile.virtual("<fuel>", text.s)
     frontend.compiler.newRun.compileSources(scala.collection.immutable.List(source))

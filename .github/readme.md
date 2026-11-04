@@ -27,6 +27,11 @@ fuel --version     # the version alone
 fuel quit          # stop the daemon, and any server it runs
 ```
 
+A failure of the daemon itself while it carries out a command (running out of memory, say) is
+reported on the standard error, where it was thrown, and the command exits with status 6, apart
+from a compile's own failures (status 4) and from a command line it did not understand
+(status 2).
+
 `fuel compile` reads every `*.md` beneath each configured `document` directory, parses it as
 CommonMark, and converts it to Pyrocosm blocks: a fenced block whose info string is `scala` or
 `java` is highlighted through [Harlequin](https://soundness.dev/harlequin/); any other fence is
@@ -42,8 +47,9 @@ compile` prints it as the terminal renders one (`path:line:col: error`, the mess
 lines concerned numbered from the file, with the place underlined), and in the served document
 it follows the fragment, whose lines are numbered from the file too. Every link is checked
 too, once every document is compiled: a link to another document (`guide/x.md`, `../x.md`,
-resolved against the document's directory within its section) or to a place on one
-(`#set-up`, a heading's slug as GitHub makes it, or a fence's `id`), to an API page
+resolved against the document's directory as the files on disk relate, so that
+`../philosophy/x.md` from `doc/modules` leads into the section `doc/philosophy`) or to a place
+on one (`#set-up`, a heading's slug as GitHub makes it, or a fence's `id`), to an API page
 (`/api/gossamer.Text#length`) or a glossary term (`/glossary#interface`) must have a target, or
 it is a failure at its line; a link to the web is fetched only when `check-links` is set. A
 fence marked
@@ -247,7 +253,13 @@ signature; inline code in prose (`` `Text` ``), resolved as a name in code would
 written, then under the page's own entity and those enclosing it, then under the `import`s of
 the overlay (or, for a Markdown document, the `imports` setting and the imports its own fences
 make), then `scala`, `scala.Predef` and `java.lang` — a name which several entities answer to
-in the same scope is a caution and stays plain; and the typed tokens of a compiled fence, when
+in the same scope is a caution and stays plain. A name is followed through an export in its
+prefix (`soundness.Text.s` is the `s` of the `anticipation.internal.Text` it exports), a member
+of a type after `#` is found where the type inherits it (`#List#toList`) or among the
+extensions which apply to the type and reach it — from its companion or an object enclosing it,
+or from what is imported —
+(`#Angle#principal`), and a bare name, last, among the extensions in reach (`.stdlib`, an
+ambiguity when several receivers have one); and the typed tokens of a compiled fence, when
 the token is the name of what its type names. A sigil says what is meant: `` `#Name` `` is a
 type (or a member of one), `` `.name` `` a term (or a member of one), and the sigil is not shown
 once it resolves — on an entity's page, Amok's `` `#member` `` and `` `.member` `` name a member
@@ -307,7 +319,8 @@ document doc
 document doc/modules
 
 # Compile each document's fences as one session, each following the ones before it (as a
-# REPL would), with `doc/fixtures/<document>.scala` compiled first where there is one.
+# REPL would), with `doc/fixtures/<section>/<document>.scala` (else
+# `doc/fixtures/<document>.scala`) compiled first where there is one.
 session
 fixtures doc/fixtures
 

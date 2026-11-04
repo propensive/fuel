@@ -208,6 +208,26 @@ error oops
 
       . assert(_ == (t"doc/check.md", 2, 1))
 
+      test(m"a fragment whose typed highlighting fails is checked by the typer, not lost"):
+        val messages: List[Text] =
+          problems:
+            t"```scala\nimport soundness.*\nimport dysasymptotics.linearSize\n\n" +
+              t"case class Issues(items: List[Int] = Nil)(using Diagnostics)\n" +
+              t"extends Error(m\"$${items.size} problems\"):\n" +
+              t"  def +(item: Int): Issues = Issues(items :+ item)\n```\n"
+
+          . bind:
+              case Block.Diagnostic(_, _, content, _, _) => content.map:
+                case Block.Paragraph(inlines) => Blocks.plain(inlines)
+                case _                        => t""
+
+              case _ =>
+                Nil
+
+        messages.filter(_.starts(t"The fragment could not be highlighted"))
+
+      . assert(_ == Nil)
+
       test(m"an ill-typed fragment expected to fail is not a problem"):
         problems(t"```scala fuel\nerrors show\n##\nval n: Int = \"oops\"\n```\n")
 
@@ -490,6 +510,25 @@ error oops
             Unset
 
       . assert(_ == (t"doc/fixtures/check.scala", 1))
+
+      test(m"two documents of one name, in different sections, keep apart in one session"):
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          val first: Text =
+            t"```scala\ncase class Event(n: Int)\n```\n\n```scala\nval e: Int = Event(1).n\n```\n"
+
+          val second: Text =
+            t"```scala\ncase class Event(s: String)\n```\n\n" +
+              t"```scala\nval e: String = Event(\"x\").s\n```\n"
+
+          val a: List[Block] =
+            Doc.parse(t"logging.md", first, checker, true, section = t"modules").problems
+
+          val b: List[Block] =
+            Doc.parse(t"logging.md", second, checker, true, section = t"standards").problems
+
+          a + b
+
+      . assert(_ == Nil)
 
       test(m"an `errors show` fragment does not join the session"):
         val text: Text =
@@ -1164,6 +1203,31 @@ object Util:
 
       . assert(_ == (true, false, Api.Kind.Class, true, t"scala.Option[B]"))
 
+      test(m"the JDK's public classes are walked, and named as Scala names them"):
+        val result: Api | Throwable =
+          Checking.session(classpath, Nil): (checker: Checker) =>
+            checker.context.lay[Api | Throwable](Api.empty)(Inspection.jdk(_))
+
+        result match
+          case api: Api =>
+            val scope: Scope = Scope.document(Nil)
+
+            def linked(reference: Text): Optional[Text] =
+              Resolver(api, scope).link(reference) match
+                case Inline.Destination.Local(path, _) => path
+                case _                                 => Unset
+
+            ( api(t"java.lang.String#getBytes").present,
+              api(t"java.lang.String.valueOf").present,
+              api(t"java.lang.StringLatin1").present,
+              linked(t"#String#getBytes"),
+              linked(t".java.lang.String.getBytes") )
+
+          case error: Throwable =>
+            error.toString
+
+      . assert(_ == (true, true, false, t"/api/java.lang.String~getBytes", Unset))
+
       // A companion's members bring a few types stenography cannot render (a literal type, a
       // type with a companion's prefix): under one in a thousand, and under one in ten
       // thousand shown as `?`.
@@ -1273,11 +1337,24 @@ extension (doc: Doc) def titled: String = doc.title
       // they are.
       val exporting: Text = t"""package exporting
 
-case class Doc(title: String)
+trait Titled:
+  def heading: String = ""
+
+case class Doc(title: String) extends Titled
 
 object Doc:
   def parse(text: String): Doc = Doc(text)
   def parse(text: String, size: Int): Doc = Doc(text)
+  extension (doc: Doc) def size: Int = 0
+
+case class Note(text: String)
+
+object Note:
+  extension (note: Note) def size: Int = 0
+
+object Coding:
+  opaque type Code = Int
+  extension (code: Code) def digits: Int = code
 
 object Exports:
   export exporting.Doc
@@ -1452,6 +1529,66 @@ object Exports:
 
       . assert: (found: List[List[Text]]) =>
           found == List(List(t"export", t"export Doc"), List(t"export", t"export Doc.parse"))
+
+      def destination(api: Api, imports: List[Text], reference: Text): Optional[Text] =
+        Resolver(api, Scope.document(imports)).link(reference) match
+          case Inline.Destination.Local(path, _) => path
+          case _                                 => Unset
+
+      test(m"a member is named through the export of what declares it"):
+        destination(exported, Nil, t".exporting.Exports.Doc.parse")
+
+      . assert(_ == t"/api/exporting.Doc.parse")
+
+      test(m"a member of a type is named through the type which inherits it"):
+        ( destination(exported, Nil, t"#exporting.Doc#heading"),
+          exported(t"exporting.Titled#heading").let(_.url) )
+
+      . assert { (found, expected) => found.present && found == expected }
+
+      test(m"an extension in a base's companion is named as a member of the type it extends"):
+        ( destination(decorated, Nil, t"#extended.Doc#describe"),
+          destination(decorated, Nil, t".extended.Doc.describe") )
+
+      . assert(_ == (t"/api/extended.Shape.describe", Unset))
+
+      test(m"an extension which needs an import is named as a member only where it is imported"):
+        ( destination(decorated, Nil, t"#extended.Doc#titled"),
+          destination(decorated, List(t"extended"), t"#extended.Doc#titled") )
+
+      . assert(_ == (Unset, t"/api/extended.titled"))
+
+      test(m"an extension is named by its leaf, and is ambiguous on several receivers"):
+        val api: Api = Applicables.decorate(exported)
+        val resolver: Resolver = Resolver(api, Scope.document(Nil))
+        val ambiguous: Optional[Inline.Destination] = resolver.link(t".size")
+        (destination(decorated, Nil, t".describe"), ambiguous, resolver.ambiguities)
+
+      . assert(_ == (t"/api/extended.Shape.describe", Unset, List(t".size")))
+
+      test(m"an extension in an object enclosing its receiver needs no import"):
+        val api: Api = Applicables.decorate(exported)
+        (destination(api, Nil, t"#exporting.Coding.Code#digits"), destination(api, Nil, t".digits"))
+
+      . assert(_ == (t"/api/exporting.Coding.digits", t"/api/exporting.Coding.digits"))
+
+      test(m"a name without a sigil is not sought among the extensions"):
+        val resolver: Resolver = Resolver(Applicables.decorate(exported), Scope.document(Nil))
+        (resolver.link(t"size"), resolver.ambiguities)
+
+      . assert(_ == (Unset, Nil))
+
+      test(m"a later standard import shadows an earlier one"):
+        def named(parent: Text, name: Text): Api.Entity =
+          Api.Entity
+            ( Designator(parent), name, template = Api.Declaration(Api.Kind.Class) )
+
+        val scala: Api.Entity = named(t"scala", t"Double")
+        val java: Api.Entity = named(t"java.lang", t"Double")
+        val api: Api = Api(sci.Map(scala.key -> scala, java.key -> java))
+        destination(api, Nil, t"#Double")
+
+      . assert(_ == t"/api/scala.Double")
 
       val sampleMarks: List[Inline] =
         List(Inline.Import(t"/api/sample", t"sample"), Inline.Bookmark(t"/api/sample", t"sample"))
@@ -2705,7 +2842,7 @@ entry .Doc   a document
       . assert: result =>
           result ==
             ( Scope.standard,
-              List(Designator(t"scala"), Designator(t"java.lang")),
+              List(Designator(t"java.lang"), Designator(t"scala")),
               List(Designator(t"java.lang"), Designator(t"proscenium"), Designator(t"soundness")),
               Nil )
 
@@ -2966,6 +3103,34 @@ entry .Doc   a document
 
       . assert(_ == (List(Inline.Destination.Local(t"/doc/doc/guide/b.md")), upward, List(3)))
 
+      test(m"a relative link leaving its section leads to the section holding its file"):
+        val sections: List[(Text, Text)] =
+          List((t"modules", t"/r/doc/modules"), (t"philosophy", t"/r/doc/philosophy"))
+
+        def placed(section: Text, path: Text, text: Text): Doc =
+          Doc.parse
+            ( path, text, Checker.tokenized, false, Unset, Linker.none, section = section,
+              root = t"/r/doc/$section", sections = sections )
+
+        val text: Text = t"[s](../../philosophy/safety.md#why)\n\n[n](../../nope/x.md)\n"
+        val a: Doc = placed(t"modules", t"guide/a.md", text)
+
+        val s: Doc = placed(t"philosophy", t"safety.md", t"# Safety\n\n## Why\n")
+
+        val corpus: Corpus =
+          Corpus
+            ( List
+                ( Corpus.Section(t"modules", t"/r/doc/modules", List(a)),
+                  Corpus.Section(t"philosophy", t"/r/doc/philosophy", List(s)) ) )
+
+        (links(a), lines(Links.check(corpus, Api.empty, Glossary.none)))
+
+      . assert:
+          _ == ( List
+                  ( Inline.Destination.Local(t"/doc/philosophy/safety.md", t"why"),
+                    Inline.Destination.External(t"../../nope/x.md") ),
+                 List(3) )
+
       test(m"a site link must name an entity, a member of it, or a glossary term"):
         val text: Text =
           t"[a](/api/sample.Doc#parse)\n\n[b](/api/sample.Nope)\n\n" +
@@ -3097,6 +3262,23 @@ define type class
       . assert(_ == (List((Tone.Failure, 3)), 2))
 
     suite(m"Sections"):
+      test(m"a fixture is found by the document's section and path before its file name"):
+        val directory = java.nio.file.Files.createTempDirectory("fuel-fixtures").nn
+        val nested = java.nio.file.Files.createDirectories(directory.resolve("modules")).nn
+        java.nio.file.Files.writeString(directory.resolve("logging.scala"), "val shared = 1")
+        java.nio.file.Files.writeString(nested.resolve("logging.scala"), "val own = 1")
+        val regime = Compilation.Regime(fixtures = directory.toString.nn.tt)
+
+        val own: Optional[Text] =
+          Compilation.fixture(regime, t"modules", t"logging.md").let(_(1))
+
+        val shared: Optional[Text] =
+          Compilation.fixture(regime, t"standards", t"logging.md").let(_(1))
+
+        (own, shared)
+
+      . assert(_ == (t"val own = 1", t"val shared = 1"))
+
       test(m"a section is named by its directory's last segment"):
         Compilation.name(t"/home/me/project/doc/modules/")
 
