@@ -59,15 +59,28 @@ case class Linkage(line: Int, target: Linkage.Target)
 // code linked through the linker, links resolved against the page, and headings anchored.
 object Blocks:
   // Where a document is on the site, by its section and its path within it: what a relative
-  // link and a `#fragment` resolve against.
-  case class Page(section: Text, path: Text):
+  // link and a `#fragment` resolve against. `root` is the section's directory and `sections`
+  // every configured section's name and directory, which a relative link climbing out of its
+  // own section is resolved through, as the files on disk relate.
+  case class Page
+    ( section:  Text,
+      path:     Text,
+      root:     Optional[Text]       = Unset,
+      sections: List[(Text, Text)]   = Nil ):
+
     def url: Text = Doc.url(section, path)
 
+    // What a relative link resolves through beyond the page itself, for a key of its prose.
+    def context: Text =
+      val others: List[Text] = sections.map { (name: Text, root: Text) => t"$name=$root" }
+      t"${root.or(t"")}\n${others.join(t"\n")}"
+
     // A relative link — `guide/x.md`, `../x.md` — against this document's directory, as a
-    // path within the section; `Unset` when it climbs out of the section.
-    def resolve(relative: Text): Optional[Text] =
-      val segments: List[Text] = path.cut(t"/").filter(_ != t"")
-      val directory: List[Text] = segments.keep(segments.size - 1)
+    // section and a path within it: this document's section while the link stays within its
+    // directory, else the configured section whose directory holds the file it leads to (the
+    // innermost, where one is within another); `Unset` when no section holds it.
+    def resolve(relative: Text): Optional[(Text, Text)] =
+      def segments(text: Text): List[Text] = text.cut(t"/").filter(_ != t"")
 
       def recur(stack: List[Text], rest: List[Text]): Optional[List[Text]] = rest match
         case t".." :: tail => if stack.nil then Unset else recur(stack.keep(stack.size - 1), tail)
@@ -75,7 +88,32 @@ object Blocks:
         case head :: tail  => recur(stack + List(head), tail)
         case _             => stack
 
-      recur(directory, relative.cut(t"/").filter(_ != t"")).let(_.join(t"/"))
+      val own: List[Text] = segments(path)
+      val directory: List[Text] = own.keep(own.size - 1)
+      val steps: List[Text] = segments(relative)
+
+      recur(directory, steps).let { (within: List[Text]) => (section, within.join(t"/")) }.or:
+        root.let: (root: Text) =>
+          recur(segments(root) + directory, steps).let: (absolute: List[Text]) =>
+            val holding: List[(Text, List[Text])] =
+              sections.map { (name: Text, root: Text) => (name, segments(root)) }.filter:
+                (_, root: List[Text]) =>
+                  absolute.size > root.size && absolute.keep(root.size) == root
+
+            def innermost
+              ( rest: List[(Text, List[Text])], best: Optional[(Text, List[Text])] )
+            :   Optional[(Text, List[Text])] =
+
+              rest match
+                case head :: tail =>
+                  val deeper: Boolean = best.lay(true)(head(1).size > _(1).size)
+                  innermost(tail, if deeper then head else best)
+
+                case _ =>
+                  best
+
+            innermost(holding, Unset).let: (chosen: (Text, List[Text])) =>
+              (chosen(0), absolute.skip(chosen(1).size).join(t"/"))
 
   // What one conversion gathers besides its blocks: the links it made, for the check which
   // runs once every document is converted, and the anchors it gave its headings and fences,
@@ -196,9 +234,9 @@ object Blocks:
     else
       context.page.lay(external): (page: Page) =>
         page.resolve(path) match
-          case resolved: Text =>
-            context.refer(line, Linkage.Target.Document(page.section, resolved, fragment))
-            val url: Text = Doc.url(page.section, resolved)
+          case (section: Text, resolved: Text) =>
+            context.refer(line, Linkage.Target.Document(section, resolved, fragment))
+            val url: Text = Doc.url(section, resolved)
             Inline.Link(Inline.Destination.Local(url, fragment), content)
 
           case _ =>

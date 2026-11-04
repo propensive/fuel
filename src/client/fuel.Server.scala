@@ -127,3 +127,8 @@ object Server:
     val file: java.nio.file.Path = java.nio.file.Path.of(path.s).nn
     val modified: Long = java.nio.file.Files.getLastModifiedTime(file).nn.toMillis
     jars.computeIfAbsent((t"$path ${shadowed.join(t",")}", modified), _ => walk).nn
+
+  // The JDK's model, walked once per runtime, which does not change while the daemon runs.
+  def jdk(walk: => Api): Api =
+    val version: Text = java.lang.Runtime.version.nn.toString.tt
+    jars.computeIfAbsent((t"jdk $version", 0L), _ => walk).nn

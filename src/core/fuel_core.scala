@@ -70,7 +70,8 @@ object Embedding:
       fixture: Optional[(Text, Text)] = Unset,
       linker:  Linker                 = Linker.none,
       cache:   Optional[Cache]        = Unset,
-      base:    Text                   = t"" )
+      base:    Text                   = t"",
+      section: Optional[Text]         = Unset )
   extends Embedding:
 
     // A fragment's lines as the model's, each typed token linked to what it names.
@@ -150,10 +151,12 @@ object Embedding:
 
     // A fragment's object name, unique across the whole corpus: one session is shared by every
     // document, so a name that reset per document would redefine an earlier document's object
-    // and leave a stale symbol behind. The document's path, reduced to word characters,
-    // scopes it.
+    // and leave a stale symbol behind. The document's section and its path, reduced to word
+    // characters, scope it: two documents of the same name in different sections are apart.
     private val scope: Text =
-      Text(java.util.regex.Pattern.compile("[^A-Za-z0-9]").nn.matcher(path.s).nn.replaceAll("_").nn)
+      val qualified: Text = section.lay(path) { (section: Text) => t"$section/$path" }
+      val pattern = java.util.regex.Pattern.compile("[^A-Za-z0-9]").nn
+      Text(pattern.matcher(qualified.s).nn.replaceAll("_").nn)
 
     private def objectName(index: Int): Text = t"fuel_${scope}_${index.show}"
 

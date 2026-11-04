@@ -126,7 +126,9 @@ object Inspection:
   // The entities of every `jars` entry, through a session's symbol table: each top-level
   // class the jar's `.tasty` entries name is loaded as the compiler loads any classpath
   // symbol — its signatures, never a body — which is what makes it robust where unpickling
-  // whole trees is not; a class which cannot be loaded is left out.
+  // whole trees is not; a class which cannot be loaded is left out. A `.class` entry with no
+  // `.tasty` beside it is a Java class, which the compiler reads from its classfile, and of
+  // which only what is public is kept.
   // The `shadowed` packages are the project's own, whose copies in a jar (a launcher assembly
   // carrying the project itself) are left to the project's sources: loading them into the
   // session ahead of the compile leaves it writing nothing.
@@ -134,6 +136,76 @@ object Inspection:
     ( jars:     List[Text],
       context:  dotty.tools.dotc.core.Contexts.Context,
       shadowed: List[Text]                             = Nil )
+  :   Api | Throwable =
+
+    loading(context): (walker: Walker) =>
+      jars.each: (jar: Text) =>
+        val zip = java.util.zip.ZipFile(jar.s)
+
+        try
+          val entries: scala.List[String] = zip.entries.nn.asScala.map(_.getName.nn).toList
+
+          val tastys: scala.List[String] = entries.filter(_.endsWith(".tasty"))
+          val stems: sci.Set[String] = sci.Set.from(tastys.map(_.dropRight(6)))
+
+          val javas: scala.List[String] = entries.filter(_.endsWith(".class")).filter: entry =>
+            val stem: String = entry.dropRight(6)
+            topLevelJava(stem.substring(stem.lastIndexOf('/') + 1).nn) && !stems.contains(stem)
+
+          def shadows(pkg: Text): Boolean =
+            shadowed.exists { (p: Text) => pkg == p || pkg.starts(t"$p.") }
+
+          // `pkg/Name.tasty` is the class, `pkg/Name$.tasty` its module; a `$package` carrier
+          // holds a package's top-level members.
+          def load(name: String, suffix: Int, java: Boolean): Unit =
+            val full: String = name.substring(0, name.length - suffix).nn.replace('/', '.').nn
+            val pkg: Text = Text(full.substring(0, full.lastIndexOf('.').max(0)).nn)
+            if !shadows(pkg) then walker.load(full.tt, java)
+
+          tastys.foreach(load(_, 6, false))
+          javas.foreach(load(_, 6, true))
+
+        finally zip.close()
+
+  // The entities of the JDK's public classes in the exported packages of its `modules`, read
+  // from the runtime image as the compiler reads them, so that `java.lang.String#getBytes` may
+  // be named as any other member.
+  def jdk
+    ( context: dotty.tools.dotc.core.Contexts.Context,
+      modules: List[Text]                             = List(t"java.base") )
+  :   Api | Throwable =
+
+    loading(context): (walker: Walker) =>
+      val image = java.nio.file.FileSystems.getFileSystem(java.net.URI.create("jrt:/")).nn
+
+      modules.each: (module: Text) =>
+        val found = java.lang.ModuleLayer.boot().nn.findModule(module.s).nn
+
+        if found.isPresent then
+          val exports = found.get.nn.getDescriptor.nn.exports.nn.iterator.nn.asScala.toList
+          val packages: scala.List[String] = exports.filter(!_.isQualified).map(_.source.nn)
+
+          packages.foreach: pkg =>
+            val directory = image.getPath("/modules", module.s, pkg.replace('.', '/')).nn
+
+            if java.nio.file.Files.isDirectory(directory) then
+              val stream = java.nio.file.Files.list(directory).nn
+
+              try
+                stream.iterator.nn.asScala.map(_.getFileName.nn.toString).foreach: file =>
+                  if file.endsWith(".class") && topLevelJava(file.dropRight(6))
+                  then walker.load(t"$pkg.${file.dropRight(6)}", true)
+
+              finally stream.close()
+
+  // Whether a class file's simple name is a top-level class's: not a nested or anonymous
+  // class's (`Outer$Inner`), nor a module's or package's descriptor.
+  private def topLevelJava(name: String): Boolean =
+    name.indexOf('$') < 0 && name != "module-info" && name != "package-info"
+
+  // A walk through a session's symbol table, which `walk` gives its walker to load classes
+  // through, as the model of what it loaded.
+  private def loading(context: dotty.tools.dotc.core.Contexts.Context)(walk: Walker => Unit)
   :   Api | Throwable =
 
     Checking.exclusive:
@@ -148,24 +220,7 @@ object Inspection:
 
         val quotes: Quotes = scala.quoted.runtime.impl.QuotesImpl()
         val collected: juc.ConcurrentHashMap[Text, Api.Entity] = juc.ConcurrentHashMap()
-        val walker = Walker(collected)(using quotes)
-
-        jars.each: (jar: Text) =>
-          val zip = java.util.zip.ZipFile(jar.s)
-
-          try
-            val names: scala.List[String] =
-              zip.entries.nn.asScala.map(_.getName.nn).filter(_.endsWith(".tasty")).toList
-
-            // `pkg/Name.tasty` is the class, `pkg/Name$.tasty` its module; a `$package`
-            // carrier holds a package's top-level members.
-            names.foreach: name =>
-              val full: String = name.substring(0, name.length - 6).nn.replace('/', '.').nn
-              val pkg: Text = Text(full.substring(0, full.lastIndexOf('.').max(0)).nn)
-              val isShadowed: Boolean = shadowed.exists: (p: Text) => pkg == p || pkg.starts(t"$p.")
-              if !isShadowed then walker.load(full.tt)
-          finally zip.close()
-
+        walk(Walker(collected)(using quotes))
         Api(gathered(collected)).relinked
       catch case error: Throwable => error
 
@@ -198,9 +253,14 @@ object Inspection:
       val name: String = symbol.name
       val flags = symbol.flags
 
+      // A Java member which says neither `public` nor `protected` is visible only within its
+      // package, which the compiler records as its being private within it.
+      val packagePrivate: Boolean =
+        flags.is(Flags.JavaDefined) && symbol.privateWithin.isDefined && !flags.is(Flags.Protected)
+
       val hidden: Boolean =
         flags.is(Flags.Private) || flags.is(Flags.PrivateLocal) || flags.is(Flags.Artifact) ||
-          (flags.is(Flags.Synthetic) && !flags.is(Flags.Module))
+          (flags.is(Flags.Synthetic) && !flags.is(Flags.Module)) || packagePrivate
 
       val generated: Boolean =
         name == "<init>" || name == "_" || name.contains("$default$") ||
@@ -417,13 +477,26 @@ object Inspection:
     // `Other`. The modularity form `T is Typeclass` is the refinement `Typeclass { type Self =
     // T }`, which is read as `Typeclass[T]`; an alias of one (`is`, prepositional's `by`) is
     // seen through to it, and any other refinement is its parent.
-    private def shape(repr: TypeRepr): Api.Shape =
-      def bound(upper: TypeRepr): Optional[Api.Shape] = if isAny(upper) then Unset else shape(upper)
+    //
+    // A type parameter's bound is read only where the parameter is not already being bounded:
+    // an F-bounded one (`E extends Enum<E>`, as Java declares many) refers to itself, and its
+    // bound is not expanded again; and a shape deeper than any written type is `Other`.
+    private def shape(repr: TypeRepr): Api.Shape = shape(repr, sci.Set.empty, 0)
+
+    private def shape(repr: TypeRepr, bounding: sci.Set[String], depth: Int): Api.Shape =
+      def shape(repr: TypeRepr): Api.Shape = Walker.this.shape(repr, bounding, depth + 1)
+
+      def param(name: String, upper: => Optional[TypeRepr]): Api.Shape =
+        if bounding.contains(name) then Api.Shape.Param(name.tt) else
+          val bounded: Optional[Api.Shape] = upper.let: (upper: TypeRepr) =>
+            if isAny(upper) then Unset else Walker.this.shape(upper, bounding + name, depth + 1)
+
+          Api.Shape.Param(name.tt, bounded)
 
       def named(symbol: Symbol): Api.Shape =
         designator(symbol).lay(Api.Shape.Other): (d: Designator) => Api.Shape.Named(Api.key(d))
 
-      try repr match
+      if depth > 24 then Api.Shape.Other else try repr match
         case ByNameType(inner)       => shape(inner)
         case AnnotatedType(inner, _) => shape(inner)
         case TypeBounds(_, upper)    => shape(upper)
@@ -448,16 +521,10 @@ object Inspection:
         // side refers to its parameters so).
         case ParamRef(binder, index) => binder match
           case PolyType(names, bounds, _) =>
-            val upper: Optional[Api.Shape] = bounds(index) match
-              case TypeBounds(_, upper) => bound(upper)
-
-            Api.Shape.Param(names(index).tt, upper)
+            param(names(index), bounds(index) match { case TypeBounds(_, upper) => upper })
 
           case TypeLambda(names, bounds, _) =>
-            val upper: Optional[Api.Shape] = bounds(index) match
-              case TypeBounds(_, upper) => bound(upper)
-
-            Api.Shape.Param(names(index).tt, upper)
+            param(names(index), bounds(index) match { case TypeBounds(_, upper) => upper })
 
           case _ => Api.Shape.Other
 
@@ -467,11 +534,7 @@ object Inspection:
 
           if symbol.isNoSymbol then Api.Shape.Other
           else if symbol.isTypeParam || symbol.flags.is(Flags.Param) then
-            val upper: Optional[Api.Shape] = symbol.info match
-              case TypeBounds(_, upper) => bound(upper)
-              case _                    => Unset
-
-            Api.Shape.Param(symbol.name.tt, upper)
+            param(symbol.name, symbol.info match { case TypeBounds(_, upper) => upper; case _ => Unset })
           else if symbol.isClassDef || symbol.isTypeDef then
             // An alias of a refinement (`type Showable2 = Showable { type Self = Int }`).
             dealiased match
@@ -910,7 +973,7 @@ object Inspection:
 
     // A top-level class or module of a dependency, by the name its `.tasty` entry gives,
     // loaded from the classpath; its packages are recorded with it.
-    def load(name: Text): Unit =
+    def load(name: Text, java: Boolean = false): Unit =
       import dotty.tools.dotc.core.Names
 
       // A package object's carrier (`pkg_core$package`) is a module, named without its `$`.
@@ -938,11 +1001,15 @@ object Inspection:
 
       val cls: Optional[Symbol] = if isModule then Unset else static(Names.typeName(plainName.s))
 
-      (cls.let(List(_)).or(Nil) + module.let(List(_)).or(Nil)).each: (symbol: Symbol) =>
-        try
-          packageEntity(symbol.owner)
-          template(symbol, false)
-        catch case _: Throwable => ()
+      // A Java class which is not public is not part of the API.
+      def kept(symbol: Symbol): Boolean = !java || !skipped(symbol)
+
+      (cls.let(List(_)).or(Nil) + module.let(List(_)).or(Nil)).filter(kept).each:
+        (symbol: Symbol) =>
+          try
+            packageEntity(symbol.owner)
+            template(symbol, false)
+          catch case _: Throwable => ()
 
     def walk(tree: Tree, own: Boolean): Unit = tree match
       case PackageClause(pid, statements) =>

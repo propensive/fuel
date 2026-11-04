@@ -40,7 +40,6 @@ import scala.collection.immutable as sci
 // Excluded from the umbrella: `Compilation`, anthology's, which would outrank fuel's own.
 import soundness.{Compilation as _, Query as _, *}
 
-import backstops.silentBackstop
 import dysasymptotics.linearSize
 import interpreters.posixInterpreter
 import probates.cancelProbate
@@ -55,6 +54,23 @@ import threads.platformThreads
 object NoDocuments extends Status(3, t"no document directory is configured")
 object NoDocument extends Status(5, t"the document could not be read")
 object CompileFailed extends Status(4, t"a code fragment did not do as its preamble said")
+object DaemonFailed extends Status(6, t"the daemon failed while carrying out the command")
+
+// What ends an invocation which a failure escaped: an `Error`, such as the daemon running out of
+// memory, which a silent backstop would end with status 2 and no word, as though nothing were
+// wrong. It is reported on the standard error, with where it was thrown, and the invocation
+// ends with a status of its own.
+given fuelBackstop: Backstop = new Backstop:
+  def handle(error: Throwable)(using Stdio): Exit =
+    try
+      val frames: scala.Array[String] =
+        error.getStackTrace.nn.take(8).map { frame => s"    at $frame" }
+
+      Err.println(t"fuel: the daemon failed while carrying out the command: ${error.toString.tt}")
+      frames.foreach { (frame: String) => Err.println(frame.tt) }
+    catch case _: Throwable => ()
+
+    DaemonFailed.exit
 
 // Fuel's user interface, in one namespace: its subcommands, flags and settings.
 object ui:
@@ -85,7 +101,8 @@ object ui:
   val Fixtures =
     Setting[Text]
       ( t"fixtures",
-        t"a directory of `<document>.scala` fixtures, compiled before each document's fragments" )
+        t"a directory of `<section>/<document>.scala` (or `<document>.scala`) fixtures, " +
+          t"compiled before each document's fragments" )
 
   val Source =
     Setting[Text]
@@ -508,6 +525,17 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
     progress.step(Phase.Jars)
     acc.merge(walked)
 
+  // The JDK's public classes, which every Scala source sees, and which a document may name.
+  val jdk: Api = Server.jdk:
+    Checking.session(config.classpath, config.options): (walker: Checker) =>
+      walker.context.lay(Api.empty): (context: dotty.tools.dotc.core.Contexts.Context) =>
+        Inspection.jdk(context) match
+          case api: Api => api
+
+          case error: Throwable =>
+            report(failed(t"The JDK could not be inspected", error))
+            Api.empty
+
   val built: Boolean =
     if sources.nil then false else
       // A fresh output: what the sources no longer declare must not linger.
@@ -539,7 +567,7 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
         Api.empty
 
   progress.finish(Phase.Inspect)
-  val inspected: Api = dependencies.merge(own)
+  val inspected: Api = jdk.merge(dependencies).merge(own)
 
   Inspection.failures() match
     case (count, error: Throwable) if count > 0 =>
@@ -713,8 +741,11 @@ private def compiled(config: Workspace.Config, path: Text): Optional[Doc] =
   val checked: Boolean = !config.classpath.nil && config.classpath.all(exists(_))
   val glossary: Glossary = glossaries(config)(0)
 
+  val sections: List[(Text, Text)] =
+    config.documents.map { (root: Text) => (Compilation.name(root), root) }
+
   val regime: Compilation.Regime =
-    Compilation.Regime(config.session, config.fixtures, glossary = glossary)
+    Compilation.Regime(config.session, config.fixtures, glossary = glossary, sections = sections)
 
   if checked then
     try Checking.session(config.classpath, config.options): (checker: Checker) =>

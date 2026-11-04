@@ -179,6 +179,10 @@ entry .Preamble   the TEL preamble a ` ```scala fuel ` fence begins with: Amok's
   entry .parse      a preamble from its text, or the TEL error
   entry .diagnostic a preamble's TEL error as a diagnostic at its place in the file
 
+entry .Icons   the glyph beside a member's name: its keyword drawn, as SVG Pyrocosm sets in the text, transformed by its modifiers
+  entry .of       the glyph of a declaration, by its kind and modifiers, as an icon
+  entry .markup   the glyph's markup alone
+
 entry .Runner   runs a fragment's object as Flame runs a line, and reads what it wrote as a terminal would
   entry .run      a body run on its own thread, its standard streams captured as one text
   entry .styled   captured text as the lines and styled runs of an output block
