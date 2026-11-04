@@ -40,7 +40,6 @@ import scala.collection.immutable as sci
 // Excluded from the umbrella: `Compilation`, anthology's, which would outrank fuel's own.
 import soundness.{Compilation as _, Query as _, *}
 
-import backstops.silentBackstop
 import dysasymptotics.linearSize
 import interpreters.posixInterpreter
 import probates.cancelProbate
@@ -55,6 +54,23 @@ import threads.platformThreads
 object NoDocuments extends Status(3, t"no document directory is configured")
 object NoDocument extends Status(5, t"the document could not be read")
 object CompileFailed extends Status(4, t"a code fragment did not do as its preamble said")
+object DaemonFailed extends Status(6, t"the daemon failed while carrying out the command")
+
+// What ends an invocation which a failure escaped: an `Error`, such as the daemon running out of
+// memory, which a silent backstop would end with status 2 and no word, as though nothing were
+// wrong. It is reported on the standard error, with where it was thrown, and the invocation
+// ends with a status of its own.
+given fuelBackstop: Backstop = new Backstop:
+  def handle(error: Throwable)(using Stdio): Exit =
+    try
+      val frames: scala.Array[String] =
+        error.getStackTrace.nn.take(8).map { frame => s"    at $frame" }
+
+      Err.println(t"fuel: the daemon failed while carrying out the command: ${error.toString.tt}")
+      frames.foreach { (frame: String) => Err.println(frame.tt) }
+    catch case _: Throwable => ()
+
+    DaemonFailed.exit
 
 // Fuel's user interface, in one namespace: its subcommands, flags and settings.
 object ui:

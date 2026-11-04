@@ -27,6 +27,11 @@ fuel --version     # the version alone
 fuel quit          # stop the daemon, and any server it runs
 ```
 
+A failure of the daemon itself while it carries out a command (running out of memory, say) is
+reported on the standard error, where it was thrown, and the command exits with status 6, apart
+from a compile's own failures (status 4) and from a command line it did not understand
+(status 2).
+
 `fuel compile` reads every `*.md` beneath each configured `document` directory, parses it as
 CommonMark, and converts it to Pyrocosm blocks: a fenced block whose info string is `scala` or
 `java` is highlighted through [Harlequin](https://soundness.dev/harlequin/); any other fence is
