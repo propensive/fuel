@@ -3534,6 +3534,58 @@ define type class
 
       . assert(_ == (List((Tone.Failure, 3)), 2))
 
+    suite(m"Latest"):
+      import java.util.concurrent as juc
+      import scala.jdk.CollectionConverters.*
+
+      // The requests done, in order, with a latch for each request a test waits on; the
+      // first request is held, once begun, until `release` opens.
+      final class Recorder(held: Text):
+        val done: juc.ConcurrentLinkedQueue[Text] = juc.ConcurrentLinkedQueue()
+        val begun: juc.CountDownLatch = juc.CountDownLatch(1)
+        val release: juc.CountDownLatch = juc.CountDownLatch(1)
+        val latches: juc.ConcurrentHashMap[Text, juc.CountDownLatch] = juc.ConcurrentHashMap()
+
+        def latch(request: Text): juc.CountDownLatch =
+          latches.computeIfAbsent(request, _ => juc.CountDownLatch(1)).nn
+
+        val latest: Latest[Text] = Latest: (request: Text) =>
+          if request == held then
+            begun.countDown()
+            release.await(10, juc.TimeUnit.SECONDS)
+
+          // A request which fails, as a search might: the number is not one.
+          if request == t"fail" then java.lang.Integer.parseInt("fail")
+          done.add(request)
+          latch(request).countDown()
+
+        def await(request: Text): Boolean = latch(request).await(10, juc.TimeUnit.SECONDS)
+        def list: List[Text] = List.from(done.asScala)
+
+      test(m"keystrokes made during a search are searched for once, as the last of them"):
+        val recorder = Recorder(t"a")
+        recorder.latest(t"a")
+        recorder.begun.await(10, juc.TimeUnit.SECONDS)
+        List(t"ab", t"abc", t"abcd", t"abcde").each(recorder.latest(_))
+        recorder.release.countDown()
+        recorder.await(t"abcde")
+        recorder.list
+
+      . assert(_ == List(t"a", t"abcde"))
+
+      test(m"a request made once the worker is idle is done, as is one after a failure"):
+        val recorder = Recorder(t"")
+        recorder.latest(t"x")
+        recorder.await(t"x")
+        recorder.latest(t"fail")
+        recorder.latest(t"y")
+        recorder.await(t"y")
+        recorder.latest(t"z")
+        recorder.await(t"z")
+        recorder.list.filter(_ != t"x")
+
+      . assert(_ == List(t"y", t"z"))
+
     suite(m"Sections"):
       test(m"a fixture is found by the document's section and path before its file name"):
         val directory = java.nio.file.Files.createTempDirectory("fuel-fixtures").nn

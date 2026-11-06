@@ -124,6 +124,24 @@ final class Dashboard():
   val content: Live[List[Block]] =
     Live(List(Block.paragraph(t"Run `fuel compile` in a project, and its documents appear here.")))
 
+  // The tab's searches, done apart from the websocket's messages, so that a burst of
+  // keystrokes is searched for once, as its last text, rather than at every text along the way.
+  // A search which fails says so in place of its results.
+  private val searches: Latest[Text] = Latest: (text: Text) =>
+    val page: List[Block] =
+      try Dashboard.searchPage(text) catch case error: Exception =>
+        val message: List[Block] = List(Block.paragraph(error.toString.tt))
+        List(Block.Notice(Tone.Failure, Inline.text(t"Search"), message))
+
+    display(Target.Search(text), page)
+
+  // A page computed apart, shown only if the tab is still showing what it was computed for:
+  // a search overtaken by another keystroke, or by a move to another page, is dropped. It is
+  // checked and shown under the lock `show` holds, so that a move made meanwhile is never
+  // overwritten by the search it left.
+  private def display(target: Target, blocks: List[Block]): Unit = synchronized:
+    if selected == target then content() = blocks
+
   val interface: Interface =
     Interface
       ( Inline.text(t"fuel"),
@@ -174,7 +192,8 @@ final class Dashboard():
       show()
       refresh()
 
-    // Every keystroke searches; the decoration carries the version of the text it describes.
+    // Every keystroke decorates the field at once, the decoration carrying the version of the
+    // text it describes, and asks for a search, which a later keystroke may overtake.
     case Event.Edited(Dashboard.searchInput, text, caret, version) =>
       val completions = Server.api.search.completions(text, caret)
 
@@ -225,7 +244,8 @@ final class Dashboard():
       lastNavigation = navigation0
       navigation() = navigation0
 
-  private def show(): Unit =
+  // The selected page, shown now, unless it is a search, which is shown when it is done.
+  private def show(): Unit = synchronized:
     selected.let:
       case Target.Document(section, path) =>
         Server.corpus.let(_.doc(section, path)).let: (doc: Doc) =>
@@ -238,7 +258,7 @@ final class Dashboard():
         content() = Server.glossary
 
       case Target.Search(text) =>
-        content() = Dashboard.searchPage(text)
+        searches(text)
 
       case Target.Missing(path) =>
         val message: List[Block] = List(Block.paragraph(t"There is no page at $path."))
