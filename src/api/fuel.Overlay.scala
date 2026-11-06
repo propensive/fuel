@@ -383,7 +383,7 @@ object Overlay:
 
     current.entities.values.toList.sortBy(_.key.s).foreach: entity =>
       val undocumented: Boolean = entity.own && !entity.removed && entity.doc.absent
-      val member: Boolean = !entity.isPackage && !entity.isParameter
+      val member: Boolean = !entity.isPackage && !entity.isParameter && !entity.derived
 
       if undocumented && member && within(entity) && !concealed(entity) && !overriding(entity) then
         val overlay: Optional[Overlay] = overlays.seek: (o: Overlay) =>

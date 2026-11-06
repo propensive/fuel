@@ -624,13 +624,16 @@ object Embedding:
 
           join(positive, framing, failed, preamble, mode)
 
-          val restored: Block.Code = marked.fold(block): (block: Block.Code, index: Int) =>
-            negativeLine(block, code, marked, index, framing, mode, start)
+          val (restored, cards) =
+            marked.fold((block, reports)):
+              case ((block: Block.Code, cards: List[Block]), index: Int) =>
+                val (line, card) = negativeLine(block, code, marked, index, framing, mode, start)
+                (line, cards + card)
 
           val output: List[Block] =
             if run && checked && !failed then ran(positive, framing, preamble, start) else Nil
 
-          restored :: reports + output
+          restored :: cards + output
 
         case _ =>
           List(Block.Code(Language.Scala, lines(code), Nil, start, Unset, id))
@@ -678,9 +681,25 @@ object Embedding:
 
         output + failure
 
+    // A message of a single line is shown on its code, as the note's caption; one of several, as
+    // a card after the fragment, located in the file, with the lines around it.
+    private def card
+      ( tone:    Tone,
+        note:    Block.Note,
+        message: Text,
+        lines:   List[Block.Line],
+        start:   Int )
+    :   Block.Diagnostic =
+
+      val location = Block.Location(path, start + note.line, note.start + 1)
+      val excerpt: Block.Code = Block.Code.excerpt(Language.Scala, lines, List(note))
+      val numbered: Block.Code = excerpt.copy(start = excerpt.start.let(_ + start - 1))
+      Block.Diagnostic(tone, location, List(Block.paragraph(message)), List(numbered))
+
     // One line marked as not compiling, compiled in its place: it must fail, and its first
     // error is a note on it, in the block whose line is now taken from that run, so that its
-    // tokens are typed too; a line which compiles is a problem.
+    // tokens are typed too, with a card where its message needs one; a line which compiles is a
+    // problem.
     private def negativeLine
       ( block:   Block.Code,
         code:    Text,
@@ -689,7 +708,7 @@ object Embedding:
         framing: Framing,
         mode:    Preamble.Mode,
         start:   Int )
-    :   Block.Code =
+    :   (Block.Code, List[Block]) =
 
       val restored: Text = blank(code, marked, index)
       val text: Text = code.cut(t"\n").skip(index).head.or(t"")
@@ -707,27 +726,36 @@ object Embedding:
           val error: Optional[harlequin.Diagnostic] =
             source.diagnostics.seek(_.importance == harlequin.Diagnostic.Importance.Error)
 
-          error.lay(block.copy(lines = replaced(line))): (diagnostic: harlequin.Diagnostic) =>
-            val from: Int = diagnostic.span.offset.let(_.n0).or(0) - framing.shift
-            val length: Int = diagnostic.span.length.or(0)
-            val caption: List[Inline] = Inline.text(diagnostic.message)
-            val style: Block.Note.Style = Block.Note.Style.Erroneous
-            val at: Int = from.max(0)
-            val placed: Block.Note = Notes.of(restored, at, at + length, style, caption)
+          if error.absent then
+            val message: Text = t"This line is marked `// does not compile`, but it compiled."
+            report(Block.Location(path, start + index), message)
 
-            val note: Block.Note =
-              if from >= 0 && placed.line == index then placed
-              else Block.Note(index, 0, text.length, Block.Note.Style.Erroneous, caption)
+          val none: List[Block] = Nil
 
-            block.copy(lines = replaced(line), notes = block.notes + List(note))
+          error.lay((block.copy(lines = replaced(line)), none)):
+            (diagnostic: harlequin.Diagnostic) =>
+              val from: Int = diagnostic.span.offset.let(_.n0).or(0) - framing.shift
+              val length: Int = diagnostic.span.length.or(0)
+              val style: Block.Note.Style = Block.Note.Style.Erroneous
+              val at: Int = from.max(0)
+              val placed: Block.Note = Notes.of(restored, at, at + length, style)
 
-          . also:
-            if error.absent then
-              val message: Text = t"This line is marked `// does not compile`, but it compiled."
-              report(Block.Location(path, start + index), message)
+              val note: Block.Note =
+                if from >= 0 && placed.line == index then placed
+                else Block.Note(index, 0, text.length, style)
+
+              val message: Text = diagnostic.message.trim
+              val lines: List[Block.Line] = replaced(line)
+
+              if message.contains(t"\n") then
+                val cards: List[Block] = List(card(Tone.Failure, note, message, lines, start))
+                (block.copy(lines = lines, notes = block.notes + List(note)), cards)
+              else
+                val shown: Block.Note = note.copy(caption = Inline.text(message))
+                (block.copy(lines = lines, notes = block.notes + List(shown)), none)
 
         case _ =>
-          block
+          (block, List[Block]())
 
     private def embedSource
       ( source:   SourceCode,
@@ -742,11 +770,12 @@ object Embedding:
       // The lines of this fragment alone, out of the unit's.
       val lines: List[Block.Line] = framing.own(linked(source), code.cut(t"\n").size)
 
-      // Each diagnostic as a note on the fragment, and as a diagnostic of its own after it,
-      // located in the file, with the lines around it.
-      val reported: List[(Block.Note, Block, Boolean)] =
+      // Each diagnostic as a note on the fragment and a problem of the document, located in the
+      // file, with the lines around it; on the page, a message of one line is the note's caption,
+      // and one of several that card, after the fragment.
+      val reported: List[(Block.Note, Block, Boolean, Boolean)] =
         if !checked then Nil else
-          type Reported = (Block.Note, Block, Boolean)
+          type Reported = (Block.Note, Block, Boolean, Boolean)
 
           source.diagnostics.bind[List[Reported], Reported, List[Reported]]:
             (diagnostic: harlequin.Diagnostic) =>
@@ -764,13 +793,13 @@ object Embedding:
                   case _                                       => Tone.Info
 
                 val note: Block.Note = Notes.of(code, from, from + length, style)
-                val location = Block.Location(path, start + note.line, note.start + 1)
-                val excerpt: Block.Code = Block.Code.excerpt(Language.Scala, lines, List(note))
-                val message: List[Block] = List(Block.paragraph(diagnostic.message))
-                val numbered: Block.Code = excerpt.copy(start = excerpt.start.let(_ + start - 1))
-                val shown: Block.Note = note.copy(caption = Inline.text(diagnostic.message))
-                val report: Block = Block.Diagnostic(tone, location, message, List(numbered))
-                List((shown, report, tone == Tone.Failure))
+                val message: Text = diagnostic.message.trim
+                val several: Boolean = message.contains(t"\n")
+                val shown: Block.Note =
+                  if several then note else note.copy(caption = Inline.text(message))
+
+                val report: Block = card(tone, note, message, lines, start)
+                List((shown, report, tone == Tone.Failure, several))
 
       val errors: List[Block] = reported.filter(_(2)).map(_(1))
 
@@ -790,7 +819,7 @@ object Embedding:
       val marks: List[Block.Note] = reported.map(_(0)) + notes(code, preamble.marks)
       val block: Block.Code = Block.Code(Language.Scala, lines, marks, start, Unset, id)
 
-      (block, reported.map(_(1)), !errors.nil)
+      (block, reported.filter(_(3)).map(_(1)), !errors.nil)
 
   object JavaCode extends Embedding:
     def embed(info: List[Text], content: Text, fence: Int): Optional[List[Block]] =

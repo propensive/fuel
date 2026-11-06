@@ -41,15 +41,19 @@ import rankings.balancedRanking
 
 // A type's place in the hierarchy, drawn: the type itself, its ancestors up to `Any` through
 // every parent it was written with, the types known to extend it (to a few, then a note of how
-// many more), and a few of its peers — the other types under its first parent. The graph is
+// many more, at the end of the line they hang from, on the right of the drawing), and a few of
+// its peers — the other types under its first parent. The graph is
 // laid out on acyclicity's `layered`, which ranks every type a layer below its deepest parent
 // and orders each layer to cross as few edges as it can; what remains here is to give each
 // layer's boxes positions (pulled towards the mean of their neighbours' without reordering), to
 // route each edge with vertical and horizontal segments alone — up from the child to a track
 // between the layers, along it, and up a stem shared by everything beneath that parent — and
 // to write it as SVG: a box per type with its package above its name, both in the monospace
-// font, every box with a page a link to it. The written form of a parent (`Shape[Int]`) labels
-// the type's own edge to it. `Matchable` is left out, and `java.lang.Object` is `AnyRef`.
+// font, every box with a page a link to it. A package the page's scope names is not written; one
+// with a page may be imported by the reader, so a box says how it reads either way, for Pyrocosm
+// to choose under the reader's purview (`Purview.drawing`). `Matchable` is left out, and
+// `java.lang.Object` is `AnyRef`. The written form of a parent (`Shape[Int]`) is left to the
+// sentence which describes the drawing.
 //
 // honeycomb reads the SVG, and admits attribute names of letters and hyphens alone, so edges
 // are paths (not lines, whose `x1` it rejects) and nothing is namespaced.
@@ -57,7 +61,14 @@ object Hierarchy:
   enum Role:
     case Current, Ancestor, Child, Peer, Universal, More
 
-  case class Node(key: Text, name: Text, pkg: Text, href: Optional[Text], role: Role)
+  case class Node
+    ( key:      Text,
+      name:     Text,
+      pkg:      Text,
+      href:     Optional[Text],
+      role:     Role,
+      pkgPath:  Optional[Text] = Unset )
+
   case class Edge(child: Text, parent: Text, label: Optional[Text] = Unset)
   case class Graph(nodes: List[Node], edges: List[Edge], current: Text)
 
@@ -67,21 +78,29 @@ object Hierarchy:
 
   // An edge's points, from the child's top to the parent's track; the stem from the track to
   // the parent is shared, and drawn once.
-  case class Route(edge: Edge, points: scala.List[(Int, Int)], labelAt: Optional[(Int, Int)])
+  case class Route(edge: Edge, points: scala.List[(Int, Int)])
   case class Stem(x: Int, top: Int, bottom: Int)
 
+  // A note of how many more hang from a parent's line, which runs from `from` up to the note.
+  case class Remainder(text: Text, from: Int, to: Int, y: Int)
+
   case class Layout
-    ( boxes: List[Box], routes: List[Route], stems: List[Stem], width: Int, height: Int )
+    ( boxes:      List[Box],
+      routes:     List[Route],
+      stems:      List[Stem],
+      width:      Int,
+      height:     Int,
+      remainders: List[Remainder] = Nil )
 
   // How many children and peers are drawn before a note stands for the rest.
   val childLimit: Int = 6
   val peerLimit: Int = 3
 
-  // The geometry, in pixels: a monospace character at the inline size and at the small size,
+  // The geometry, in pixels: a monospace character at the inline size and at a package's size,
   // the box's height (two lines of text), its horizontal padding and least width, the gap
   // between boxes, the gap between layers (which the tracks run through) and the margin.
   private val charWidth: Double = 7.3
-  private val smallCharWidth: Double = 6.3
+  private val pkgCharWidth: Double = 5.8
   private val boxHeight: Int = 38
   private val padding: Int = 10
   private val leastWidth: Int = 56
@@ -89,7 +108,6 @@ object Hierarchy:
   private val layerGap: Int = 44
   private val margin: Int = 8
   private val trackStep: Int = 6
-  private val labelStep: Int = 12
 
   private def universal(key: Text): Boolean =
     key == Lattice.any || key == Lattice.anyRef || key == Lattice.anyVal
@@ -116,8 +134,11 @@ object Hierarchy:
           val start: Int = key.s.lastIndexWhere { c => c == '.' || c == '#' } + 1
           val name: Text = found.let(_.name).or(Text(key.s.substring(start).nn))
           val prefix: String = key.s.substring(0, key.s.length - name.s.length).nn
-          val pkg: Text = Text(prefix.stripSuffix(".").stripSuffix("#"))
-          Node(key, name, pkg, found.let(_.path), if universal(key) then Role.Universal else role)
+          val pkg0: Text = Text(prefix.stripSuffix(".").stripSuffix("#"))
+          val pkg: Text = if scope.names(pkg0) then t"" else pkg0
+          val pkgPath: Optional[Text] = if pkg == t"" then Unset else api(pkg).let(_.url)
+          val shown: Role = if universal(key) then Role.Universal else role
+          Node(key, name, pkg, found.let(_.path), shown, pkgPath)
 
         def place(key: Text, role: Role): Unit =
           if !nodes.contains(key) then nodes(key) = node(key, role)
@@ -198,15 +219,19 @@ object Hierarchy:
         if trivial then Unset else Graph(List.from(nodes.values), List.from(labelled), entity.key)
 
   private def boxWidth(node: Node): Int =
-    val wide: Double = (node.name.length*charWidth).max(node.pkg.length*smallCharWidth)
+    val wide: Double = (node.name.length*charWidth).max(node.pkg.length*pkgCharWidth)
     (wide.toInt + 2*padding).max(leastWidth)
 
   def layout(graph: Graph): Optional[Layout] =
-    val byKey: sci.Map[Text, Node] = graph.nodes.stdlib.map { n => n.key -> n }.toMap
-    val parentsOf: sci.Map[Text, scala.List[Text]] = graph.edges.stdlib.groupMap(_.child)(_.parent)
+    // A note of how many more is no box in a layer: it is set beside its parent's line, below.
+    val (more, drawn) = graph.nodes.stdlib.partition(_.role == Role.More)
+    val noted: sci.Set[Text] = more.map(_.key).toSet
+    val edges: scala.List[Edge] = graph.edges.stdlib.filter { e => !noted.contains(e.child) }
+    val byKey: sci.Map[Text, Node] = drawn.map { n => n.key -> n }.toMap
+    val parentsOf: sci.Map[Text, scala.List[Text]] = edges.groupMap(_.child)(_.parent)
 
     def parentSet(key: Text): Set[Text] = List.from(parentsOf.getOrElse(key, scala.Nil)).to[Set]
-    val dag: Optional[Dag[Text]] = safely(Dag(graph.nodes.map(_.key).to[Set])(parentSet))
+    val dag: Optional[Dag[Text]] = safely(Dag(List.from(drawn).map(_.key).to[Set])(parentSet))
 
     dag.let: dag =>
       val layering: Layering[Text] = dag.layered
@@ -278,20 +303,9 @@ object Hierarchy:
         i   <- row.indices
       do row(i) = row(i) - least + margin
 
-      // The type's own labelled edges stack their labels up its vertical segment, so the gap
-      // above its layer grows to hold them.
-      val labelled: scala.List[Edge] =
-        graph.edges.stdlib.filter: e => e.child == graph.current && e.label.present
-
-      val currentLayer: Int = layering.rank.getOrElse(graph.current, -1)
-
-      def gapAbove(layer: Int): Int =
-        if layer == currentLayer then layerGap.max(2*margin + labelStep*labelled.length)
-        else layerGap
-
       val tops: scala.Array[Int] =
         (1 until depth)
-        . scanLeft(margin): (top, layer) => top + boxHeight + gapAbove(layer)
+        . scanLeft(margin): (top, _) => top + boxHeight + layerGap
         . toArray
 
       // A box's centre is rounded once, and its left edge placed from it, so that boxes with one
@@ -343,15 +357,12 @@ object Hierarchy:
 
                   case None => points
 
-            val points: scala.List[(Int, Int)] = climb(childLayer, childAt, scala.List(start))
-            val lift: Int = 6 + labelStep*labelled.indexOf(edge).max(0)
-            val label: Optional[(Int, Int)] = edge.label.let: _ => (start._1 + 4, start._2 - lift)
-            Route(edge, points, label)
+            Route(edge, climb(childLayer, childAt, scala.List(start)))
 
           case _ => Unset
 
       val routes: scala.List[Route] =
-        graph.edges.stdlib.flatMap: e => route(e).let(scala.List(_)).or(scala.Nil)
+        edges.flatMap: e => route(e).let(scala.List(_)).or(scala.Nil)
 
       // One stem for each parent with children, from its track to its bottom.
       val stems: scala.List[Stem] = layers.indices.toList.flatMap: layer =>
@@ -363,9 +374,22 @@ object Hierarchy:
             case _ =>
               scala.Nil
 
-      val width: Int = boxes.map { b => b.x + b.w }.maxOption.getOrElse(0) + margin
+      val right: Int = boxes.map { b => b.x + b.w }.maxOption.getOrElse(0)
+      val noteAt: Int = right + gap/2
+
+      // Each note on its parent's track, all of them in one column at the right of the drawing.
+      val remainders: scala.List[Remainder] = more.flatMap: note =>
+        graph.edges.stdlib.find(_.child == note.key).toList.flatMap: edge =>
+          layering.rank.get(edge.parent).toList.flatMap: layer =>
+            positions(layer).get(Layering.Vertex.Real(edge.parent)).toList.map: i =>
+              Remainder(note.name, mid(layer, i), noteAt, track(layer, i))
+
+      val notes: Int =
+        remainders.map { r => (r.text.length*charWidth).toInt }.maxOption.getOrElse(-gap/2)
+      val width: Int = noteAt + notes + margin
       val height: Int = layerTop(depth - 1) + boxHeight + margin
-      Layout(List.from(boxes), List.from(routes), List.from(stems), width, height)
+      val all: List[Remainder] = List.from(remainders)
+      Layout(List.from(boxes), List.from(routes), List.from(stems), width, height, all)
 
   private def escape(text: Text): Text =
     val escaped: String =
@@ -388,32 +412,26 @@ object Hierarchy:
 
         t"M${x.toString.tt} ${y.toString.tt}${List.from(moves).join}"
 
-    val edges: Text = layout.routes.map: route =>
-      val own: Boolean = layout.boxes.exists: b =>
-        b.node.key == route.edge.child && b.node.role == Role.Current
+    val line: Text = t"fill: none; stroke: var(--pyro-border); stroke-width: 1.2"
 
-      val stroke: Text = if own then t"var(--pyro-muted)" else t"var(--pyro-border)"
-      val style: Text = t"fill: none; stroke: $stroke; stroke-width: 1.2"
-      t"""<path d="${path(route.points)}" style="$style"/>"""
+    val edges: Text = layout.routes.map: route =>
+      t"""<path d="${path(route.points)}" style="$line"/>"""
 
     . join
 
     val stems: Text = layout.stems.map: stem =>
       val d: Text = t"M${stem.x.toString.tt} ${stem.bottom.toString.tt}V${stem.top.toString.tt}"
-      t"""<path d="$d" style="fill: none; stroke: var(--pyro-border); stroke-width: 1.2"/>"""
+      t"""<path d="$d" style="$line"/>"""
 
     . join
 
     val boxes: Text = layout.boxes.map: box =>
       val node: Node = box.node
       val current: Boolean = node.role == Role.Current
-      val more: Boolean = node.role == Role.More
 
       val stroke: Text =
         if current then t"stroke: var(--pyro-tone-accent); stroke-width: 2"
         else t"stroke: var(--pyro-border); stroke-width: 1"
-
-      val dashes: Text = if more then t""" stroke-dasharray="4 3"""" else t""
 
       val nameFill: Text =
         if current then t"var(--pyro-fg)"
@@ -430,14 +448,21 @@ object Hierarchy:
       val position: Text = t"""x="${box.x.toString.tt}" y="${box.y.toString.tt}""""
       val size: Text = t"""width="${box.w.toString.tt}" height="${box.h.toString.tt}""""
       val fill: Text = t"fill: var(--pyro-surface); $stroke"
-      val rect: Text = t"""<rect $position $size style="$fill"$dashes/>"""
+      val rect: Text = t"""<rect $position $size style="$fill"/>"""
 
-      val pkg: Text =
-        if node.pkg == t"" then t""
-        else text(14, t"font-size: var(--pyro-text-small); fill: var(--pyro-muted)", node.pkg)
+      val smaller: Text = t"font-size: calc(var(--pyro-text-small)*0.8); fill: var(--pyro-muted)"
+      val pkg: Text = text(14, smaller, node.pkg)
 
-      val name: Text = text(30, t"font-size: var(--pyro-text-inline); fill: $nameFill", node.name)
-      val inner: Text = rect + pkg + name
+      def name(y: Int): Text =
+        text(y, t"font-size: var(--pyro-text-inline); fill: $nameFill", node.name)
+
+      val named: Text = if node.pkg == t"" then name(24) else pkg + name(30)
+
+      val lines: Text = node.pkgPath.lay(named): (path: Text) =>
+        val at: Text = escape(path)
+        t"""<g data-not-imported="$at">$named</g><g data-imported="$at">${name(24)}</g>"""
+
+      val inner: Text = rect + lines
 
       if current then t"<g>$inner</g>"
       else
@@ -446,16 +471,16 @@ object Hierarchy:
 
     . join
 
-    def label(route: Route): Optional[Text] = route.labelAt.let: (x, y) =>
-      route.edge.label.let: (label: Text) =>
-        val at: Text = t"""x="${x.toString.tt}" y="${y.toString.tt}" text-anchor="start""""
-        val paint: Text = t"paint-order: stroke; stroke: var(--pyro-surface); stroke-width: 3"
-        val small: Text = t"font-size: var(--pyro-text-small); fill: var(--pyro-muted)"
-        val style: Text = t"$mono; $small; $paint"
-        t"""<text $at style="$style">${escape(label)}</text>"""
+    // A parent's line, carried on to its note of how many more, which reads centred on it.
+    val remainders: Text = layout.remainders.map: remainder =>
+      val y: Text = remainder.y.toString.tt
+      val d: Text = t"M${remainder.from.toString.tt} ${y}H${(remainder.to - 4).toString.tt}"
+      val at: Text = t"""x="${remainder.to.toString.tt}" y="${(remainder.y + 4).toString.tt}""""
+      val small: Text = t"font-size: var(--pyro-text-small); fill: var(--pyro-muted)"
+      val note: Text = t"""<text $at style="$mono; $small">${escape(remainder.text)}</text>"""
+      t"""<path d="$d" style="$line"/>$note"""
 
-    val labels: Text =
-      List.from(layout.routes.stdlib.flatMap(label(_).let(scala.List(_)).or(scala.Nil))).join
+    . join
 
     val w: Text = layout.width.toString.tt
     val h: Text = layout.height.toString.tt
@@ -466,7 +491,7 @@ object Hierarchy:
     val xmlns: Text = t"http://www.w3.org/2000/svg"
     val style: Text = t"width: ${w}px; height: auto"
     val open: Text = t"""<svg xmlns="$xmlns" viewBox="0 0 $w $h" role="img" style="$style">"""
-    t"""$open<g>$edges$stems</g><g>$boxes</g><g>$labels</g></svg>"""
+    t"""$open<g>$edges$stems$remainders</g><g>$boxes</g></svg>"""
 
   // The drawing in a sentence, for a reader without it.
   def alt(graph: Graph): Text =

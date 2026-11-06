@@ -319,6 +319,32 @@ object Inspection:
           ( Api.key(parent, name),
             (_, e) => if e.nn.alias.present then e.nn else e.nn.copy(alias = target) )
 
+    // `into` is a flag the compiler keeps, which reflection does not offer.
+    private def isInto(symbol: Symbol): Boolean =
+      try
+        import dotty.tools.dotc.core.Symbols.toDenot
+        given dotty.tools.dotc.core.Contexts.Context = context
+
+        symbol match
+          case symbol: dotty.tools.dotc.core.Symbols.Symbol =>
+            symbol.is(dotty.tools.dotc.core.Flags.Into)
+
+          case _ =>
+            false
+
+      catch case _: Throwable => false
+
+    // Whether a class, or an object's class, extends an annotation class.
+    private def isAnnotation(symbol: Symbol): Boolean =
+      val annotations: sci.Set[String] =
+        sci.Set("scala.annotation.Annotation", "java.lang.annotation.Annotation")
+
+      try
+        val module: Boolean = symbol.flags.is(Flags.Module) && !symbol.isClassDef
+        val cls: Symbol = if module then symbol.moduleClass else symbol
+        cls.isClassDef && cls.typeRef.baseClasses.exists { b => annotations.contains(b.fullName) }
+      catch case _: Throwable => false
+
     private def modifiers(symbol: Symbol): List[Text] =
       val flags = symbol.flags
 
@@ -333,8 +359,12 @@ object Inspection:
         (flags.is(Flags.Transparent), t"transparent"),
         (flags.is(Flags.Inline), t"inline"),
         (flags.is(Flags.Lazy), t"lazy"),
-        (flags.is(Flags.Opaque), t"opaque"),
+        // The compiler also marks an object which holds an opaque type, which is not one itself.
+        (flags.is(Flags.Opaque) && !flags.is(Flags.Module), t"opaque"),
         (flags.is(Flags.Infix), t"infix"),
+        (isInto(symbol), t"into"),
+        (isAnnotation(symbol), t"annotation"),
+        (flags.is(Flags.JavaDefined) && !flags.is(Flags.Package), t"java"),
         (flags.is(Flags.Implicit), t"implicit"))
 
       List.from(pairs.collect { case (true, modifier) => modifier })
@@ -455,6 +485,73 @@ object Inspection:
         catch case _: Throwable => scala.Nil
 
     private def parents(symbol: Symbol): List[Syntax] = List.from(parentTypes(symbol).map(syntax))
+
+    // A `derives` clause leaves no trace on its class: what remains is a synthetic given in the
+    // companion for each type class, `derived$Show`, whose result names it.
+    private def derivations(symbol: Symbol): List[Syntax] =
+      def typeClass(repr: TypeRepr): Syntax = repr match
+        case PolyType(_, _, result)   => typeClass(result)
+        case MethodType(_, _, result) => typeClass(result)
+        case ByNameType(result)       => typeClass(result)
+        case AppliedType(base, _)     => syntax(base)
+        case other                    => syntax(other)
+
+      try
+        val companion: Symbol = symbol.companionModule
+
+        if companion.isNoSymbol then Nil else
+          val instances: scala.List[Symbol] =
+            companion.moduleClass.declarations.filter(_.name.startsWith("derived$"))
+
+          List.from(instances.map { instance => typeClass(instance.info) })
+
+      catch case _: Throwable => Nil
+
+    // A `uses` clause is kept as `@retains` annotations: on the class for what it retains, and on
+    // its constructor for what is used `initially`.
+    private def usages(symbol: Symbol): List[Syntax] =
+      def elements(repr: TypeRepr): scala.List[TypeRepr] = repr match
+        case OrType(left, right) =>
+          elements(left) ++ elements(right)
+
+        case other =>
+          if other =:= TypeRepr.of[Nothing] then scala.Nil else scala.List(other)
+
+      def retained(owner: Symbol): scala.List[TypeRepr] = owner.annotations.flatMap: annotation =>
+        annotation.tpe match
+          case AppliedType(base, scala.List(argument))
+          if base.typeSymbol.fullName == "scala.annotation.retains" =>
+            elements(argument)
+
+          case _ =>
+            scala.Nil
+
+      // What can be named from outside is linked; a parameter or a local is its name alone.
+      def reference(repr: TypeRepr): Syntax = repr match
+        case ref@TermRef(_, name) =>
+          val term: Symbol = ref.termSymbol
+          val owner: Symbol = term.owner
+
+          val named: Optional[Designator] =
+            if owner.isPackageDef || owner.flags.is(Flags.Module) then designator(term) else Unset
+
+          named.lay(Syntax.Primitive(name.tt))(Syntax.Simple(_))
+
+        case other =>
+          syntax(other)
+
+      try
+        val kept: scala.List[Syntax] = retained(symbol).map(reference)
+
+        val initial: scala.List[Syntax] =
+          val constructor: Symbol = symbol.primaryConstructor
+
+          if constructor.isNoSymbol then scala.Nil
+          else retained(constructor).map { repr => Syntax.Suffix(reference(repr), t" initially") }
+
+        List.from(kept ++ initial)
+
+      catch case _: Throwable => Nil
 
     // The keys of every class a class extends, nearest first, the universal ones left out —
     // except `AnyVal`, which tells search that a value class is a value type.
@@ -935,7 +1032,13 @@ object Inspection:
             record(parent, name, own, declaration, false, where)
           else
             val declaration: Api.Declaration =
-              Api.Declaration(Api.Kind.Object, modifiers(symbol), Nil, Unset, parents(symbol))
+              Api.Declaration
+                ( Api.Kind.Object,
+                  modifiers(symbol),
+                  Nil,
+                  Unset,
+                  parents(symbol),
+                  uses = usages(symbol.moduleClass) )
 
             record(parent, name, own, declaration, false, where)
         else
@@ -953,7 +1056,9 @@ object Inspection:
                 Unset,
                 parents(symbol),
                 accepts      = accepts(primary),
-                parentShapes = parentShapes )
+                parentShapes = parentShapes,
+                derives      = derivations(symbol),
+                uses         = usages(symbol) )
 
           record(parent, name, own, declaration, true, where, bases(symbol))
           here.let: (here: Designator) => parameters(here, primary.paramSymss, own)

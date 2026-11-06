@@ -63,13 +63,12 @@ object ApiPages:
 
     val exported: Boolean = d.exported || member.alias.present
 
-    // An extension's row says `def`: the clause it extends is said once, above its group.
-    val keyword: Text =
-      if exported then t"export"
-      else if d.kind == Api.Kind.Extension then t"def"
-      else d.kind.keyword
+    // The row of a name which is both a type and a term shows both glyphs; an overload's, its own.
+    val principal: Boolean = member.template.or(member.definition).let(_ == d).or(false)
 
-    val kind: List[Inline] = List(Signatures.code(List(Token(keyword, Token.Accent.Keyword))))
+    val glyphs: List[Inline] =
+      if principal then Icons.all(member, exported) else List(Icons.of(d, exported))
+
     val accent: Token.Accent = if d.kind.isType then Token.Accent.Typal else Token.Accent.Term
 
     val where: List[Inline] =
@@ -79,8 +78,7 @@ object ApiPages:
         List(Inline.Toned(Tone.Muted, Inline.text(Text(member.key.s.substring(0, end).nn))))
 
     val token: Token = Token(member.name, accent, Unset, Inline.Destination.Local(member.url))
-    val glyph: Inline = Icons.of(d.kind, d.modifiers)
-    val name: List[Inline] = where + List(glyph, Inline.Strong(List(Signatures.code(List(token)))))
+    val name: List[Inline] = where + List(Inline.Strong(List(Signatures.code(List(token)))))
 
     // An export's signature is what it exports, linked; any other's its clauses and result.
     val signature: List[Inline] =
@@ -90,9 +88,9 @@ object ApiPages:
     val info: List[Inline] = member.doc.let(_.info).let(Blocks.inline(_, resolver)).or(Nil)
     val tone: Optional[Tone] = if member.removed then Tone.Muted else Unset
 
-    // The description is the row's note, a line beneath it across the table, rather than a
-    // column: it reads as prose, and the signature keeps the width.
-    val cells: List[Block.Cell] = List(Block.Cell(kind), Block.Cell(name), Block.Cell(signature))
+    // The description is the row's note, which a table of fixed columns sets beneath the last of
+    // them, so that the names stand clear and the detail is all to their right.
+    val cells: List[Block.Cell] = List(Block.Cell(glyphs), Block.Cell(name), Block.Cell(signature))
     Block.Row(cells, tone, Unset, if anchored then member.name else Unset, info)
 
   // A member's rows: one for the member, whether it is a term, a type or both (a type and its
@@ -122,9 +120,8 @@ object ApiPages:
         ( Block.Column
             ( Inline.text(t""),
               alignment = Block.Alignment.End,
-              sizing    = Block.Sizing.Fixed(14),
-              minor     = true ),
-          Block.Column(Inline.text(heading), sizing = Block.Sizing.Fixed(22)),
+              sizing    = Block.Sizing.Fixed(10) ),
+          Block.Column(Inline.text(heading), sizing = Block.Sizing.Fixed(26)),
           Block.Column(Inline.text(signature), sizing = Block.Sizing.Fixed(64)) )
 
     if rows.nil then Nil else List(Block.Table(columns, rows, Unset))
@@ -157,20 +154,28 @@ object ApiPages:
 
     val doc: Optional[Api.Entry] = entity.doc
 
+    // Where the entity is, in code, as a qualified name is: each segment linked, and the name up
+    // to it one thing, so that pointing at a segment underlines the path before it.
     val place: List[Block] =
-      def crumbs(designator: Optional[Designator]): List[Inline] =
-        designator.lay(Nil: List[Inline]): (d: Designator) =>
-          val link: Inline = api(Api.key(d)).lay(Inline.Textual(d.name)): (e: Api.Entity) =>
-            Inline.Link(Inline.Destination.Local(e.url), Inline.text(d.name))
+      def crumbs(designator: Optional[Designator]): List[Token] =
+        designator.lay(Nil: List[Token]): (d: Designator) =>
+          val destination: Optional[Inline.Destination] =
+            api(Api.key(d)).lay(Unset): (e: Api.Entity) => Inline.Destination.Local(e.url)
 
           val separator: Text = d match
             case Designator.Type(_, _) => t"#"
             case _                     => t"."
 
-          crumbs(d.parent) + List(link, Inline.Toned(Tone.Muted, Inline.text(separator)))
+          val parent: List[Token] = crumbs(d.parent)
+          val chained: Boolean = !parent.nil
 
-      val above: List[Inline] = crumbs(entity.parent)
-      if above.nil then Nil else List(Block.Paragraph(above))
+          val segment: Token =
+            Token.plain(d.name).copy(link = destination, chained = chained)
+
+          parent + List(segment, Token(separator, Token.Accent.Symbol).copy(chained = true))
+
+      val above: List[Token] = crumbs(entity.parent)
+      if above.nil then Nil else List(Block.Paragraph(List(Signatures.code(above))))
 
     // The heading carries the page's bookmark button and, for a package, the toggle which
     // imports it into the reader's purview; both are the frontend's to answer.
@@ -180,12 +185,11 @@ object ApiPages:
       if entity.isPackage then List(Inline.Import(entity.url, entity.key), bookmark)
       else List(bookmark)
 
-    // The glyph of the entity's principal declaration — its type's, where it has one — before
-    // its name.
-    val glyph: List[Inline] =
-      entity.template.or(entity.definition).let { d => List(Icons.of(d.kind, d.modifiers)) }.or(Nil)
+    // The glyphs of what the name declares, a type's and a term's where it is both, before it.
+    val glyph: List[Inline] = Icons.all(entity, entity.exported)
 
-    val title: List[Inline] = glyph + Inline.text(entity.name) + List(Inline.Textual(t" ")) + marks
+    val space: List[Inline] = List(Inline.Textual(t" "))
+    val title: List[Inline] = glyph + space + Inline.text(entity.name) + space + marks
     val heading: Block = Block.Heading(1, title)
 
     val info: List[Block] = doc.let(_.info).lay(Nil: List[Block]): (text: Text) =>
@@ -206,7 +210,7 @@ object ApiPages:
       val paragraph: Block = Block.Paragraph(List(notice) + replacement + List(stop))
       List(Block.Notice(Tone.Warning, Unset, List(paragraph)))
 
-    val children: List[Api.Entity] = api.children(entity).filter(!_.hidden)
+    val children: List[Api.Entity] = api.children(entity).filter { c => !c.hidden && !c.derived }
     val (parameters, others) = children.partition(_.isParameter)
 
     def row(member: Api.Entity, d: Api.Declaration, anchored: Boolean): Block.Row =
@@ -363,7 +367,9 @@ object ApiPages:
         def instance(g: Api.Entity): Boolean =
           g.declarations.exists(_.provides.let(_.head == entity.key).or(false))
 
-        val (instances, others) = all.partition(instance)
+        // A derived instance is its type class's, but for the type, its `derives` clause says it.
+        val (instances, others0) = all.partition(instance)
+        val others: List[Api.Entity] = others0.filter(!_.derived)
 
         def part(title: Text, these: List[Api.Entity]): List[Block] =
           val entries: List[Block.Row] = these.bind: (g: Api.Entity) =>
@@ -373,7 +379,10 @@ object ApiPages:
           else List(Block.Paragraph(Inline.text(title))) + table(t"Name", t"Signature", entries)
 
         val givensHeading: Block = Block.Heading(3, Inline.text(t"Givens"))
-        List(givensHeading) + part(t"Instances:", instances) + part(t"For ${entity.name}:", others)
+        val parts: List[Block] =
+          part(t"Instances:", instances) + part(t"For ${entity.name}:", others)
+
+        if parts.nil then Nil else List(givensHeading) + parts
 
     val detail: List[Block] = doc.let(_.detail).lay(Nil: List[Block]): (text: Text) =>
       Blocks.of(Parser.parse(text), embeddings, resolver)

@@ -254,6 +254,42 @@ error oops
 
       . assert(_ == (1, Block.Note.Style.Erroneous))
 
+      test(m"an error of several lines is a card after its fragment, not a caption"):
+        val fence: Text = t"```scala fuel\nerrors show\n##\nval n: Int = \"oops\"\n```\n"
+
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          Doc.parse(t"doc/check.md", fence, checker).blocks match
+            case Block.Code(_, _, note :: _, _, _, _) :: Block.Diagnostic(_, _, _, _, _) :: _ =>
+              note.caption.nil
+
+            case _ =>
+              false
+
+      . assert(_ == true)
+
+      test(m"an error of one line is a caption on its code, with no card, and still a problem"):
+        val fence: Text = t"```scala fuel\nerrors show\n##\nval n = missing\n```\n"
+
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          Doc.parse(t"doc/check.md", fence, checker).blocks match
+            case Block.Code(_, _, note :: _, _, _, _) :: Nil =>
+              Blocks.plain(note.caption).contains(t"missing")
+
+            case _ =>
+              false
+
+      . assert(_ == true)
+
+      test(m"a failing fragment's error of one line remains a problem of the document"):
+        problems(t"```scala\nval n = missing\n```\n") match
+          case Block.Diagnostic(Tone.Failure, location, _, excerpt, _) :: Nil =>
+            (location.let(_.line), excerpt.size)
+
+          case _ =>
+            (Unset, 0)
+
+      . assert(_ == (2, 1))
+
     suite(m"Animation"):
       val animatedFence: Text =
         t"```scala fuel\nid steps\nframe\n  code\n      val x: Int = 1\nframe\n" +
@@ -1217,16 +1253,24 @@ object Util:
                 case Inline.Destination.Local(path, _) => path
                 case _                                 => Unset
 
+            def marks(key: Text): List[Text] =
+              api(key).let(_.template.let(_.modifiers).or(Nil)).or(Nil)
+
+            val string: List[Text] = marks(t"java.lang.String")
+            val deprecated: List[Text] = marks(t"java.lang.Deprecated")
+
             ( api(t"java.lang.String#getBytes").present,
               api(t"java.lang.String.valueOf").present,
               api(t"java.lang.StringLatin1").present,
               linked(t"#String#getBytes"),
-              linked(t".java.lang.String.getBytes") )
+              linked(t".java.lang.String.getBytes"),
+              string.has(t"java") && !string.has(t"annotation"),
+              deprecated.has(t"java") && deprecated.has(t"annotation") )
 
           case error: Throwable =>
             error.toString
 
-      . assert(_ == (true, true, false, t"/api/java.lang.String~getBytes", Unset))
+      . assert(_ == (true, true, false, t"/api/java.lang.String~getBytes", Unset, true, true))
 
       // A companion's members bring a few types stenography cannot render (a literal type, a
       // type with a companion's prefix): under one in a thousand, and under one in ten
@@ -1340,6 +1384,29 @@ extension (doc: Doc) def titled: String = doc.title
 trait Titled:
   def heading: String = ""
 
+infix type ~>[-A, +B] = PartialFunction[A, B]
+infix type flip[A, B] = Either[B, A]
+infix trait xor[A, B]
+
+object Converting:
+  def aliased: Int flip String = Left("")
+  def other: Int xor String = ???
+
+case class Point(x: Int) derives CanEqual
+
+trait Show[T]
+
+object Show:
+  def derived[T]: Show[T] = new Show[T] {}
+
+case class Shown(x: Int) derives Show
+
+into trait Convertible
+
+class Marked extends scala.annotation.StaticAnnotation
+
+object Marks extends scala.annotation.StaticAnnotation
+
 case class Doc(title: String) extends Titled
 
 object Doc:
@@ -1371,6 +1438,120 @@ object Exports:
         Inspection.walk(List(output3), Nil, entries) match
           case api: Api => api
           case _        => Api.empty
+
+      test(m"into and annotation classes and objects are recorded as modifiers"):
+        def modifiers(key: Text): List[Text] =
+          exported(key).let: (e: Api.Entity) =>
+            e.template.or(e.definition).let(_.modifiers).or(Nil)
+
+          . or(Nil)
+
+        ( modifiers(t"exporting.Convertible"),
+          modifiers(t"exporting.Marked"),
+          modifiers(t"exporting.Marks"),
+          modifiers(t"exporting.Note"),
+          modifiers(t"exporting.Coding") )
+
+      . assert(_ == (List(t"into"), List(t"annotation"), List(t"annotation"), Nil, Nil))
+
+      test(m"a type declared infix is written infix, in scope or qualified, and alias or not"):
+        def result(name: Text, scope: Scope): Text =
+          exported(t"exporting.Converting.$name").let(_.definition).let(_.result).lay(t"?"):
+            (syntax: Syntax) => Signatures.tokens(syntax, exported, scope).map(_.text).join
+
+        val outside: Scope = Scope.document(List(t"exporting"))
+        val within: Scope = Scope(List(Designator(t"exporting")), Nil)
+
+        (result(t"other", outside), result(t"other", within), result(t"aliased", within))
+
+      . assert(_ == (t"Int exporting.xor String", t"Int xor String", t"Int flip String"))
+
+      test(m"an infix type is declared infix on its own page"):
+        val scope: Scope = Scope(List(Designator(t"exporting")), Nil)
+
+        def head(key: Text, name: Text): Text =
+          exported(key).let(_.template).let(Signatures.block(name, _, exported, scope)).lay(t"?"):
+            (block: Block.Code) => block.lines.bind(_.tokens.map(_.text)).join
+
+        (head(t"exporting.~>", t"~>"), head(t"exporting.xor", t"xor"))
+
+      . assert(_ == (t"infix type A ~> B = PartialFunction[A, B]", t"infix trait A xor B"))
+
+      test(m"a derives clause is recorded and written"):
+        val point: Optional[Api.Entity] = exported(t"exporting.Point")
+
+        val derives: List[Text] =
+          point.let(_.template.let(_.derives.map(_.qualified)).or(Nil)).or(Nil)
+
+        val scope: Scope = Scope(List(Designator(t"exporting")), Nil)
+
+        val code: Text =
+          point.let(_.template).let(Signatures.block(t"Point", _, exported, scope)).lay(t""):
+            (block: Block.Code) =>
+              block.lines.bind(_.tokens.map(_.text)).join
+
+        ( derives.size,
+          derives.head.or(t"").contains(t"CanEqual"),
+          code.contains(t"derives CanEqual") )
+
+      . assert(_ == (1, true, true))
+
+      test(m"a derived instance is no member of its class, but is its type class's instance"):
+        val api: Api = Applicables.decorate(exported)
+        val scope: Scope = Scope(List(Designator(t"exporting")), Nil)
+
+        def names(key: Text): List[Text] =
+          api(key).lay(Nil: List[Text]): (entity: Api.Entity) =>
+            ApiPages.page(api, entity, Resolver(api, scope), scope, Nil).bind:
+              case Block.Table(_, rows, _) =>
+                rows.map { row => Blocks.plain(row.cells.stdlib(1).content) }
+
+              case _ =>
+                Nil
+
+        ( api(t"exporting.Shown.derived$$Show").let(_.derived).or(false),
+          names(t"exporting.Shown").exists(_.starts(t"derived$$")),
+          names(t"exporting.Show").exists(_.starts(t"derived$$")) )
+
+      . assert(_ == (true, false, true))
+
+      val capturing: Text = t"""package capturing
+
+import language.experimental.captureChecking
+
+class Sink extends caps.SharedCapability
+
+object Io extends caps.SharedCapability:
+  val out: Sink = Sink()
+
+class Logger() uses Io.out initially, Io.out:
+  Io.out.toString
+  def log(): Unit = Io.out.toString
+"""
+
+      test(m"a uses clause is recorded and written, marking what is used initially"):
+        val output4: Text =
+          Text(java.nio.file.Files.createTempDirectory("fuel-api4").nn.toString)
+
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          checker.build(Map(t"Capturing.scala" -> capturing), output4)
+
+        Inspection.walk(List(output4), Nil, entries) match
+          case api: Api =>
+            val logger: Optional[Api.Declaration] = api(t"capturing.Logger").let(_.template)
+            val uses: List[Text] = logger.let(_.uses.map(_.qualified)).or(Nil)
+            val scope: Scope = Scope(List(Designator(t"capturing")), Nil)
+
+            val code: Text =
+              logger.let(Signatures.block(t"Logger", _, api, scope)).lay(t""):
+                (block: Block.Code) => block.lines.bind(_.tokens.map(_.text)).join
+
+            (uses.to[Set].size, uses.exists(_.contains(t"initially")), code.contains(t"uses "))
+
+          case _ =>
+            (0, false, false)
+
+      . assert(_ == (2, true, true))
 
       def applicable(key: Text): List[(Text, Int, Int, Int, Optional[Text])] =
         decorated(key).lay(Nil: List[Api.Applicable])(_.extensions).map: (e: Api.Applicable) =>
@@ -1488,7 +1669,7 @@ object Exports:
 
       . assert(_.has(t"extension (text: String)"))
 
-      test(m"an extension's row says def, beneath the clause it extends"):
+      test(m"an extension's glyph says what it is, beneath the clause it extends"):
         api0(t"sample.Util").let: (util: Api.Entity) =>
           val scope: Scope = Scope.of(util, Nil)
           val page: List[Block] = ApiPages.page(api0, util, Resolver(api0, scope), scope, Nil)
@@ -1504,7 +1685,7 @@ object Exports:
 
         . or(Nil)
 
-      . assert(_ == List(t"def"))
+      . assert(_ == List(t"extension def"))
 
       test(m"an export is one row, whatever forwarders it made, and its page one signature"):
         val keys: List[Text] = List(t"exporting.Exports.Doc", t"exporting.Exports.parse")
@@ -1528,7 +1709,8 @@ object Exports:
         found
 
       . assert: (found: List[List[Text]]) =>
-          found == List(List(t"export", t"export Doc"), List(t"export", t"export Doc.parse"))
+          // `Doc` is both a type and a term, so it has two glyphs, each described as an export.
+          found == List(List(t"export export", t"export Doc"), List(t"export", t"export Doc.parse"))
 
       def destination(api: Api, imports: List[Text], reference: Text): Optional[Text] =
         Resolver(api, Scope.document(imports)).link(reference) match
@@ -2049,6 +2231,42 @@ object Exports:
 
         . assert(_ == (true, true, false, false, false, true))
 
+        test(m"the note of how many more is no box, but ends its parent's line on the right"):
+          val layout: Hierarchy.Layout = sibling.let(Hierarchy.layout(_)).or(laid(chain))
+          val right: Int = layout.boxes.stdlib.map { b => b.x + b.w }.max
+
+          ( layout.boxes.stdlib.exists(_.node.role == Role.More),
+            layout.remainders.map(_.text),
+            layout.remainders.stdlib.forall(_.to > right),
+            layout.width > right )
+
+        . assert(_ == (false, List(t"…and 1 more"), true, true))
+
+        test(m"every joining line is drawn alike, and a parent's written form is no label"):
+          val svg: Text = sibling.let(Hierarchy.layout(_)).let(Hierarchy.svg(_)).or(t"")
+          (svg.contains(t"stroke: var(--pyro-muted)"), svg.contains(t"paint-order"))
+
+        . assert(_ == (false, false))
+
+        test(m"a package in scope is not written"):
+          val scoped: Optional[Graph] = family(t"p.C1").let: (e: Api.Entity) =>
+            Hierarchy.of(family, e, Scope.of(e, Nil))
+
+          scoped.let(_.nodes.filter(_.role == Role.Peer).map(_.pkg)).or(Nil).to[Set]
+
+        . assert(_ == Set(t""))
+
+        test(m"a package which may be imported is drawn both ways, for the purview to choose"):
+          val current: Node = node(t"x.A", Role.Current).copy(pkgPath = t"/api/x")
+          val nodes: List[Node] = List(current, node(t"y.B", Role.Ancestor))
+          val graph: Graph = Graph(nodes, List(Edge(t"x.A", t"y.B")), t"x.A")
+          val svg: Text = Hierarchy.layout(graph).let(Hierarchy.svg(_)).or(t"")
+
+          ( svg.contains(t"""<g data-not-imported="/api/x">"""),
+            svg.contains(t"""<g data-imported="/api/x">""") )
+
+        . assert(_ == (true, true))
+
         test(m"a name with angle brackets is escaped"):
           val nodes: List[Node] =
             List(node(t"x.Foo<Bar>", Role.Current), node(t"x.Base", Role.Ancestor))
@@ -2245,9 +2463,26 @@ object Exports:
 
           (kinds(exported), kinds(paired))
 
-        . assert(_ == (List(t"export"), List(t"case class")))
+        . assert(_ == (List(t"export export"), List(t"case class val")))
 
-        test(m"a glyph of the keyword precedes a member's name, and the page's title"):
+        test(m"a name both a type and a term has both glyphs, each described by its keywords"):
+          val template: Api.Declaration = Api.Declaration(Api.Kind.Class, List(t"final", t"java"))
+          val term: Api.Declaration = Api.Declaration(Api.Kind.Object)
+
+          val entity: Api.Entity =
+            Api.Entity(Designator.Top(t"p"), t"Doc", true, term, template)
+
+          val api: Api = Api(sci.Map(entity.key -> entity))
+          val resolver: Resolver = Resolver(api, scope)
+
+          ApiPages.rows(entity, true, api, scope, resolver).bind: row =>
+            row.cells.stdlib.head.content.bind:
+              case Inline.Icon(_, alt) => List(alt)
+              case _                   => Nil
+
+        . assert(_ == List(t"final class", t"object"))
+
+        test(m"a glyph of the keyword stands in a column before a member's name"):
           val declaration: Api.Declaration = Api.Declaration(Api.Kind.CaseClass)
 
           val entity: Api.Entity =
@@ -2257,13 +2492,13 @@ object Exports:
           val resolver: Resolver = Resolver(api, scope)
           val row: Block.Row = ApiPages.row(entity, declaration, true, api, scope, resolver)
 
-          val first: Optional[Inline] = row.cells.stdlib(1).content.head
+          val first: Optional[Inline] = row.cells.stdlib.head.content.head
 
           first match
             case Inline.Icon(source, alt) => (source.starts(t"<svg"), alt)
             case _                        => (false, t"?")
 
-        . assert(_ == (true, t""))
+        . assert(_ == (true, t"case class"))
 
         test(m"a glyph is drawn on the grid, and its modifiers transform it"):
           val plain: Text = Icons.markup(Api.Kind.Def, Nil)
@@ -2277,15 +2512,51 @@ object Exports:
 
           ( plain.contains(t"""viewBox="0 0 14 14""""),
             plain.contains(t"<rect"),
-            finished.contains(t"""viewBox="0 0 18 14"""") && finished.contains(t"<circle"),
+            finished.contains(t"""viewBox="0 0 14 14"""") && finished.contains(t"<circle"),
             inlined.contains(t"skewX"),
             translucent.contains(t"<mask"),
             hollow.contains(t"evenodd"),
             slashed.contains(t"rotate(45 7 7)"),
             overridden.contains(t"""y="12.6""""),
-            placed.contains(t"""x="12.5"""") )
+            placed.contains(t"""x="10"""") && placed.contains(t"""x="2.5"""") )
 
         . assert(_ == (true, true, true, true, true, true, true, true, true))
+
+        test(m"a stop and infix squares stand close to each shape"):
+          def stop(kind: Api.Kind): Boolean =
+            Icons.markup(kind, List(t"final")).contains(t"""viewBox="0 0 14 14"""")
+
+          ( List(Api.Kind.Def, Api.Kind.Val, Api.Kind.Case, Api.Kind.Class).all(stop),
+            Icons.markup(Api.Kind.Trait, List(t"infix")).contains(t"""x="4"""") )
+
+        . assert(_ == (true, true))
+
+        test(m"a package is a cube, and a case class's outer ring is closed"):
+          val cube: Text = Icons.markup(Api.Kind.Package, Nil)
+          val cased: Text = Icons.markup(Api.Kind.CaseClass, Nil)
+          (cube.contains(t"stroke"), cube.contains(t"<rect"), cased.contains(t"evenodd"))
+
+        . assert(_ == (true, false, true))
+
+        test(m"into, annotation and java each decorate the glyph"):
+          val plain: Text = Icons.markup(Api.Kind.Class, Nil)
+          val into: Text = Icons.markup(Api.Kind.Class, List(t"into"))
+          val annotation: Text = Icons.markup(Api.Kind.Class, List(t"annotation"))
+          val java: Text = Icons.markup(Api.Kind.Class, List(t"java"))
+
+          ( into.contains(t"<polygon") && into.contains(t"""viewBox="-0.5 """),
+            annotation.contains(t"""viewBox="0 0 15.5 14""""),
+            java != plain && java.contains(t"""viewBox="0 0 14 14"""") )
+
+        . assert(_ == (true, true, true))
+
+        test(m"java and annotation are said by the glyph, not written in a signature"):
+          val declaration: Api.Declaration =
+            Api.Declaration(Api.Kind.Class, List(t"final", t"java", t"annotation", t"into"))
+
+          declaration.written
+
+        . assert(_ == List(t"final", t"into"))
 
         test(m"member tables share fixed column widths, the keyword's minor and at the end"):
           ApiPages.table(t"Name", t"Signature", List(Block.Row(Nil))).bind:
@@ -2299,8 +2570,8 @@ object Exports:
         . assert: (columns: List[(Block.Sizing, Block.Alignment, Boolean)]) =>
             val expected: List[(Block.Sizing, Block.Alignment, Boolean)] =
               List
-                ( (Block.Sizing.Fixed(14), Block.Alignment.End, true),
-                  (Block.Sizing.Fixed(22), Block.Alignment.Start, false),
+                ( (Block.Sizing.Fixed(10), Block.Alignment.End, false),
+                  (Block.Sizing.Fixed(26), Block.Alignment.Start, false),
                   (Block.Sizing.Fixed(64), Block.Alignment.Start, false) )
 
             columns == expected
@@ -2900,9 +3171,11 @@ entry .Doc   a document
       . assert(_ == List(false, true, true, true, true, false, false, false, false))
 
       val samplePage: Inline.Destination = Inline.Destination.Local(t"/api/sample")
-      val sampleLink: Inline = Inline.Link(samplePage, Inline.text(t"sample"))
-      val dot: Inline = Inline.Toned(Tone.Muted, Inline.text(t"."))
-      val heading: Block = Block.Paragraph(List(sampleLink, dot))
+      val sampleToken: Token = Token.plain(t"sample").copy(link = samplePage)
+      val dot: Token = Token(t".", Token.Accent.Symbol).copy(chained = true)
+
+      val heading: Block =
+        Block.Paragraph(List(Inline.Snippet(Language.Scala, List(sampleToken, dot))))
 
       test(m"a page has its heading, signature and member rows anchored by name"):
         val api: Api = Tests.this.api0

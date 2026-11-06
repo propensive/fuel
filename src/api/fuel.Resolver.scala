@@ -103,6 +103,9 @@ case class Scope
   // begins as these imports and is what elides them, so a signature writes them in full.
   def has(designator: Designator): Boolean = (enclosing + standard).has(designator)
 
+  // The same, of an entity's key.
+  def names(key: Text): Boolean = (enclosing + standard).exists(Api.key(_) == key)
+
 // `page` is the URL of the page the references are on, which a name the page's own fragments
 // define leads to.
 class Resolver(api: Api, scope0: Scope, page: Optional[Text] = Unset) extends Linker:
