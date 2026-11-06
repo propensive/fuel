@@ -90,7 +90,8 @@ object Api:
       case Named(key, _) => key
       case _             => Unset
 
-  // One declaration: its kind, its modifiers (as written, `final`, `inline`, …), its clauses
+  // One declaration: its kind, its modifiers (as written, `final`, `inline`, …, with `java` and
+  // `annotation`, which are not written but are said of it, as its glyph says them), its clauses
   // (type and term parameters), its result (a return type, an alias's right-hand side, a type's
   // bounds), a template's parents, and for an extension the clauses it extends; then what
   // matching reads: an extension's `receiver` (the shape of the one parameter it extends), the
@@ -101,7 +102,9 @@ object Api:
   // shape of what a declaration `returns` (a term's type, a class not being a result), what it
   // `accepts` (every term parameter, `using` ones included, and for an extension the one it
   // extends) and, for a template, its `parentShapes` (its direct parents, as written, so that
-  // `Doc extends Shape[Int]` is known to be a `Shape[Int]`).
+  // `Doc extends Shape[Int]` is known to be a `Shape[Int]`). A template's `derives` are the type
+  // classes its `derives` clause names, and its `uses` the capabilities its `uses` clause does,
+  // each one used in its initialization written with `initially`.
   case class Declaration
     ( kind:        Kind,
       modifiers:   List[Text]       = Nil,
@@ -120,7 +123,11 @@ object Api:
       exported:    Boolean          = false,
       returns:     Optional[Shape]  = Unset,
       accepts:     List[Shape]      = Nil,
-      parentShapes: List[Shape]     = Nil )
+      parentShapes: List[Shape]     = Nil,
+      derives:     List[Syntax]     = Nil,
+      uses:        List[Syntax]     = Nil ):
+
+    def written: List[Text] = modifiers.filter { m => m != t"java" && m != t"annotation" }
 
   // An extension method applicable to an entity, as `Applicables` finds it: the `key` of the
   // extension and the `index` of the declaration among the entity's (an overloaded name's
@@ -198,6 +205,10 @@ object Api:
       definition.let(List(_)).or(Nil) + template.let(List(_)).or(Nil) + overloads
 
     def hidden: Boolean = doc.let(_.hidden).or(false)
+
+    // The instance a `derives` clause generated, which the clause itself says: an instance of its
+    // type class, but neither a member to list nor one to document.
+    def derived: Boolean = name.starts(t"derived$$")
 
     // Whether this is an export: every declaration a forwarder, however many the clause made (a
     // type and a term, or one per overload), which is one member of what it forwards to.

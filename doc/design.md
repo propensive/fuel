@@ -189,8 +189,9 @@ variables reach it too.
     the note the design doc thought Fuel would need upstream was not needed), a preamble that
     is not TEL (`Block.Diagnostic.of(telError)` shifted to the file), an unreadable file, a
     failed session. `fuel compile` prints them through `TerminalRenderer.blocks`; in a document
-    a diagnostic follows its fragment, and every fence's `Block.Code` is numbered from the
-    file (`start`). A note is one `Block.Note`, across lines or a caret, with its caption as
+    a diagnostic of several lines follows its fragment (one of a single line is its note's
+    caption, and either way a problem of the document), and every fence's `Block.Code` is
+    numbered from the file (`start`). A note is one `Block.Note`, across lines or a caret, with its caption as
     phrasing; harlequin's offset-mode spans are placed by Fuel's own `Notes.of`, since
     `Block.Note.of` declines them.
   - All compiler use (tokenizing included) runs on one dedicated thread with a large stack, in

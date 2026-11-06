@@ -130,7 +130,8 @@ Out.println(e"$Bold(Hello), world!")
 ```
 
 A line ending in `// does not compile` is left out of its fence and compiled alone, in its
-place: it must fail, and its error is shown as a note on it.
+place: it must fail, and its error is shown as a note on it, beneath the line if its message is
+one line long and in a card after the fence otherwise.
 
 ```scala
 val greeting: Text = t"Hello"

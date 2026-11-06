@@ -39,14 +39,14 @@ import pyrocosm.Inline
 // The glyph beside a member's name: a drawing of its keyword, on the 14-unit grid of the
 // original icons (a 10 mm box, every shape on multiples of a fourteenth of it), as SVG markup
 // which Pyrocosm draws inline, in the text's colour and at its size. A modifier transforms the
-// drawing: generically where it can — `final` ends it with a full stop, `inline` shears it,
+// drawing: generically where it can — `final` adds a full stop beside it, `inline` shears it,
 // `transparent` stripes it as if translucent — and by a shape of its own where the drawings
 // differ: an abstract `def` is hollow, an opaque type has a core, an enum case is a dot.
 //
 // Every modifier fuel records, and what the glyph does with it (one marked *undecided* is drawn
 // plainly until it is decided; the drawings named are the originals to decide from):
 //
-//   final         a full stop after the glyph
+//   final         a full stop at the glyph's lower right, placed for each shape
 //   inline        sheared to the right
 //   transparent   horizontal stripes
 //   abstract      def: the square hollowed (a-def); class, case class: undecided (a-class,
@@ -58,7 +58,11 @@ import pyrocosm.Inline
 //   protected     undecided (p-given: a bar on the left; p-val, p-var, p-type: as they are)
 //   erased        a slash through the glyph, at 45°, with a gap about it so that it shows
 //   override      a line beneath the glyph
-//   infix         a small square at mid-height either side, as if the glyph were placed infix
+//   infix         a small square at mid-height either side, as if the glyph were placed infix,
+//                 close to each shape's own edges
+//   into          a narrow right-pointing triangle to the left of the glyph
+//   annotation    an `@` in the top right corner, on what extends an annotation class
+//   java          a `J` in the top left corner, on what was compiled from Java
 //   implicit      nothing: it is deprecated
 //   open          undecided (nothing drawn for it)
 //   extension     a def with a small plus at the top right (e-def)
@@ -67,15 +71,19 @@ object Icons:
   private val grid: Int = 14
   private val c: Double = 7.0
 
-  // A drawing: its elements, and its width, which grows past the grid once a full stop follows.
-  private case class Drawing(elements: List[Text], width: Int = grid):
+  // A drawing: its elements, and how far it reaches left and right, past the grid where a
+  // decoration needs to.
+  private case class Drawing(elements: List[Text], left: Double = 0, right: Double = grid):
     def add(more: Text*): Drawing = copy(elements = elements + List.from(more))
+
+    def reach(from: Double, to: Double): Drawing =
+      copy(left = left.min(from), right = right.max(to))
 
     def within(open: Text, close: Text): Drawing =
       copy(elements = List(open) + elements + List(close))
 
     def markup: Text =
-      val box: Text = t"""viewBox="0 0 ${width.toString.tt} ${grid.toString.tt}""""
+      val box: Text = t"""viewBox="${num(left)} 0 ${num(right - left)} ${grid.toString.tt}""""
       t"""<svg xmlns="http://www.w3.org/2000/svg" $box>${elements.join}</svg>"""
 
   private def num(value: Double): Text =
@@ -136,19 +144,26 @@ object Icons:
     val innerBottom = t"${num(x)} ${num(c + dy(inner))}"
     t"""<path d="M $top A $o $o 0 0 1 $bottom L $innerBottom A $i $i 0 0 0 $innerTop Z"/>"""
 
+  private def stroked(d: Text, width: Double): Text =
+    val paint: Text = t"""fill="none" stroke="currentColor" stroke-width="${num(width)}""""
+    t"""<path d="$d" $paint stroke-linejoin="round"/>"""
+
   private val square: Text = rect(4.5, 4.5, 5, 5)
   private val dot: Text = disc(1)
 
   // The keyword's drawing, before any modifier.
   private def base(kind: Api.Kind): Drawing = kind match
     case Api.Kind.Package =>
-      val top: List[Text] = List(rect(2.5, 2.5, 4, 4), rect(7.5, 2.5, 4, 4))
-      val bottom: List[Text] = List(rect(2.5, 7.5, 4, 4), rect(7.5, 7.5, 4, 4))
-      Drawing(top + bottom)
+      // A cube, isometrically: a regular hexagon, with three edges meeting at its centre.
+      val r: Double = 5.2
+      val corners: List[Text] = List(-90, -30, 30, 90, 150, 210).map(point(r, _))
+      val outline: Text = t"M ${corners.join(t" L ")} Z"
+      val edges: Text = List(-30, 90, 210).map { a => t"M 7 7 L ${point(r, a)}" }.join(t" ")
+      Drawing(List(stroked(t"$outline $edges", 1)))
 
     case Api.Kind.Object    => Drawing(List(ring(5, 3)))
     case Api.Kind.Class     => Drawing(List(band(5, 4, 45, 315), band(3, 2, 45, 315)))
-    case Api.Kind.CaseClass => Drawing(List(band(5, 4, 322.5, 317.5), band(3, 2, 45, 315)))
+    case Api.Kind.CaseClass => Drawing(List(ring(5, 4), band(3, 2, 45, 315)))
     case Api.Kind.Trait     => Drawing(List(half(5, 4, 6), half(3, 2, 6), half(1.5, 0, 6)))
 
     case Api.Kind.Enum =>
@@ -174,8 +189,27 @@ object Icons:
     case Api.Kind.Extension => Drawing(List(square, rect(10.5, 1.5, 1, 3), rect(9.5, 2.5, 3, 1)))
     case Api.Kind.Param     => Drawing(List(rect(3.5, 9.95, 7, 1.17)))
 
+  // Where a shape's decorations go: the left and right edges it presents at mid-height, which the
+  // infix squares and the `into` triangle stand against, and the centre of its full stop, a
+  // small gap from its lower right.
+  private case class Fit(left: Double, right: Double, stopX: Double, stopY: Double)
+
+  private def fit(kind: Api.Kind): Fit = kind match
+    case Api.Kind.Package                          => Fit(2, 12, 10.35, 12.75)
+    case Api.Kind.Object | Api.Kind.Class          => Fit(2, 12, 11.74, 11.74)
+    case Api.Kind.CaseClass                        => Fit(2, 12, 11.74, 11.74)
+    case Api.Kind.Trait                            => Fit(6, 12, 11.74, 11.74)
+    case Api.Kind.Enum                             => Fit(3.34, 10.66, 10.6, 11.1)
+    case Api.Kind.Case                             => Fit(5.6, 8.4, 9.2, 9.2)
+    case Api.Kind.Type | Api.Kind.TypeParam        => Fit(3, 11, 11.03, 11.03)
+    case Api.Kind.Def | Api.Kind.Extension         => Fit(4.5, 9.5, 11.2, 8.3)
+    case Api.Kind.Val                              => Fit(4.83, 9.17, 9.7, 8.8)
+    case Api.Kind.Var                              => Fit(5, 9, 9.6, 8.5)
+    case Api.Kind.Given                            => Fit(3.46, 10.54, 9.97, 9.97)
+    case Api.Kind.Param                            => Fit(3.5, 10.5, 12.2, 9.92)
+
   // The drawing with its modifiers: the shapes of their own first, then the transformations of
-  // the whole, and the full stop last, outside them.
+  // the whole, then what stands beside it, placed for the shape.
   private def drawing(kind: Api.Kind, modifiers: List[Text]): Drawing =
     def has(modifier: Text): Boolean = modifiers.has(modifier)
 
@@ -219,16 +253,78 @@ object Icons:
 
     val underlined: Drawing = if has(t"override") then slashed.add(rect(3, 12.6, 8, 1)) else slashed
 
+    // A shear pivots on the top of the grid, so what stands beside a sheared shape moves with it.
+    def lean(y: Double): Double = if has(t"inline") then -0.25*y else 0
+    val shape: Fit = fit(kind)
+    val gap: Double = 0.5
+    val small: Double = 1.5
+    val mid: Double = lean(c)
+    val leftOfSquare: Double = shape.left - gap - small + mid
+    val rightOfSquare: Double = shape.right + gap + mid
+
     val placed: Drawing =
-      if has(t"infix") then underlined.add(rect(0, 6.25, 1.5, 1.5), rect(12.5, 6.25, 1.5, 1.5))
-      else underlined
+      if !has(t"infix") then underlined else
+        underlined
+        . add(rect(leftOfSquare, 6.25, small, small), rect(rightOfSquare, 6.25, small, small))
+        . reach(leftOfSquare, rightOfSquare + small)
 
-    if has(t"final") then placed.copy(width = grid + 4).add(disc(1.2, 16, 11.3)) else placed
+    // Narrow, and two and a half times as tall as it is wide, outside any infix square.
+    val converting: Drawing =
+      if !has(t"into") then placed else
+        val edge: Double = if has(t"infix") then leftOfSquare - gap else shape.left - gap + mid
+        val tip: Text = polygon((edge - 2, 4.5), (edge, 7), (edge - 2, 9.5))
+        placed.add(tip).reach(edge - 2, grid)
 
-  // The glyph for a declaration, as an icon with no description of its own: the keyword beside
-  // it says what it is, so a plain rendering says nothing twice.
-  def of(kind: Api.Kind, modifiers: List[Text]): Inline =
-    Inline.Icon(drawing(kind, modifiers).markup, t"")
+    val annotated: Drawing =
+      if !has(t"annotation") then converting else
+        val x: Double = 13.1
+        val y: Double = 2.5
+        val rim: Text = num(x + 0.8)
+        val eye: Text = t"M $rim ${num(y + 0.2)} A 0.8 0.8 0 1 1 $rim ${num(y - 0.2)}"
+        val outer: Text = t"A 2 2 0 1 0 ${num(x + 1.1)} ${num(y + 1.7)}"
+        val at: Text = t"$eye V ${num(y + 0.4)} A 0.5 0.5 0 0 0 ${num(x + 2)} ${num(y)} $outer"
+        converting.add(stroked(at, 0.6)).reach(0, x + 2.4)
+
+    val marked: Drawing =
+      if !has(t"java") || kind == Api.Kind.Package || kind == Api.Kind.Param then annotated
+      else annotated.add(stroked(t"M 2.6 0.4 V 3 A 1.05 1.05 0 0 1 0.5 3", 0.8))
+
+    if !has(t"final") then marked else
+      // Below the right infix square, where there is one and the stop would otherwise touch it.
+      val y: Double = if has(t"infix") then shape.stopY.max(9.35) else shape.stopY
+      val x: Double = shape.stopX + lean(y)
+      marked.add(disc(1.2, x, y)).reach(x - 1.2, x + 1.2)
+
+  // What a declaration is, in the words which declare it: its written modifiers and its keyword,
+  // or `export` for an export.
+  def keywords(declaration: Api.Declaration, exported: Boolean = false): Text =
+    if exported then t"export" else
+      val word: Text =
+        if declaration.kind == Api.Kind.Extension then t"extension def"
+        else declaration.kind.keyword
+
+      (declaration.written + List(word)).join(t" ")
+
+  // The glyph for a declaration, as an icon described by its keywords, its tooltip on the web.
+  def of(declaration: Api.Declaration, exported: Boolean = false): Inline =
+    val drawn: Text = drawing(declaration.kind, declaration.modifiers).markup
+    Inline.Icon(drawn, keywords(declaration, exported))
+
+  // The glyphs of a name: its type's and its term's, where it is both, or that of the one it is;
+  // apart, so that a terminal, which says each one's keywords, keeps them apart too.
+  def all(entity: Api.Entity, exported: Boolean = false): List[Inline] =
+    (entity.template, entity.definition) match
+      case (template: Api.Declaration, definition: Api.Declaration) =>
+        List(of(template, exported), Inline.Textual(t" "), of(definition, exported))
+
+      case (template: Api.Declaration, _) =>
+        List(of(template, exported))
+
+      case (_, definition: Api.Declaration) =>
+        List(of(definition, exported))
+
+      case _ =>
+        Nil
 
   // The markup alone, for inspection.
   def markup(kind: Api.Kind, modifiers: List[Text]): Text = drawing(kind, modifiers).markup
