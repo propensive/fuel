@@ -48,6 +48,12 @@ import stenography.Designator
 // given) and the givens of it and for it; then its Markdown detail, what it refers to, and —
 // for an entity nothing declares any more — the notice of its removal and what replaces it.
 object ApiPages:
+  // The most hits a search page draws. A broad query (`def`, say, or a package of the standard
+  // library) matches tens of thousands of declarations, and is typed on the way to a narrower
+  // one: drawn whole, its table runs to tens of megabytes of HTML, which takes seconds to
+  // render and to send on every keystroke, so a page shows the first few hits and the count.
+  val shown: Int = 100
+
   // A declaration's row in a table of members; a member's own rows are anchored by its name,
   // another page's are not (its anchors are its own). A `qualified` row, in a list drawn from
   // across the API, says where the member is before its name.
@@ -132,18 +138,23 @@ object ApiPages:
   :   List[Block] =
 
     val count: Int = outcome.hits.size
+    val drawn: List[Search.Hit] = List.from(outcome.hits.stdlib.take(shown))
 
     val summary: Text =
       if count == 1 then t"1 result for " else t"${count.toString.tt} results for "
 
+    val truncation: List[Inline] =
+      if count <= shown then Nil
+      else Inline.text(t"; the first ${shown.toString.tt} are shown. Narrow the query to see others.")
+
     val heading: Block = Block.Heading(1, Inline.text(t"Search"))
     val snippet: Inline = Inline.Snippet(Language.Scala, List(Token(text, Token.Accent.Unparsed)))
-    val asked: Block = Block.Paragraph(Inline.text(summary) + List(snippet))
+    val asked: Block = Block.Paragraph(Inline.text(summary) + List(snippet) + truncation)
 
     val notices: List[Block] = outcome.notices.map: (notice: Text) =>
       Block.Notice(Tone.Warning, Unset, List(Block.paragraph(notice)))
 
-    val rows: List[Block.Row] = outcome.hits.map: (hit: Search.Hit) =>
+    val rows: List[Block.Row] = drawn.map: (hit: Search.Hit) =>
       row(hit.entity, hit.declaration, false, api, scope, resolver, qualified = true)
 
     List(heading, asked) + notices + table(t"Name", t"Signature", rows)

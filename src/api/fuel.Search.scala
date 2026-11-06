@@ -130,7 +130,9 @@ final class Search private (api: Api, lattice: Lattice):
     entries.indices.groupBy { index => entries(index).entity.key }.map: (key, indices) =>
       (key, indices.toArray)
 
-  private lazy val lexicon: Lexicon[List[Api.Entity]] =
+  // Built with the index, so that the daemon's warm-up pays for it rather than the first
+  // keystroke which searches by name.
+  private val lexicon: Lexicon[List[Api.Entity]] =
     Lexicon[List[Api.Entity]]().tap: lexicon =>
       api.byName.foreach: (name, entities) => lexicon(name) = entities
 
@@ -228,9 +230,9 @@ final class Search private (api: Api, lattice: Lattice):
     case _ => false
 
   // Every simple name, sorted, for completion by prefix; and every name a type has.
-  private lazy val names: scala.List[Text] = api.byName.keys.toList.sortBy(_.s)
+  private val names: scala.List[Text] = api.byName.keys.toList.sortBy(_.s)
 
-  private lazy val typeNames: sci.Set[Text] =
+  private val typeNames: sci.Set[Text] =
     val named: sci.Set[Text] = api.byName.filter { (_, entities) => entities.exists(isType) }.keySet
     named ++ universal.keySet ++ Lattice.primitives.map: key => Text(key.s.substring(6).nn)
 
