@@ -173,6 +173,30 @@ object ApiPages:
 
     List(heading, asked) + notices + terms + table(t"Name", t"Signature", rows)
 
+  // An entity's page with its open issues: their numbers after the title, each a link to the
+  // issue, and a list of them with their titles at the foot. They are put on at show time, not
+  // rendered into the page, which the output directory keeps by a key which knows nothing of
+  // issues, and which would be stale as soon as an issue closed.
+  def withIssues(page: List[Block], issues: List[Issue]): List[Block] =
+    if issues.nil then page else
+      def link(issue: Issue, text: Text): Inline =
+        Inline.Link(Inline.Destination.External(issue.url), Inline.text(text))
+
+      val numbers: List[Inline] = issues.bind: (issue: Issue) =>
+        List(Inline.Textual(t" "), link(issue, t"#${issue.number.show}"))
+
+      val top: Block = Block.Paragraph(Inline.text(t"Open issues:") + numbers)
+
+      val items: List[Block.Item] = issues.map: (issue: Issue) =>
+        val content: List[Inline] = List(link(issue, t"#${issue.number.show}")) + Inline.text(t" ${issue.title}")
+        Block.Item(List(Block.Paragraph(content)), Unset, Inline.Destination.External(issue.url))
+
+      val foot: List[Block] = List(Block.Heading(3, Inline.text(t"Issues")), Block.Listing(false, items))
+
+      // After the title, so that the place above it stays the first block.
+      val (before, from) = page.stdlib.span { case Block.Heading(1, _, _) => false; case _ => true }
+      List.from(before ++ from.take(1)) + List(top) + List.from(from.drop(1)) + foot
+
   def page
     ( api: Api, entity: Api.Entity, resolver: Resolver, scope: Scope, embeddings: List[Embedding] )
   :   List[Block] =

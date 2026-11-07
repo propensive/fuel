@@ -76,6 +76,33 @@ object Server:
   @volatile
   private var terms0: Glossary = Glossary.none
 
+  // The attached trackers' states, and their open issues by the key of each entity they affect:
+  // published apart from the corpus, since issues change on their own, and kept across
+  // compiles, which re-index them against the new API.
+  @scala.caps.unsafe.untrackedCaptures
+  @volatile
+  private var syncs0: List[Sync.State] = Nil
+
+  @scala.caps.unsafe.untrackedCaptures
+  @volatile
+  private var issues0: sci.Map[Text, List[Issue]] = sci.Map()
+
+  @scala.caps.unsafe.untrackedCaptures
+  @volatile
+  private var notices0: List[Text] = Nil
+
+  def syncs: List[Sync.State] = syncs0
+  def issues(key: Text): List[Issue] = issues0.get(key).getOrElse(Nil)
+
+  // What the refresher could not do, for the next `fuel sync` to say; said once.
+  def notice(text: Text): Unit = notices0 = notices0 + List(text)
+  def notices(): List[Text] = notices0.tap { _ => notices0 = Nil }
+
+  def publishIssues(states: List[Sync.State], index: sci.Map[Text, List[Issue]]): Unit =
+    syncs0 = states
+    issues0 = index
+    edition0.incrementAndGet()
+
   private val edition0: juc.atomic.AtomicLong = juc.atomic.AtomicLong(0L)
   private val jars: juc.ConcurrentHashMap[(Text, Long), Api] = juc.ConcurrentHashMap()
 

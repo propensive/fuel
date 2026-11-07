@@ -3353,6 +3353,119 @@ entry .Doc   a document
 
       . assert(_ == (samplePage, true, List(t"Doc", t"Shape", t"Util")))
 
+    suite(m"Issues"):
+      import codepages.utf8Codepage
+
+      def issue(number: Int, title: Text, open: Boolean = true, names: List[Text] = Nil, updated: Text = t"2026-11-08T10:00:00Z"): Issue =
+        Issue(number, title, t"https://github.com/o/r/issues/${number.show}", open, updated, names)
+
+      test(m"the names after `affects`, in backticks, separated by commas, `and`, `or` or lines"):
+        Issue.affected(t"This affects `a.B`, `c.D` and `e.F#g`\nor `h.I`; nothing else.")
+
+      . assert(_ == List(t"a.B", t"c.D", t"e.F#g", t"h.I"))
+
+      test(m"every `affects` counts, in any case, once per name, and a list ends at other text"):
+        Issue.affected(t"AFFECTS `x.Y` the type. Also affects: `x.Y` and `z.W` which `q.R` uses.")
+
+      . assert(_ == List(t"x.Y", t"z.W"))
+
+      test(m"a fenced block or an HTML comment holding the keyword is not a statement"):
+        ( Issue.affected(t"```\nthis affects `x.Y`\n```\n"),
+          Issue.affected(t"<!-- affects `x.Y` -->\n"),
+          Issue.affected(t"no keyword, but `x.Y` in code") )
+
+      . assert(_ == (Nil, Nil, Nil))
+
+      test(m"a name resolves to its entity's key through the scope, or is unresolved"):
+        ( Issue.resolve(List(t"sample.Doc", t"Nope", t"sample.Doc#title"), api0, Scope.document(Nil)),
+          Issue.resolve(List(t"Doc"), api0, Scope.document(List(t"sample"))) )
+
+      . assert(_ == ( (List(t"sample.Doc", t"sample.Doc#title"), List(t"Nope")),
+                      (List(t"sample.Doc"), Nil) ))
+
+      test(m"the index has each entity's open issues by number, and the names nothing resolves"):
+        val issues: List[Issue] =
+          List
+            ( issue(14, t"later", names = List(t"sample.Doc")),
+              issue(12, t"earlier", names = List(t"sample.Doc", t"sample.Gone")),
+              issue(13, t"closed", open = false, names = List(t"sample.Doc")) )
+
+        val (index, unresolved) = Issue.index(issues, api0, Scope.document(Nil))
+        (index.get(t"sample.Doc").map(_.map(_.number)), unresolved)
+
+      . assert(_ == (Some(List(12, 14)), List((12, t"sample.Gone"))))
+
+      test(m"a GitHub payload decodes to issues, pull requests left out"):
+        val json: Text = t"""[
+          {"number": 12, "title": "First", "state": "open", "html_url": "https://github.com/o/r/issues/12",
+           "updated_at": "2026-11-08T10:00:00Z", "body": "This affects `sample.Doc`."},
+          {"number": 13, "title": "A PR", "state": "open", "html_url": "https://github.com/o/r/pull/13",
+           "updated_at": "2026-11-08T11:00:00Z", "body": null, "pull_request": {"url": "x"}},
+          {"number": 14, "title": "Closed", "state": "closed", "html_url": "https://github.com/o/r/issues/14",
+           "updated_at": "2026-11-08T12:00:00Z", "body": null}
+        ]"""
+
+        import strategies.throwUnsafely
+        val payloads: List[GitHubIssues.Payload] = json.read[Json].as[List[GitHubIssues.Payload]]
+        payloads.bind { p => GitHubIssues.issue(p).let(List(_)).or(Nil) }.map: issue =>
+          (issue.number, issue.open, issue.url, issue.affects)
+
+      . assert(_ == List( (12, true, t"https://github.com/o/r/issues/12", List(t"sample.Doc")),
+                          (14, false, t"https://github.com/o/r/issues/14", Nil) ))
+
+      test(m"a fetch merges into the state: closed dropped, changed replaced, new added, since advanced"):
+        val before: Sync.State =
+          Sync.State(t"github o/r", t"W/\"1\"", t"2026-11-08T09:00:00Z", List(issue(12, t"old"), issue(13, t"keep")))
+
+        val fetched: List[Issue] =
+          List( issue(12, t"renamed", updated = t"2026-11-08T12:00:00Z"),
+                issue(13, t"keep", open = false, updated = t"2026-11-08T11:00:00Z"),
+                issue(15, t"new", updated = t"2026-11-08T10:30:00Z") )
+
+        val after: Sync.State = Sync.merge(before, fetched, t"W/\"2\"")
+        val same: Sync.State = Sync.merge(before, Nil, Unset)
+        (after.issues.map { i => (i.number, i.title) }, after.since, after.etag, same == before)
+
+      . assert(_ == (List((12, t"renamed"), (15, t"new")), t"2026-11-08T12:00:00Z", t"W/\"2\"", true))
+
+      test(m"a sync's state round-trips through its TEL file"):
+        val plain: Sync.State = Sync.State(t"github o/r", Unset, t"2026-11-08T09:00:00Z", List(issue(12, t"An issue, with: punctuation", names = List(t"sample.Doc", t"x.Y#z"))))
+        val etagged: Sync.State = plain.copy(etag = t"W/\"abc\"")
+        ( Sync.State.decode(Sync.State.encode(plain)) == plain,
+          Sync.State.decode(Sync.State.encode(etagged)) == etagged,
+          Sync.State.encode(plain).contains(t"since 2026-11-08T09:00:00Z") )
+
+      . assert(_ == (true, true, true))
+
+      test(m"a target is the words of a sync line, and names its file"):
+        ( Sync.Target.parse(List(t"github", t"propensive/fuel")),
+          Sync.Target.parse(List(t"github", t"fuel")),
+          Sync.Target.parse(List(t"gitlab", t"a/b")),
+          Sync.Target.parse(List(t"github", t"propensive/fuel")).let(_.slug) )
+
+      . assert(_ == (Sync.Target.Github(t"propensive", t"fuel"), Unset, Unset, t"github-propensive-fuel"))
+
+      test(m"a page with issues has their numbers after its title and a list of them at its foot"):
+        api0(t"sample.Doc").let: (doc: Api.Entity) =>
+          val scope: Scope = Scope.of(doc, Nil)
+          val page: List[Block] = ApiPages.page(api0, doc, Resolver(api0, scope), scope, Nil)
+          val shown: List[Block] = ApiPages.withIssues(page, List(issue(12, t"First"), issue(15, t"Second")))
+
+          def external(inline: Inline): Boolean = inline match
+            case Inline.Link(Inline.Destination.External(_), _) => true
+            case _                                               => false
+
+          val top: Optional[Text] = shown.stdlib.lift(2).collect { case Block.Paragraph(content) => Blocks.plain(content) }.getOrElse(Unset)
+          val links: Int = shown.stdlib.lift(2).collect { case Block.Paragraph(content) => content.stdlib.count(external) }.getOrElse(0)
+          val foot: List[Text] = shown.reverse.keep(2).reverse.map:
+            case Block.Heading(3, content, _) => Blocks.plain(content)
+            case Block.Listing(_, items)      => t"listing of ${items.size.show}"
+            case _                            => t"?"
+
+          (shown.head == page.head, shown.stdlib.lift(1) == page.stdlib.lift(1), top, links, foot, ApiPages.withIssues(page, Nil) == page)
+
+      . assert(_ == (true, true, t"Open issues: #12 #15", 2, List(t"Issues", t"listing of 2"), true))
+
     suite(m"References"):
       def resolver(page: Optional[Text] = Unset): Resolver =
         Resolver(Tests.this.api0, Scope.document(List(t"sample")), page)

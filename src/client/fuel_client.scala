@@ -55,6 +55,7 @@ object NoDocuments extends Status(3, t"no document directory is configured")
 object NoDocument extends Status(5, t"the document could not be read")
 object CompileFailed extends Status(4, t"a code fragment did not do as its preamble said")
 object DaemonFailed extends Status(6, t"the daemon failed while carrying out the command")
+object SyncFailed extends Status(7, t"the issues of an attached tracker could not be fetched")
 
 // What ends an invocation which a failure escaped: an `Error`, such as the daemon running out of
 // memory, which a silent backstop would end with status 2 and no word, as though nothing were
@@ -80,6 +81,9 @@ object ui:
 
   val Search  =
     Subcommand("search", "search the compiled API by name, kind, package, result or parameter type")
+
+  val Sync   = Subcommand("sync", "attach a tracker's issues to the API documentation, and fetch them")
+  val Github = Subcommand("github", "a GitHub repository, as owner/repo")
 
   // Each is read from the cascade every Pyrocosm tool shares: the flag, the `fuel.*` property,
   // the `FUEL_*` variable, the repository's `.pyrocosm/fuel/config.tel` and the user's. A
@@ -229,15 +233,81 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
       val force: Boolean = ui.Force().present
       ambient(compile(config, force, tty))
 
+    // `fuel sync github <owner/repo>`: attach the repository's issues, fetch them now, and keep
+    // them fresh while serving; `fuel sync` alone fetches every attached target's again.
+    case ui.Sync() :: ui.Github() :: rest =>
+      val config: Workspace.Config = Workspace.load(directory)
+      val operand: Optional[Text] = rest.map(_()).filter(!_.starts(t"-")).head
+      val target: Optional[Sync.Target] = operand.let { name => Sync.Target.parse(List(t"github", name)) }
+      ambient(sync(config, directory, target, named = true))
+
+    case ui.Sync() :: _ =>
+      val config: Workspace.Config = Workspace.load(directory)
+      ambient(sync(config, directory, Unset, named = false))
+
     case _ =>
-      ambient(Fuel.usage(List(ui.Compile, ui.Show, ui.Search, ui.Present)))
+      ambient(Fuel.usage(List(ui.Compile, ui.Show, ui.Search, ui.Present, ui.Sync)))
 
 // Compiles every configured directory into the daemon's corpus, which the dashboard shows, and
 // reports a line per section and a line per file that could not be read.
 private def width(using Environment): Int = Fuel.columns
 
+// Attaches a tracker, or fetches every attached one again: each target's state is loaded from
+// the project's cache, polled, merged and kept, and the issues are indexed against the API the
+// daemon serves and published to its pages; then the daemon's refresher keeps them fresh. A
+// poll which fails leaves the target's last state, and the command fails.
+private def sync
+  ( config: Workspace.Config, directory: Text, target: Optional[Sync.Target], named: Boolean )
+  ( using Stdio, Environment, WorkingDirectory, Monitor )
+:   Exit | Tool.UsageError.type | SyncFailed.type =
+
+  val cache: Text = Sync.directory(config.root)
+  val targets: List[Sync.Target] = target.let(List(_)).or(Sync.targets(config.sync, cache))
+
+  if named && target.absent then
+    Out.println(t"fuel: usage: fuel sync github <owner/repo>")
+    Tool.UsageError
+  else if targets.nil then
+    Out.println(t"fuel: nothing is attached: fuel sync github <owner/repo> attaches a repository")
+    Tool.UsageError
+  else
+    val token: Optional[Text] = Fuel.credential(t"github", directory)
+    Server.notices().each { (notice: Text) => Out.println(t"fuel: $notice") }
+
+    @scala.caps.unsafe.untrackedCaptures
+    var failed: Boolean = false
+
+    val states: List[Sync.State] = targets.map: (target: Sync.Target) =>
+      val fetched: Sync.Fetched = Sync.fetch(target, cache, token)
+
+      fetched.failure.let: (message: Text) =>
+        Out.println(t"fuel: the issues of ${target.text} could not be fetched: $message")
+        failed = true
+
+      if fetched.failure.absent then
+        fetched.changed.lay(Out.println(t"fuel: ${target.text}: nothing has changed since the last sync")):
+          (count: Int) => Out.println(t"fuel: ${target.text}: ${count.show} issues fetched")
+
+      fetched.state
+
+    val unresolved: List[(Int, Text)] = Sync.publish(states)
+
+    states.each: (state: Sync.State) =>
+      val affecting: List[Issue] = state.issues.filter(!_.affects.nil)
+      val count: Text = t"${state.issues.size.show} open issues, ${affecting.size.show} affect the API"
+      Out.println(t"fuel: ${state.target}: $count")
+
+    if Server.api.entities.isEmpty then
+      Out.println(t"fuel: no API has been compiled; the issues are attached by the next fuel compile")
+
+    unresolved.each: (number: Int, name: Text) =>
+      Out.println(t"fuel: #${number.show} names `$name`, which nothing resolves")
+
+    Sync.watch(cache, token)
+    if failed then SyncFailed else Exit.Ok
+
 private def compile(config: Workspace.Config, force: Boolean, tty: Boolean)
-  ( using Stdio, Console, Environment )
+  ( using Stdio, Console, Environment, WorkingDirectory, Monitor )
 :   Exit | NoDocuments.type | CompileFailed.type =
 
   if config.documents.nil then
@@ -270,7 +340,38 @@ private def compile(config: Workspace.Config, force: Boolean, tty: Boolean)
       val renderer = TerminalRenderer()
       renderer.blocks(progress.problems, width).each: (line: Teletype) => Out.println(line)
 
+    attached(config)
     result
+
+// The attached trackers' issues, indexed against the API just compiled and published to its
+// pages: from the state kept for each, or fetched now for a target attached by the
+// configuration which has none yet; then kept fresh by the daemon's refresher.
+private def attached(config: Workspace.Config)
+  ( using Stdio, Environment, WorkingDirectory, Monitor )
+:   Unit =
+
+  config.badSync.each: (line: Text) =>
+    Out.println(t"fuel: `sync $line` names no tracker: a target is `github <owner/repo>`")
+
+  val cache: Text = Sync.directory(config.root)
+  val targets: List[Sync.Target] = Sync.targets(config.sync, cache)
+
+  if !targets.nil then
+    val token: Optional[Text] = Fuel.credential(t"github", summon[WorkingDirectory].directory())
+
+    val states: List[Sync.State] = targets.map: (target: Sync.Target) =>
+      Sync.load(Sync.file(cache, target)).or:
+        val fetched: Sync.Fetched = Sync.fetch(target, cache, token)
+
+        fetched.failure.let: (message: Text) =>
+          Out.println(t"fuel: the issues of ${target.text} could not be fetched: $message")
+
+        fetched.state
+
+    Sync.publish(states).each: (number: Int, name: Text) =>
+      Out.println(t"fuel: issue #${number.show} names `$name`, which nothing resolves")
+
+    Sync.watch(cache, token)
 
 // The compile itself, its problems and its progress reported as it goes.
 private def compiling(config: Workspace.Config, force: Boolean, progress: Progress)
