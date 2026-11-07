@@ -35,44 +35,72 @@ package fuel
 import soundness.*
 
 import scala.collection.immutable as sci
-import scala.collection.immutable.ArraySeq
 
 import codepages.utf8Codepage
-import pyrocosm.Tels
+import dysasymptotics.{linearAccess, linearSize}
+import errorDiagnostics.emptyDiagnostics
 import pyrocosm.{Block, Inline, Tone}
 
-// A table, written in a fence marked ` ```tabular `, as TEL: its rows are a TEL tabulated block
-// — a heading line, of a `#` before each column's title, with each row beneath it, its cells
-// aligned under the `#`s — and around them, before the heading line or after the rows (a blank
-// line ends them), what a grid cannot say:
+// A table, written in a fence marked ` ```tabular `, as a TEL document of the schema `tabular`,
+// derived from `Tables.Table`:
 //
-//   caption The inner *planets*      # beneath the table, as Markdown phrasing
-//   column Distance                  # a column, by its heading, and how it is set:
-//     align end                      # start or end
+//   record Column
+//     field title String               # Markdown phrasing
+//     field align String optional      # start or end
+//   record Row
+//     field cell String repeatable     # Markdown phrasing, one per column
+//   document
+//     field caption String optional    # Markdown phrasing, beneath the table
+//     field column Column repeatable
+//     field row Row repeatable
 //
-//   # Planet    # Distance  # Moons  # Notes
-//   Mercury     0.39 AU     0        Closest to the Sun
-//   Venus       0.72 AU     0        Turns *backwards*
+// A field may be written as a child compound or, in its member order, as an atom on its
+// parent's line, so a column's title follows `column`, and a row's cells follow `row`; after
+// two spaces, a value may hold single spaces, since only two or more then separate values:
 //
-// A cell is Markdown phrasing, its references resolved as prose's are (though a link in it is
-// not yet among those the compile checks); it may hold single spaces, but not two
-// together, which is what separates the columns; and it may be empty, though a row's first may
-// not, and the last column runs to the end of its line. A column whose every cell that is not
-// empty is a number is numeric, set at the end unless `align` says otherwise. TEL checks the
-// alignment: a cell which starts away from its column's `#`, or runs into the next, is an
-// error at its place, as is anything else this cannot read; and a table which fails is shown as
-// its fence's text.
+//   column  Planet
+//   column  Distance  end
+//   column
+//     title  Notes
+//   row  Mercury  0.39  Closest to the Sun
+//   row  Venus
+//     cell
+//     cell  Turns *backwards*
+//
+// A `cell` with no value is an empty cell. Columns come together, and rows together, as TEL
+// requires of a repeatable field's compounds. A row with fewer cells than there are columns is
+// filled out with empty ones. A column whose cells are all numbers, where they are not empty,
+// is numeric and set at the end, unless it says how it is aligned. Every fault in a table is
+// reported at its place: TEL's, as the schema finds them, and these, which it cannot say — a
+// table with no column or no row, an alignment other than `start` or `end`, a row with more
+// cells than columns. A table with any fault is shown as its fence's text.
 object Tables:
   // The fence's info string which marks a table.
   val language: Text = t"tabular"
 
-  // What the settings say: the caption, and the alignment of each column which has one.
-  private case class Settings
-    ( caption: Optional[Text] = Unset, aligned: sci.Map[Int, Block.Alignment] = sci.Map() )
+  case class Column(title: Text, align: Optional[Text] = Unset)
+  case class Row(cell: List[Text])
+  case class Table(caption: Optional[Text] = Unset, column: List[Column], row: List[Row])
 
-  // Why a fence's content is not a table: at a line of the content (from 1), or of the fence as
-  // a whole.
-  case class Problem(message: Text, line: Optional[Int] = Unset)
+  // The schema, as the case classes derive it.
+  lazy val schema: Tels =
+    import strategies.throwUnsafely
+    Tels.tels[Table](t"tabular")
+
+  // A fault in a fence's content: its message, and where it is, by line and column of the
+  // content (from 1), with the length of the text it concerns, where those are known.
+  case class Fault
+    ( message: Text,
+      line:    Optional[Int] = Unset,
+      column:  Optional[Int] = Unset,
+      length:  Optional[Int] = Unset )
+
+  // The faults the schema finds, as they are accrued: each TEL error, with the path of what it
+  // concerns and where that is.
+  private case class Faults(items: List[(Tel.Error, Text, Span)] = Nil)(using Diagnostics)
+  extends Error(m"the table has ${items.size} faults"):
+    def +(error: Tel.Error, pointer: Text, span: Span): Faults =
+      Faults(items :+ (error, pointer, span))
 
   // A cell which is a number: digits, perhaps signed, grouped, with a fraction, an exponent or
   // a percentage.
@@ -81,217 +109,164 @@ object Tables:
 
   private def numeric(cell: Text): Boolean = number.matcher(cell.s).nn.matches
 
-  // The leading spaces of a line, which TEL's indentation and the markers' offsets count from.
-  private def indent(line: String): Int = line.length - line.stripLeading.nn.length
+  private def alignment(word: Text): Optional[Block.Alignment] = word match
+    case t"start" => Block.Alignment.Start
+    case t"end"   => Block.Alignment.End
+    case _        => Unset
 
-  // A comment line: the sigil, then a space or nothing, at the start of the line's text.
-  private def comment(line: String): Boolean =
-    val text: String = line.trim.nn
-    text == "#" || text.startsWith("# ")
+  // A path's keywords, without the indices of repeated fields: `/column/1/title` is
+  // `column`, `title`.
+  private def keywords(pointer: Text): List[Text] =
+    pointer.cut(t"/").filter { segment => segment != t"" && safely(segment.as[Int]).absent }
 
-  // The offsets of a line's markers, when it is a tabulation line (TEL §16.1): its first
-  // character a `#`, and at least one more `#` immediately after two or more spaces.
-  private def markers(line: String): Optional[List[Int]] =
-    val start: Int = indent(line)
+  // What a fault TEL finds means in a table.
+  private def explain(error: Tel.Error, pointer: Text): Text =
+    import Tel.Error.Reason
+    val path: List[Text] = keywords(pointer)
+    val last: Text = path.reverse.head.or(t"")
 
-    if start >= line.length || line.charAt(start) != '#' then Unset else
-      val later: scala.List[Int] =
-        (start + 3 until line.length).filter: index =>
-          line.charAt(index) == '#' && line.charAt(index - 1) == ' ' && line.charAt(index - 2) == ' '
+    error.reason match
+      case Reason.UnknownKeyword => path.size match
+        case 1 =>
+          t"A table has a `caption`, `column`s and `row`s, but not `$last`."
 
-        . toList
+        case _ =>
+          if path.head.or(t"") == t"column"
+          then t"A column has a `title` and an `align`, but not `$last`."
+          else t"A row has `cell`s, but not `$last`."
 
-      if later.isEmpty then Unset else List.from(start :: later)
+      case Reason.TooManyAtoms | Reason.AtomAtNonAssignablePos =>
+        t"This has more values than it takes: a value with spaces in it follows two spaces, as `title  Known for`."
 
-  // The text of a line from one offset to the next (or its end), trimmed.
-  private def slice(line: String, from: Int, to: Optional[Int]): Text =
-    val end: Int = to.or(line.length).min(line.length)
-    if from >= end then t"" else line.substring(from, end).nn.trim.nn.tt
+      case Reason.RequiredMemberAbsent =>
+        if last == t"title" then t"This column has no `title`." else t"This needs a `$last`."
 
-  // A fence's content as a table, with its cells and caption read as Markdown phrasing through
-  // `linker`; or the TEL error, or the problem, which stops it being one.
-  def read(content: Text, linker: Linker = Linker.none): Block.Table | Tel.Error | Problem =
+      case Reason.NonRepeatableTooMany =>
+        t"This says `$last` more than once."
+
+      case Reason.MembersNonContiguous =>
+        t"A table's `column`s come together, and its `row`s together, without one among the others."
+
+      case _ =>
+        error.message.text
+
+  // A fence's content as a table, with its titles, cells and caption read as Markdown phrasing
+  // through `linker`; or the TEL error which stops it being TEL; or every fault which stops it
+  // being a table.
+  def read(content: Text, linker: Linker = Linker.none): Block.Table | Tel.Error | List[Fault] =
     import strategies.throwUnsafely
+    import parsing.trackPositions
 
-    val parsed: Tel | Tel.Error =
-      try Tels.headed(content)(0).read[Tel] catch case error: Tel.Error => error
+    val (text, added) = pyrocosm.Tels.headed(content)
+
+    val parsed: Tel | Tel.Error = try text.read[Tel] catch case error: Tel.Error => error
 
     parsed match
-      case error: Tel.Error => error
-      case tel: Tel         => table(content, tel, linker)
+      case error: Tel.Error =>
+        error
 
-  private def table(content: Text, tel: Tel, linker: Linker): Block.Table | Problem =
-    val split: scala.Array[String | Null] = content.s.split("\n", -1).nn
-    val lines: scala.List[String] = ArraySeq.unsafeWrapArray(split).toList.map(_.nn)
-    def blank(index: Int): Boolean = lines(index).trim.nn.isEmpty
+      case tel: Tel =>
+        // A position in the headed text, as a line and column of the content.
+        def place(line: Int, column: Int, length: Optional[Int], message: Text): Fault =
+          Fault(message, line - added, column, length)
 
-    val headings: scala.List[Int] =
-      lines.indices.filter { index => markers(lines(index)).present }.toList
+        // At the compound a path names, or, where that is an atom rather than a compound, at
+        // the nearest compound above it.
+        def at(pointer: List[Text], message: Text): Fault =
+          if pointer.nil then Fault(message)
+          else tel.locateKey(Telp(pointer)).lay(at(pointer.reverse.skip(1).reverse, message)):
+            (position: Tel.Error.Position) =>
+              place(position.line, position.column, Unset, message)
 
-    headings match
-      case scala.Nil =>
-        Problem(t"A table needs a heading line, of a `#` before each column's title, as `# Name  # Born`.")
+        val faults: Faults =
+          validate[Tel.Focus](Faults()):
+            case error: Tel.Error =>
+              val pointer: Text = prior.let(_.pointer.encode).or(t"/")
+              accrual + (error, pointer, prior.lay(Span.empty)(_.span))
 
-      case scala.::(_, scala.::(second, _)) =>
-        Problem(t"A `tabular` fence holds one table, but this is a second heading line.", second + 1)
+          . protect(Tel.Type.assign(tel, schema))
 
-      case scala.::(heading, _) =>
-        val offsets: scala.List[Int] = markers(lines(heading)).or(List()).stdlib.toList
-        val base: Int = indent(lines(heading))
+        // A fault without a place of its own — a missing member — is put at its parent's.
+        val found: List[Fault] = faults.items.map: (error, pointer, span) =>
+          val message: Text = explain(error, pointer)
 
-        def bound(index: Int): Optional[Int] = offsets.lift(index + 1).fold(Unset)(_ - 2)
+          if span.exists then
+            val line: Int = span.startLine.lay(1)(_.n1)
+            val column: Int = span.startColumn.lay(1)(_.n1)
+            place(line, column, span.length, message)
+          else
+            at(pointer.cut(t"/").filter(_ != t"").reverse.skip(1).reverse, message)
 
-        // A heading's text lies between its `#`, and the space after it, and the next `#`.
-        val titles: scala.List[Text] = offsets.indices.toList.map: index =>
-          slice(lines(heading), offsets(index) + 1, offsets.lift(index + 1).fold(Unset)(identity))
+        if !found.nil then found else
+          val table: Table = tel.as[Table]
+          val width: Int = table.column.size
 
-        val rows: scala.List[Int] =
-          (heading + 1 until lines.size).takeWhile(!blank(_)).toList
+          val misaligned: List[Fault] = table.column.indexed.bind: (column: Column, index: Ordinal) =>
+            column.align.lay(Nil): (word: Text) =>
+              if alignment(word).present then Nil
+              else
+                val message: Text = t"A column is aligned `start` or `end`, not `$word`."
+                List(at(List(t"column", index.n0.show, t"align"), message))
 
-        // The lines of the compounds which are not rows: before the heading line and after the
-        // rows, at the table's indentation, which is where `tel`'s compounds come from.
-        def settingLines(range: sci.Range): scala.List[Int] =
-          range.filter: index =>
-            !blank(index) && indent(lines(index)) == base && !comment(lines(index))
-
-          . toList
-
-        val before: scala.List[Int] = settingLines(0 until heading)
-        val after: scala.List[Int] = settingLines((heading + 1 + rows.size) until lines.size)
-        val compounds: scala.List[Tel.Compound] = tel.childCompounds.to[List].stdlib.toList
-
-        val settings: scala.List[(Tel.Compound, Optional[Int])] =
-          val outside: scala.List[Tel.Compound] =
-            compounds.take(before.size) ++ compounds.drop(before.size + rows.size)
-
-          outside.zipAll(before ++ after, null, -1).collect:
-            case (compound: Tel.Compound, line: Int) =>
-              (compound, if line < 0 then Unset else line + 1)
-
-        val cells: scala.List[scala.List[Text]] = rows.map: (row: Int) =>
-          offsets.indices.toList.map: index =>
-            slice(lines(row), offsets(index), bound(index))
-
-        if rows.isEmpty then
-          Problem
-            ( t"This table has no rows: they follow its heading line, with no blank line between.",
-              heading + 1 )
-        else
-          configure(settings, titles, cells, linker)
-
-  // The settings applied to the rows: the caption, and each column's alignment.
-  private def configure
-    ( settings: scala.List[(Tel.Compound, Optional[Int])],
-      titles:   scala.List[Text],
-      cells:    scala.List[scala.List[Text]],
-      linker:   Linker )
-  :   Block.Table | Problem =
-
-    def text(compound: Tel.Compound): Text =
-      compound.atoms.to[List].stdlib.toList.collect { case atom: Tel.Atom.Inline => atom.text.s }
-      . mkString(" ").tt
-
-    def children(compound: Tel.Compound): scala.List[Tel.Compound] =
-      compound.children.to[List].stdlib.toList.flatMap(_.compounds.to[List].stdlib.toList)
-
-    def alignment(word: Text): Optional[Block.Alignment] = word match
-      case t"start"  => Block.Alignment.Start
-      case t"end"    => Block.Alignment.End
-      case _         => Unset
-
-    // Each column's alignment, by its index, as the settings say; or the first problem.
-    def recur(rest: scala.List[(Tel.Compound, Optional[Int])], said: Settings)
-    :   Settings | Problem =
-
-      rest match
-        case scala.Nil =>
-          said
-
-        case scala.::((compound, line), tail) => compound.keyword match
-          case t"caption" =>
-            if said.caption.present then Problem(t"A table has one caption.", line)
-            else recur(tail, said.copy(caption = text(compound)))
-
-          case t"column" =>
-            val title: Text = text(compound)
-            val index: Int = titles.indexOf(title)
-
-            if index < 0 then
-              val known: Text = titles.map { title => t"`$title`" }.mkString(", ").tt
-              Problem(t"There is no column headed `$title`; the headings are $known.", line)
+          val wide: List[Fault] = table.row.indexed.bind: (row: Row, index: Ordinal) =>
+            if row.cell.size <= width then Nil
             else
-              children(compound) match
-                case scala.Nil =>
-                  Problem(t"Say how the column `$title` is set, with `align` beneath it.", line)
+              val message: Text =
+                t"This row has ${row.cell.size.show} cells, but the table has ${width.show} columns."
 
-                case settings =>
-                  val answers: scala.List[Optional[Block.Alignment] | Problem] = settings.map:
-                    (setting: Tel.Compound) => setting.keyword match
-                      case t"align" =>
-                        val word: Text = text(setting)
-                        alignment(word).or(Problem(t"A column is aligned `start` or `end`, not `$word`.", line))
+              List(at(List(t"row", index.n0.show), message))
 
-                      case other =>
-                        Problem(t"A column's setting is `align`, not `$other`.", line)
+          val empty: List[Fault] =
+            (if table.column.nil then List(Fault(t"A table needs a `column`.")) else Nil) +
+              (if table.row.nil then List(Fault(t"A table needs a `row`.")) else Nil)
 
-                  answers.collectFirst { case problem: Problem => problem } match
-                    case Some(problem) => problem
-                    case None =>
-                      val last: Optional[Block.Alignment] =
-                        answers.collect { case alignment: Block.Alignment => alignment }.lastOption
-                        . fold(Unset)(identity)
+          val all: List[Fault] = empty + misaligned + wide
+          if !all.nil then all else render(table, linker)
 
-                      val aligned: sci.Map[Int, Block.Alignment] =
-                        last.lay(said.aligned) { alignment => said.aligned.updated(index, alignment) }
+  // The table, read: each row filled out to the columns, and its text read as Markdown
+  // phrasing.
+  private def render(table: Table, linker: Linker): Block.Table =
+    def phrasing(text: Text): List[Inline] =
+      if text == t"" then Nil else Blocks.inline(text, linker)
 
-                      recur(tail, said.copy(aligned = aligned))
+    val width: Int = table.column.size
 
-          case other =>
-            Problem
-              ( t"A table's settings are `caption` and `column`, not `$other`; its rows follow its heading line, with no blank line between.",
-                line )
+    val cells: List[List[Text]] = table.row.map: (row: Row) =>
+      row.cell + List.fill(width - row.cell.size)(t"")
 
-    recur(settings, Settings()) match
-      case problem: Problem => problem
+    val columns: List[Block.Column] = table.column.indexed.map: (column: Column, index: Ordinal) =>
+      val values: List[Text] = cells.map(_.at(index).or(t"")).filter(_ != t"")
+      val number: Boolean = !values.nil && values.all(numeric)
+      val title: List[Inline] = phrasing(column.title)
 
-      case Settings(caption, aligned) =>
-        def phrasing(text: Text): List[Inline] =
-          if text == t"" then Nil else Blocks.inline(text, linker)
+      // A column set at the start is not numeric, which a renderer may take to mean set at the
+      // end, whatever its alignment.
+      column.align.let(alignment(_)) match
+        case Block.Alignment.Start =>
+          Block.Column(title, Block.Alignment.Start)
 
-        val columns: List[Block.Column] = List.from:
-          titles.indices.toList.map: index =>
-            // A column set at the start is not numeric, which a renderer may take to mean set at
-            // the end, whatever its alignment.
-            val column: scala.List[Text] = cells.map(_.lift(index).getOrElse(t"")).filter(_ != t"")
-            val number: Boolean = column.nonEmpty && column.forall(numeric)
+        case alignment: Block.Alignment =>
+          Block.Column(title, alignment, numeric = number)
 
-            aligned.get(index) match
-              case Some(Block.Alignment.Start) =>
-                Block.Column(phrasing(titles(index)), Block.Alignment.Start)
+        case _ =>
+          val alignment: Block.Alignment =
+            if number then Block.Alignment.End else Block.Alignment.Start
 
-              case Some(alignment) =>
-                Block.Column(phrasing(titles(index)), alignment, numeric = number)
+          Block.Column(title, alignment, numeric = number)
 
-              case None =>
-                val alignment: Block.Alignment =
-                  if number then Block.Alignment.End else Block.Alignment.Start
+    val rows: List[Block.Row] = cells.map: (row: List[Text]) =>
+      Block.Row(row.map { cell => Block.Cell(phrasing(cell)) })
 
-                Block.Column(phrasing(titles(index)), alignment, numeric = number)
+    // The caption as one phrase: a caption of several inlines does not survive the model's
+    // TEL encoding, which is how a compiled document is kept.
+    val caption: Optional[List[Inline]] =
+      table.caption.let { caption => List(Inline.Phrase(phrasing(caption))) }
 
-        val rows: List[Block.Row] = List.from:
-          cells.map: (row: scala.List[Text]) =>
-            Block.Row(List.from(row.map { cell => Block.Cell(phrasing(cell)) }))
-
-        // The caption as one phrase: a caption of several inlines does not survive the model's
-        // TEL encoding, which is how a compiled document is kept.
-        val captioned: Optional[List[Inline]] =
-          caption.let { caption => List(Inline.Phrase(phrasing(caption))) }
-
-        Block.Table(columns, rows, captioned)
+    Block.Table(columns, rows, caption)
 
 // The embedding of `tabular` fences, for one document (or page, or deck): each as its table, or,
-// when it is not one, as its text, with the problem kept, as a diagnostic at its place in the
-// file, in `problems`.
+// when it is not one, as its text, with each of its faults kept, as a diagnostic at its place in
+// the file, in `problems`.
 final class Tables(path: Text, linker: Linker = Linker.none) extends Embedding:
   private var problems0: List[Block] = Nil
 
@@ -299,8 +274,8 @@ final class Tables(path: Text, linker: Linker = Linker.none) extends Embedding:
 
   def embed(info: List[Text], content: Text, fence: Int): Optional[List[Block]] =
     if info.head != Tables.language then Unset else
-      def failed(problem: Block): List[Block] =
-        problems0 = problem :: problems0
+      def failed(problems: List[Block]): List[Block] =
+        problems0 = problems.reverse + problems0
         List(Embedding.plain(info, content, fence))
 
       Tables.read(content, linker) match
@@ -308,15 +283,21 @@ final class Tables(path: Text, linker: Linker = Linker.none) extends Embedding:
           List(table)
 
         case error: Tel.Error =>
-          failed(Preamble.diagnostic(error, path, content, fence + 1))
+          failed(List(Preamble.diagnostic(error, path, content, fence + 1)))
 
-        // The content's line `n` is the file's `fence + 1 + n`, counting from 1.
-        case Tables.Problem(message, line) =>
-          val location: Block.Location = Block.Location(path, line.lay(fence + 1)(_ + fence + 1))
+        // The content's line `n` is the file's `fence + 1 + n`, counting from 1; a fault with no
+        // line is the fence's, on the line which opens it.
+        case faults: List[Tables.Fault] @unchecked =>
+          failed:
+            faults.map: (fault: Tables.Fault) =>
+              val line: Int = fault.line.lay(fence + 1)(_ + fence + 1)
+              val location: Block.Location = Block.Location(path, line, fault.column)
 
-          val excerpt: List[Block] = line.lay(Nil): (line: Int) =>
-            Excerpts.plain(content, line, Block.Note.Style.Erroneous).map:
-              case code: Block.Code => code.copy(start = code.start.let(_ + fence + 1))
-              case other            => other
+              val excerpt: List[Block] = fault.line.lay(Nil): (line: Int) =>
+                Excerpts.plain(content, line, Block.Note.Style.Erroneous, fault.column, fault.length)
+                . map:
+                    case code: Block.Code => code.copy(start = code.start.let(_ + fence + 1))
+                    case other            => other
 
-          failed(Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(message)), excerpt))
+              val message: List[Block] = List(Block.paragraph(fault.message))
+              Block.Diagnostic(Tone.Failure, location, message, excerpt)

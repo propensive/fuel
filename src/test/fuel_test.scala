@@ -3598,21 +3598,30 @@ define type class
 
       def text(content: List[Inline]): Text = Inline.plain(content)
 
-      // Each problem, as its line in the file and its message.
-      def problems(doc: Doc): List[(Optional[Int], Text)] = doc.problems.map:
+      // Each problem, as its line and column in the file and its message.
+      def problems(doc: Doc): List[(Optional[Int], Optional[Int], Text)] = doc.problems.map:
         case Block.Diagnostic(_, location, message, _, _) =>
-          (location.let(_.line), message.map { case Block.Paragraph(content) => text(content); case _ => t"" }.join)
+          val said: Text = message.map { case Block.Paragraph(content) => text(content); case _ => t"" }.join
+          (location.let(_.line), location.let(_.column), said)
 
         case _ =>
-          (Unset, t"")
+          (Unset, Unset, t"")
 
-      val planets: Text = t"""# Planet       # Distance  # Moons  # Notes
-Mercury        0.39        0        Closest to the Sun
-Venus de Milo              0        *Turns* backwards
-Earth          1.00        1        See [the Moon](https://example.com/moon)
+      def lines(doc: Doc): List[Optional[Int]] = problems(doc).map(_(0))
+
+      val planets: Text = t"""column  Planet
+column  Distance
+column  Moons
+column  Notes
+row  Mercury  0.39  0  Closest to the Sun
+row  Venus de Milo
+  cell
+  cell  0
+  cell  *Turns* backwards
+row  Earth  1.00  1  See [the Moon](https://example.com/moon)
 """
 
-      test(m"a tabular fence is a table: its headings, and each row's cells by column"):
+      test(m"a tabular fence is a table: its columns' titles, and its rows' cells"):
         table(doc(planets)).let: (table: Block.Table) =>
           ( table.columns.map { column => text(column.title) },
             table.rows.map(_.cells.map { cell => text(cell.content) }) )
@@ -3623,6 +3632,17 @@ Earth          1.00        1        See [the Moon](https://example.com/moon)
                           List(t"Venus de Milo", t"", t"0", t"Turns backwards"),
                           List(t"Earth", t"1.00", t"1", t"See the Moon") ) ))
 
+      test(m"a field is the same table whether it is written as an atom or as a child"):
+        val atoms: Text = t"column  Name  end\ncolumn  Other\nrow  a b  c\n"
+
+        val children: Text =
+          t"column\n  title  Name\n  align end\ncolumn\n  title  Other\nrow\n  cell  a b\n  cell  c\n"
+
+        val (first, second) = (table(doc(atoms)), table(doc(children)))
+        (first.present, first == second)
+
+      . assert(_ == (true, true))
+
       test(m"a cell is Markdown phrasing"):
         table(doc(planets)).let: (table: Block.Table) =>
           table.rows.map(_.cells.reverse.head.let(_.content.head).or(Unset)).map:
@@ -3632,10 +3652,18 @@ Earth          1.00        1        See [the Moon](https://example.com/moon)
 
       . assert(_ == List(t"text", t"emphasis", t"text"))
 
-      test(m"a numeric column is set at the end, unless a column setting aligns it otherwise"):
-        val settings: Text = t"column Moons\n  align start\n\ncolumn Notes\n  align end\n\n"
+      test(m"a row with fewer cells than columns is filled out with empty ones"):
+        table(doc(t"column  A\ncolumn  B\ncolumn  C\nrow  x\n")).let: (table: Block.Table) =>
+          table.rows.map(_.cells.map { cell => text(cell.content) })
 
-        table(doc(settings + planets)).let: (table: Block.Table) =>
+      . assert(_ == List(List(t"x", t"", t"")))
+
+      test(m"a numeric column is set at the end, unless the column says how it is aligned"):
+        val aligned: Text = planets
+          . sub(t"column  Moons\n", t"column  Moons  start\n")
+          . sub(t"column  Notes\n", t"column\n  title  Notes\n  align end\n")
+
+        table(doc(aligned)).let: (table: Block.Table) =>
           table.columns.map { column => (column.numeric, column.alignment) }
 
       . assert(_ == List( (false, Block.Alignment.Start),
@@ -3643,50 +3671,63 @@ Earth          1.00        1        See [the Moon](https://example.com/moon)
                           (false, Block.Alignment.Start),
                           (false, Block.Alignment.End) ))
 
-      test(m"a caption may follow the rows, after a blank line, as Markdown phrasing"):
-        table(doc(planets + t"\ncaption The *inner* planets\n")).let: (table: Block.Table) =>
+      test(m"a caption, anywhere, is Markdown phrasing beneath the table"):
+        table(doc(t"caption  The *inner* planets\n" + planets)).let: (table: Block.Table) =>
           table.caption.let(text(_))
 
       . assert(_ == t"The inner planets")
 
       test(m"a table with a caption of several inlines round-trips as a fragment's output"):
-        val compiled: Doc = doc(planets + t"\ncaption The *inner* planets\n")
+        val compiled: Doc = doc(planets + t"caption  The *inner* planets\n")
         val fragment = Output.Fragment(compiled.blocks, Nil, true, Nil, Nil, t"", 0)
         Output.Fragment.decode(Output.Fragment.encode(fragment)).let(_ == fragment).or(false)
 
       . assert(_ == true)
 
       test(m"a well-formed table has no problems"):
-        problems(doc(t"caption Planets\ncolumn Moons\n  align end\n\n" + planets))
+        problems(doc(t"caption  Planets\n" + planets))
 
       . assert(_ == Nil)
 
-      test(m"a misaligned row is TEL's error, at its line in the file, and the fence is shown as text"):
-        val misaligned: Text = t"# Planet  # Moons\nMercury   0\nVenus      0\n"
-        val compiled: Doc = doc(misaligned)
+      test(m"a keyword the schema does not have is a fault at its line and column"):
+        val compiled: Doc = doc(t"column  A\nrow  x\nheading  B\n")
         val shown: Boolean = compiled.blocks.exists { case _: Block.Code => true; case _ => false }
-        (table(compiled).absent, shown, problems(compiled).map(_(0)))
+        (table(compiled).absent, shown, problems(compiled).map { (line, column, _) => (line, column) })
 
-      . assert(_ == (true, true, List(8)))
+      . assert(_ == (true, true, List((8, 1))))
 
-      test(m"a table needs a heading line, and rows beneath it"):
-        ( problems(doc(t"caption Nothing\n")),
-          problems(doc(t"# Planet  # Moons\n\ncaption Empty\n")) )
+      test(m"every fault in a table is reported, each at its place"):
+        lines(doc(t"column  A\nrow  x\nheading  B\ncell  y\n"))
 
-      . assert(_ == ( List((5, t"A table needs a heading line, of a `#` before each column's title, as `# Name  # Born`.")),
-                      List((6, t"This table has no rows: they follow its heading line, with no blank line between.")) ))
+      . assert(_ == List(8, 9))
 
-      test(m"a row after a blank line is not a setting, and says where rows belong"):
-        problems(doc(t"# Planet  # Moons\nMercury   0\n\nVenus     0\n")).map(_(0))
+      test(m"a value with spaces in it after one space has more values than it takes"):
+        problems(doc(t"column  A\nrow\n  cell Closest to the Sun\n")).map { (line, _, said) => (line, said) }
 
-      . assert(_ == List(9))
+      . assert(_ == List((8, t"This has more values than it takes: a value with spaces in it follows two spaces, as `title  Known for`.")))
 
-      test(m"a column setting names a heading, and aligns it at the start or the end"):
-        ( problems(doc(t"column Mass\n  align end\n\n" + planets)),
-          problems(doc(t"column Moons\n  align right\n\n" + planets)) )
+      test(m"a column without a title is a fault at the column"):
+        problems(doc(t"column  A\ncolumn\n  align end\nrow  x\n")).map { (line, _, said) => (line, said) }
 
-      . assert(_ == ( List((6, t"There is no column headed `Mass`; the headings are `Planet`, `Distance`, `Moons`, `Notes`.")),
-                      List((6, t"A column is aligned `start` or `end`, not `right`.")) ))
+      . assert(_ == List((7, t"This column has no `title`.")))
+
+      test(m"columns come together, and rows together"):
+        lines(doc(t"column  A\nrow  x\ncolumn  B\nrow  y\n")).size > 0
+
+      . assert(_ == true)
+
+      test(m"a table needs a column and a row, at the fence's line"):
+        (problems(doc(t"caption  Nothing\n")), lines(doc(t"column  A\n")))
+
+      . assert(_ == ( List((5, Unset, t"A table needs a `column`."), (5, Unset, t"A table needs a `row`.")),
+                      List(5) ))
+
+      test(m"a column is aligned start or end, and a row has no more cells than columns"):
+        ( problems(doc(t"column  A  right\nrow  x\n")).map { (line, _, said) => (line, said) },
+          problems(doc(t"column  A\nrow  x  y\n")).map { (line, _, said) => (line, said) } )
+
+      . assert(_ == ( List((6, t"A column is aligned `start` or `end`, not `right`.")),
+                      List((7, t"This row has 2 cells, but the table has 1 columns.")) ))
 
     suite(m"Sections"):
       test(m"a fixture is found by the document's section and path before its file name"):
