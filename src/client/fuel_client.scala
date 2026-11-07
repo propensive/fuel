@@ -403,7 +403,7 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
 
     Server.publish
       ( corpus, api, outcome.let(_(2)).or(sci.Map()), config.imports, glossaryPage,
-        Scope.standardOf(config.options) )
+        Scope.standardOf(config.options), glossary )
 
     corpus.sections.each: (section: Corpus.Section) =>
       Out.println(t"${section.name}: ${section.docs.size.show} documents from ${section.root}")
@@ -717,9 +717,12 @@ private def searchApi(text: Text)(using Stdio): Exit | Tool.UsageError.type =
           Out.println(t"fuel: no API has been compiled; run fuel compile in a project")
           Exit.Ok
         else
-          val outcome: Search.Outcome = api.search(query)
+          val outcome: Search.Outcome = api.search(query, Server.terms)
           val scope: Scope = Scope.document(Server.imports, Server.standard)
           outcome.notices.each: (notice: Text) => Out.println(t"fuel: $notice")
+
+          outcome.terms.each: (term: Glossary.Term) =>
+            Out.println(t"${term.name}  /glossary#${term.slug}")
 
           outcome.hits.each: (hit: Search.Hit) =>
             Out.println(t"${hit.entity.key}  ${hit.entity.url}")

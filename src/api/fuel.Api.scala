@@ -160,7 +160,8 @@ object Api:
       refer:   List[Text]       = Nil,
       imports: List[Text]       = Nil,
       file:    Optional[Text]   = Unset,
-      line:    Optional[Int]    = Unset )
+      line:    Optional[Int]    = Unset,
+      keywords: List[Text]      = Nil )
 
   case class Until(version: Text, replacement: Optional[Text] = Unset)
 
@@ -363,6 +364,16 @@ case class Api(entities: sci.Map[Text, Api.Entity]):
     entities.values.toList.groupBy(_.name).map: (name, group) =>
       val sorted: List[Api.Entity] = List.from(group.sortBy(_.key.s))
       (name, sorted)
+
+  // Every entity with a keyword, by the keyword in lower case: what a search for the keyword
+  // finds, besides the entities of that name.
+  lazy val byKeyword: sci.Map[Text, List[Api.Entity]] =
+    val pairs: scala.List[(Text, Api.Entity)] = entities.values.toList.flatMap: (e: Api.Entity) =>
+      e.doc.lay(scala.Nil: scala.List[(Text, Api.Entity)]): (doc: Api.Entry) =>
+        doc.keywords.stdlib.toList.map { (keyword: Text) => (keyword.lower, e) }
+
+    pairs.groupBy(_(0)).map: (keyword, group) =>
+      (keyword, List.from(group.map(_(1)).sortBy(_.key.s)))
 
   // A shape with every alias it names expanded to what the alias stands for, its parameters
   // substituted, to a depth which ends a cycle; an export forwarder is followed to its target.
