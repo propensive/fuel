@@ -21,6 +21,8 @@ fuel serve         # serve the compiled documents at http://localhost:8090/fuel/
 fuel serve stop    # stop serving them
 fuel show doc/x.md # one document, set in the terminal: justified, hyphenated, highlighted
 fuel present doc/slides.tel  # a presentation's slides in a browser until Ctrl+C
+fuel sync github propensive/fuel  # attach a repository's issues to the API pages, and fetch them
+fuel sync          # fetch every attached tracker's issues again
 fuel install       # install tab-completions and the manpage
 fuel about         # fuel's version, and the daemon serving it
 fuel --version     # the version alone
@@ -29,7 +31,8 @@ fuel quit          # stop the daemon, and any server it runs
 
 A failure of the daemon itself while it carries out a command (running out of memory, say) is
 reported on the standard error, where it was thrown, and the command exits with status 6, apart
-from a compile's own failures (status 4) and from a command line it did not understand
+from a compile's own failures (status 4), from a tracker whose issues could not be fetched
+(status 7) and from a command line it did not understand
 (status 2).
 
 `fuel compile` reads every `*.md` beneath each configured `document` directory, parses it as
@@ -334,6 +337,35 @@ brackets are CommonMark's own reference link, since the glossary's definitions a
 each document before it is parsed, so an author's own `[interface]: url` wins; a term defined
 twice is a failure, as is a fence left open (which would swallow the definitions).
 
+## Issues
+
+A tracker's issues can be attached to the API's pages: `fuel sync github propensive/fuel`
+attaches a GitHub repository (or a `sync github propensive/fuel` line of the configuration
+does), fetches its open issues, and keeps them fresh while the dashboard is served. An issue is
+attached to an entity only when its body says so, with the keyword `affects` followed by the
+names in backticks, as `closes` names an issue from a pull request:
+
+```
+The result is off by one. This affects `gossamer.Text#length` and `gossamer.Text#skip`.
+```
+
+Names resolve as references in prose do, through the configured `imports`, an export followed
+to its target; one that resolves to nothing, or to more than one entity, is reported by `fuel
+sync` and by `fuel compile`, and attaches to nothing. On an affected entity's page, the issues
+which remain open are listed after the title by number, each a link to the issue, and at the
+foot with their titles. The attachment, and the issues fetched, are kept in the project's cache,
+so a daemon started afresh shows them from its first `fuel compile`; `fuel sync` alone fetches
+every attached tracker's again, and deleting the tracker's file beneath the cache's `sync`
+directory detaches it.
+
+While the dashboard is served, the daemon polls every ten minutes, asking GitHub only for what
+changed since the latest change it saw, with the ETag of its last answer: a poll which finds
+nothing new is answered `304 Not Modified`, which GitHub does not count against its rate limit,
+and a change costs a request or two. Unauthenticated, GitHub allows sixty requests an hour; a
+`github` credential (`GITHUB_TOKEN`, or a source declared in `~/.config/pyrocosm/credentials.tel`,
+such as `command gh auth token`) lifts the limit, and is needed for a private repository. The
+output directory never holds issues: they are put on a page as it is shown.
+
 ## Configuration files
 
 A project configures fuel with a [TEL](https://soundness.dev/tel/) document at
@@ -367,6 +399,9 @@ fixtures doc/fixtures
 source src/core
 overlay doc/api
 imports soundness
+
+# The tracker whose open issues the API's pages show: read whole, as `serve` and `port` are.
+sync github propensive/fuel
 
 # The glossary's terms, which a document names in brackets; and whether a link to the web is
 # fetched when the documents compile (a link within the site is always checked).

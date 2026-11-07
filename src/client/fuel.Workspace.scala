@@ -56,7 +56,9 @@ object Workspace:
       imports:   List[Text]     = Nil,
       output:    Optional[Text] = Unset,
       glossaries: List[Text]    = Nil,
-      checkLinks: Boolean       = false )
+      checkLinks: Boolean       = false,
+      sync:       List[Sync.Target] = Nil,
+      badSync:    List[Text]        = Nil )
 
   def load(directory: Text)(using Cli, Interpreter, Configurator): Config =
     // The project the directory is in, as `Tool` finds it: its root is what every path in the
@@ -76,6 +78,15 @@ object Workspace:
 
     val output: Optional[Text] = ui.Output().let(project.resolve(_).encode)
 
+    // A `sync` line names a target whole — `sync github owner/repo` — which a `Setting`, reading
+    // a field's first atom alone, cannot; so it is read from the configuration as `Tool` reads
+    // `serve` and `port`. A line which names no target is kept, to be reported.
+    val syncLines: List[List[Text]] = project.config.lay(Nil: List[List[Text]]): (tel: Tel) =>
+      tel.fields(t"sync").to[List].map(_.atomTexts.to[List].filter(_ != t""))
+
+    val sync: List[Sync.Target] = syncLines.bind { words => Sync.Target.parse(words).let(List(_)).or(Nil) }
+    val badSync: List[Text] = syncLines.filter(Sync.Target.parse(_).absent).map(_.join(t" "))
+
     Config
       ( root,
         entries(ui.Classpath()),
@@ -88,4 +99,6 @@ object Workspace:
         imports,
         output,
         entries(ui.Glossary()),
-        ui.CheckLinks().or(false) )
+        ui.CheckLinks().or(false),
+        sync,
+        badSync )

@@ -254,7 +254,8 @@ final class Dashboard():
           content() = doc.blocks + doc.problems
 
       case Target.Entity(key) =>
-        content() = Server.page(key).or(Server.api(key).let(Dashboard.render).or(Nil))
+        val page: List[Block] = Server.page(key).or(Server.api(key).let(Dashboard.render).or(Nil))
+        content() = ApiPages.withIssues(page, Server.issues(key))
 
       case Target.Glossary() =>
         content() = Server.glossary

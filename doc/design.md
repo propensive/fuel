@@ -136,7 +136,8 @@ serve
 Later keywords, as the layers arrive: `api <jar>` (M5, the jars whose API is documented and
 whose TEL overlays are read), `imports <package>` (names elided in signatures), `output <dir>`
 (M6, the static site). Each is a `Setting`, so flags, `fuel.*` properties and `FUEL_*`
-variables reach it too.
+variables reach it too — except `sync github owner/repo`, which names its target in two atoms
+and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
 
 ## Roadmap
 
@@ -148,6 +149,13 @@ variables reach it too.
   `.pyrocosm/{fume,flare}/config.tel`, `mill`. Pins: soundness 0.72.0, pyrocosm 0.7.1. Port
   8060. `fuel about` works. Off-repo: add `propensive/fuel` to `pyrocosm/etc/downstream` and
   `github/settings/repos.tsv`; generate `etc/keys/release.pub` with `bin/release-key`.
+- **Issues attached to the API** (done, first cut): `fuel sync github owner/repo`, or `sync
+  github owner/repo` in the configuration, attaches a tracker; an issue whose body says
+  `affects `pkg.Name`` is shown on that entity's page (numbers after the title, titles at the
+  foot) while it is open. The state (ETag, `since`, open issues) is kept in the project cache;
+  the daemon polls every ten minutes while serving, with `since` and `If-None-Match`, so a poll
+  with nothing new is a free 304. Other targets may follow `github`. Left for later: detaching
+  by command, backoff on a rate limit, a timeout on the fetch.
 - **M1 Markdown with embedded code, compiled and viewed** (done, first cut). This document's
   second half. Found while building it:
   - A chain of `Optional#let` calls with `_` lambdas (`file.parent.let(_.parent).let(_.parent)`
