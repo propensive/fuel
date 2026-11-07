@@ -639,7 +639,8 @@ private def rendered
     val resolver: Resolver = Resolver(api, scope)
     val place: Text = entity.doc.let(_.file).or(entity.key)
     val scala: Embedding.ScalaCode = Embedding.ScalaCode(checker, place, false, Unset, resolver)
-    val embeddings = List(scala, Embedding.JavaCode)
+    val tables: Tables = Tables(place, resolver)
+    val embeddings = List(scala, Embedding.JavaCode, tables)
     val blocks: List[Block] = ApiPages.page(api, entity, resolver, scope, embeddings)
 
     val ambiguous: List[Block] = resolver.ambiguities.map: (reference: Text) =>
@@ -647,7 +648,7 @@ private def rendered
       val location: Block.Location = Block.Location(place, entity.doc.let(_.line))
       Block.Diagnostic(Tone.Warning, location, List(Block.paragraph(text)))
 
-    (blocks, scala.problems + ambiguous)
+    (blocks, scala.problems + tables.problems + ambiguous)
 
   val own: scala.List[Api.Entity] = api.entities.values.filter(_.own).toList.sortBy(_.key.s)
   progress.plan(Progress.Phase.Pages, own.size)

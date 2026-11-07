@@ -80,7 +80,8 @@ object Presenter:
 
     def build(checker: Checker): (Block, List[Block]) =
       val scala = Embedding.ScalaCode(checker, path, config.session)
-      (Presentation.deck(presentation, scala, Linker.none), scala.problems)
+      val tables: Tables = Tables(path)
+      (Presentation.deck(presentation, scala, Linker.none, tables), scala.problems + tables.problems)
 
     val checked: Boolean = !config.classpath.nil && config.classpath.all(exists(_))
 

@@ -100,9 +100,10 @@ object Doc:
       case _ =>
         val context: Blocks.Context = Blocks.Context(linker, page, glossary)
         val scala = Embedding.ScalaCode(checker, path, session, fixture, linker, section = section)
-        val embeddings: List[Embedding] = List(scala, Embedding.JavaCode)
+        val tables: Tables = Tables(path, linker)
+        val embeddings: List[Embedding] = List(scala, Embedding.JavaCode, tables)
         val blocks: List[Block] = Blocks.of(markdown, embeddings, context)
-        val problems: List[Block] = scala.problems + ambiguous(path, linker) + open
+        val problems: List[Block] = scala.problems + tables.problems + ambiguous(path, linker) + open
         val title: Text = Blocks.title(blocks).or(filename(path))
         Doc(path, title, blocks, problems, context.references, context.anchors, text)
 
@@ -175,14 +176,15 @@ object Doc:
       prose
 
     val scala = Embedding.ScalaCode(checker, path, session, fixture, linker, cache, base, section)
-    val embeddings: List[Embedding] = List(scala, Embedding.JavaCode)
+    val tables: Tables = Tables(path, linker)
+    val embeddings: List[Embedding] = List(scala, Embedding.JavaCode, tables)
 
     val outputs: List[List[Block]] = fences.map: (fence: Blocks.Fence) =>
       Blocks.fence(fence.info, fence.content, fence.line, embeddings)
 
     val blocks: List[Block] = Blocks.fill(prose.blocks, outputs)
     val title: Text = Blocks.title(blocks).or(filename(path))
-    val problems: List[Block] = scala.problems + prose.problems + open
+    val problems: List[Block] = scala.problems + tables.problems + prose.problems + open
     Doc(path, title, blocks, problems, prose.references, prose.anchors, text)
 
   // The last segment of a path, without a `.md` extension.

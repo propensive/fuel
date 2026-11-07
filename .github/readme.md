@@ -97,6 +97,22 @@ styled, a colour it leaves to the terminal being the reader's own; what it throw
 as `errors` says. Its output is captured once, with the fence, and changes only when the fence
 does, or with `--force`. [`doc/markdown.md`](../doc/markdown.md) shows each.
 
+A fence marked ` ```tabular ` is a table, as a TEL tabulated block: a heading line with a `#`
+before each column's title, and the rows beneath it, each cell aligned under its column's `#`
+and written as Markdown phrasing. Around the rows, a `caption` goes beneath the table, and a
+`column` (by its heading) may say `align start` or `align end`; a column of numbers is set at
+the end of itself. A row that does not line up with the heading fails the compile at its place:
+
+````
+```tabular
+# Planet   # Moons  # Notes
+Mercury    0        Closest to the Sun
+Earth      1        Home
+
+caption The *inner* planets
+```
+````
+
 ## Presentations
 
 `fuel present <file>` shows a presentation in a browser, at `http://localhost:8061/` (or the
