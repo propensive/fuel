@@ -86,7 +86,8 @@ object Dashboard:
       val scala: Embedding.ScalaCode =
         Embedding.ScalaCode(Checker.tokenized, entity.key, false, Unset, resolver)
 
-      ApiPages.page(api, entity, resolver, scope, List(scala, Embedding.JavaCode))
+      val tables: Tables = Tables(entity.key, resolver)
+      ApiPages.page(api, entity, resolver, scope, List(scala, Embedding.JavaCode, tables))
 
 // One tab's dashboard: the navigation of every section's documents and of the API, and the
 // page its URL names.

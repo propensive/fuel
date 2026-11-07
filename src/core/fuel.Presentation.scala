@@ -208,10 +208,16 @@ object Presentation:
 
   // The deck: each slide a leaf, but each run of consecutive slides holding one block of code
   // in one language a single leaf of one animated block, by the embedding a fence with frames
-  // goes through. Every fence is compiled by `scala`, as a document's are; what the compile
-  // reports is the problems, apart from the slides.
-  def deck(presentation: Presentation, scala: Embedding.ScalaCode, linker: Linker): Block =
-    val embeddings: List[Embedding] = List(scala, Embedding.JavaCode)
+  // goes through. Every fence is compiled by `scala`, and every table read by `tables`, as a
+  // document's are; what they report is the problems, apart from the slides.
+  def deck
+    ( presentation: Presentation,
+      scala:        Embedding.ScalaCode,
+      linker:       Linker,
+      tables: Tables = Tables(t"") )
+  :   Block =
+
+    val embeddings: List[Embedding] = List(scala, Embedding.JavaCode, tables)
 
     // A slide's one block of code, which may join a run of its neighbours' as a frame.
     def lone(slide: Slide): Optional[Part.Code] = slide.parts match

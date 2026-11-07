@@ -66,6 +66,47 @@ Any other fence is shown plain, under the language it names:
 fuel compile && fuel serve
 ```
 
+## Tables
+
+A fence marked ` ```tabular ` is a table, written as TEL writes one: a heading line, with a `#`
+before each column's title, and a row on each line beneath it, each cell starting under its
+column's `#`. A cell is Markdown phrasing; it may hold single spaces, since two or more are what
+separate the columns, and it may be empty, though a row's first cell may not; the last column
+runs to the end of its line. Before the heading line, or after the rows and a blank line, a
+`caption` goes beneath the table, and a `column`, named by its heading, may be aligned:
+
+````markdown
+```tabular
+column Notes
+  align start
+
+# Planet         # Distance  # Moons  # Notes
+Mercury          0.39        0        Closest to the Sun
+Venus                        0        Turns *backwards*
+Earth            1.00        1        Home
+
+caption The *inner* planets
+```
+````
+
+```tabular
+column Notes
+  align start
+
+# Planet         # Distance  # Moons  # Notes
+Mercury          0.39        0        Closest to the Sun
+Venus                        0        Turns *backwards*
+Earth            1.00        1        Home
+
+caption The *inner* planets
+```
+
+A column whose cells are all numbers, where they are not empty, is set at the end, as `align
+end` would; `align start` sets it at the start. A row whose cell starts away from its column's
+`#`, or runs into the next column, fails the compile at its place in the file, as does a table
+without a heading line or rows, a setting it does not know, or a row left after a blank line;
+the fence is then shown as its text.
+
 ## Animation
 
 A fence with `frame`s is one block that steps through them: each token keeps its identity
