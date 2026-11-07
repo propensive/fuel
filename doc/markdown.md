@@ -52,6 +52,40 @@ errors show
 val wrong: Text = sum
 ```
 
+A comment is set in italics, in a colour of its own, in any fence; a `substitute` shows a range
+of the code as other text, in italics, once it has compiled as written:
+
+```scala fuel
+substitute 2 + 3  ...
+##
+val total: Int = 1 + 2 + 3 // the sum
+```
+
+A fence with a `path` is the content of that file, named above the code. A fragment marked
+`run` reads such a file by its relative path, since every file of the document is written to a
+directory the fragment resolves relative paths against:
+
+```json fuel
+path config.json
+##
+{ "name": "fuel", "version": 1 }
+```
+
+A fence with `alternative`s shows one version of the code at a time, under tabs above it:
+each has its own `code` (or `frame`s), and may have a `language`, marks and substitutes of its
+own; the first is the fence's own, which a session takes up, and the others are compiled as it
+is:
+
+```sh fuel
+alternative Bash
+  code
+      export FUEL_HOME=~/.fuel
+alternative Fish
+  code
+      set -x FUEL_HOME ~/.fuel
+##
+```
+
 Java is highlighted too:
 
 ```java
@@ -124,7 +158,8 @@ be a `label` (Markdown phrasing, shown beside the step counter), a `hold` (the s
 frame rests when the animation plays), an `at` (its time on the page's one clock: a bar at the
 foot of the page plays every timed block together, and a frame without a time follows the one
 before it by that frame's hold), a `language` of its own, and marks of its own — `highlight`,
-`error`, `caution` and `param`, as above, which fade out before a step and in after it; a mark
+`error`, `caution`, `param` and `focus`, as above, which fade out before a step and in after it,
+so a `focus`, which fades everything else in the block, comes and goes with its frame; a mark
 on the fence itself applies in every frame it matches. Step with the buttons, or the arrow
 keys when the block is focused; space plays. The code after `##`, if any, is the last frame.
 Each Scala frame is compiled on its own; a Java frame is highlighted.

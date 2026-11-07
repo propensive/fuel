@@ -71,6 +71,14 @@ import pyrocosm.{Block, Inline}
 //   feature experimental.captureChecking   # a language import, this fragment onward
 //   run                           # compile the fragment and run it: what it writes to the
 //                                 # standard streams is shown beneath it, styled as it was
+//   path config.json              # the fragment is the content of this file, named above it,
+//                                 # and written where a `run` fragment's relative paths lead
+//   substitute Lit..ond  ...      # a range (as a mark names one) shown as the text after it,
+//     text  ...                   # or beneath as `text`, in italics; the code compiles whole
+//   focus Mi..es                  # a mark which fades everything else in the block
+//   alternative Bash              # a version of the code, under a tab: its `code`, or its
+//     code                        # `frame`s, its `language`, marks and substitutes of its own;
+//         export X=1              # the first is the fragment's own, which joins a session
 //
 // A fragment which says a mode is checked by fuel but never run by a checker which runs
 // fragments, so `typecheck` on its own marks one which opens a socket or a browser; `run`
@@ -82,15 +90,29 @@ object Preamble:
 
   case class Mark(style: Block.Note.Style, selection: Selection, caption: Optional[Text])
 
+  // A range of the code shown as other text, after it compiled.
+  case class Substitution(selection: Selection, text: Text)
+
+  // A version of the code, by its label: its code or its frames, as a fence has, with marks
+  // and substitutions of its own, in its own language where it says one.
+  case class Alternative
+    ( label:         Text,
+      code:          Optional[Text],
+      frames:        List[Frame]        = Nil,
+      language:      Optional[Text]     = Unset,
+      marks:         List[Mark]         = Nil,
+      substitutions: List[Substitution] = Nil )
+
   // A frame of an animation: its code, absent when the `code` child is missing (which is a
   // problem, reported where the frame is), and what else is said of it.
   case class Frame
-    ( code:     Optional[Text],
-      label:    List[Inline]     = Nil,
-      hold:     Optional[Double] = Unset,
-      at:       Optional[Double] = Unset,
-      language: Optional[Text]   = Unset,
-      marks:    List[Mark]       = Nil )
+    ( code:          Optional[Text],
+      label:         List[Inline]       = Nil,
+      hold:          Optional[Double]   = Unset,
+      at:            Optional[Double]   = Unset,
+      language:      Optional[Text]     = Unset,
+      marks:         List[Mark]         = Nil,
+      substitutions: List[Substitution] = Nil )
 
   enum Errors:
     case Fail, Show, Ignore
@@ -173,18 +195,49 @@ object Preamble:
         of(t"highlight", Block.Note.Style.Highlight) +
           of(t"error", Block.Note.Style.Erroneous) +
           of(t"caution", Block.Note.Style.Caution) +
-          of(t"param", Block.Note.Style.Param)
+          of(t"param", Block.Note.Style.Param) +
+          of(t"focus", Block.Note.Style.Focus)
+
+      // The substitutions beneath a node: each a selection, and its text in the remaining
+      // atoms or a `text` beneath it.
+      def substitutions(node: Tel): List[Substitution] =
+        node.fields(t"substitute").to[List].bind: (sub: Tel) =>
+          val texts: List[Text] = sub.atomTexts.to[List].filter(_ != t"")
+          val beneath: Optional[Text] =
+            sub.fields(t"text").to[List].head.let(_.atomTexts.to[List].join(t" "))
+
+          texts match
+            case _ :: rest =>
+              val inline: Optional[Text] = if rest.nil then Unset else rest.join(t" ")
+              List(Substitution(Selection.read(sub), beneath.or(inline).or(t"...")))
+
+            case _ =>
+              Nil
 
       // A frame's code is its `code` child's text; what else is said of it is beneath it.
-      val frames: List[Frame] =
-        tel.fields(t"frame").to[List].map: (node: Tel) =>
+      def framesOf(parent: Tel): List[Frame] =
+        parent.fields(t"frame").to[List].map: (node: Tel) =>
           Frame
             ( node.fields(t"code").to[List].head.let(_.atomTexts.to[List].join(t" ")),
               child(node, t"label").lay(Nil)(Blocks.inline(_)),
               number(child(node, t"hold")),
               number(child(node, t"at")),
               child(node, t"language"),
-              marks(node) )
+              marks(node),
+              substitutions(node) )
+
+      val frames: List[Frame] = framesOf(tel)
+
+      // An alternative's label is on its line; its code, frames and the rest are beneath it.
+      val alternatives: List[Alternative] =
+        tel.fields(t"alternative").to[List].map: (node: Tel) =>
+          Alternative
+            ( node.atomTexts.to[List].filter(_ != t"").join(t" "),
+              node.fields(t"code").to[List].head.let(_.atomTexts.to[List].join(t" ")),
+              framesOf(node),
+              child(node, t"language"),
+              marks(node),
+              substitutions(node) )
 
       def flag(keyword: Text): Boolean = !tel.fields(keyword).to[List].nil
 
@@ -212,7 +265,10 @@ object Preamble:
           mode,
           flag(t"restart"),
           atoms(t"feature"),
-          flag(t"run") )
+          flag(t"run"),
+          atoms(t"path").head,
+          substitutions(tel),
+          alternatives )
 
 case class Preamble
   ( context:  Optional[Text],
@@ -227,7 +283,10 @@ case class Preamble
     mode:     Optional[Preamble.Mode] = Unset,
     restart:  Boolean              = false,
     features: List[Text]           = Nil,
-    run:      Boolean              = false ):
+    run:      Boolean              = false,
+    path:     Optional[Text]       = Unset,
+    substitutions: List[Preamble.Substitution] = Nil,
+    alternatives:  List[Preamble.Alternative]  = Nil ):
 
   def scalaContext: Optional[harlequin.Scala.Context] = context match
     case t"term" => harlequin.Scala.Context.Term

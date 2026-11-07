@@ -80,9 +80,25 @@ restart                 # in a session, a fresh one begins at this fence
 typecheck               # how far the compiler goes: parse, typecheck (the default) or compile;
 feature experimental.captureChecking   # a language import from this fence on
 run                     # compile the fence and run it: what it prints is shown beneath it
+path config.json        # the fence is this file's content, named above it; a `run` fragment
+                        # reads it by that relative path
+substitute Lit..ond  ...   # a range shown as other text, in italics, once the code compiled
+focus Mi..es            # a mark which fades everything else in the block
+alternative Bash        # a version of the code, under a tab: its `code` or `frame`s, and a
+  code                  # `language`, marks and substitutes of its own; the first is the
+      export X=1        # fence's own, which joins a session
 ```
 
-`caution` and `param` mark ranges as `highlight` and `error` do. Repeated `frame`s make the
+`caution`, `param` and `focus` mark ranges as `highlight` and `error` do, `focus` by fading
+everything else in the block, and in an animation a focus comes and goes with its frame's other
+marks. A comment in any fence is set in italics, in its own colour. A `substitute` replaces a
+range of what is shown — with `...`, say, where code is elided — in italics, while the code
+compiles as written. A fence with a `path` is the content of that file, named above the code;
+every such file of a document is written to a directory of the document's own, which a
+fragment marked `run` resolves a relative path against, so that `t"config.json"` reads it. A
+fence with `alternative`s shows one version at a time, under tabs above the code — Bash, Zsh
+and Fish, or braces and whitespace — each with its own code or frames, compiled as the fence
+is; the first is the fence's own, which a session takes up. Repeated `frame`s make the
 fence an *animation*: one block that steps through the frames, each token keeping its identity
 across them so that a step moves what stays and fades what arrives and departs, with each
 frame's marks fading out before the step and in after it; `autoplay` plays it when shown, and
