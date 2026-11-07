@@ -145,6 +145,10 @@ object Signatures:
     case Syntax.Compound(parts)  => parts.bind(tokens(_, api, scope))
     case Syntax.Projection(b, t) => within(b, syntax, api, scope) + List(symbol(t"#"), typal(t))
 
+    // A bound is a whole type, so what it bounds by is never parenthesised: `A <: B | C`.
+    case Syntax.Infix(l, m, r) if m == t"<:" || m == t">:" =>
+      within(l, syntax, api, scope) + List(symbol(t" $m ")) + tokens(r, api, scope)
+
     case Syntax.Infix(l, m, r) =>
       val spaced: Text = if m == t"," then t", " else t" $m "
       within(l, syntax, api, scope) + List(symbol(spaced)) + within(r, syntax, api, scope)
@@ -194,8 +198,31 @@ object Signatures:
       val left: List[Token] = within(parameters, syntax, api, scope)
       left + List(space, symbol(arrow)) + captures + List(space) + tokens(result, api, scope)
 
-    case Syntax.Structural(_, _, _) | Syntax.Match(_, _) =>
+    // A match type within another type has no lines of its own, so its cases are written on
+    // one, between braces.
+    case Syntax.Match(scrutinee, cases) =>
+      val rendered: List[List[Token]] = cases.map: (item: Syntax) =>
+        caseOf(item, api, scope) match
+          case (pattern, Nil)    => pattern
+          case (pattern, result) =>
+            List(keyword(t"case"), space) + pattern + List(space, symbol(t"=>"), space) + result
+
+      val open: List[Token] = List(space, keyword(t"match"), space, symbol(t"{"), space)
+      within(scrutinee, syntax, api, scope) + open + joined(rendered, t"; ") + List(space, symbol(t"}"))
+
+    case Syntax.Structural(_, _, _) =>
       List(Token(syntax.qualified, Token.Accent.Typal))
+
+  // A case of a match type, as its pattern and its result; or, of a shape other than `case p =>
+  // r`, as its tokens alone.
+  private def caseOf(item: Syntax, api: Api, scope: Scope): (List[Token], List[Token]) =
+    item match
+      case Syntax.Prefix(_, Syntax.Infix(pattern, t"=>", result)) =>
+        (tokens(pattern, api, scope), tokens(result, api, scope))
+
+      case other =>
+        val none: List[Token] = Nil
+        (tokens(other, api, scope), none)
 
   // A declaration as one line: its modifiers, its keyword, its name, its clauses, its result
   // (`: T` for a term, ` = T` for an alias, bounds for an abstract type), its parents; an
@@ -273,7 +300,9 @@ object Signatures:
   // (modifiers, keyword, name and type parameters), each term clause as its items, what
   // follows the colon, and what trails them (parents, derivations, uses); and whether the result
   // is introduced by `:`, by `=`
-  // (an alias) or by nothing (a bound).
+  // (an alias) or by nothing (a bound). `typed` is the type parameters alone, which a table's
+  // cell begins with, and `cases` a match type's cases, each its pattern and its result, which
+  // follow the signature a line each.
   private case class Clause(items: scala.List[List[Token]], contextual: Boolean)
 
   private case class Parts
@@ -281,7 +310,9 @@ object Signatures:
       clauses: scala.List[Clause],
       marker:  Optional[Text],
       result:  List[Token],
-      trails:  scala.List[List[Token]] )
+      trails:  scala.List[List[Token]],
+      typed:   List[Token]                               = Nil,
+      cases:   scala.List[(List[Token], List[Token])] = scala.Nil )
 
   private def width(tokens: List[Token]): Int = tokens.stdlib.map(_.text.s.length).sum
   private def spaces(count: Int): Token = plain(Text(" ".repeat(count.max(0)).nn))
@@ -329,13 +360,25 @@ object Signatures:
 
     val unmarked: (Optional[Text], List[Token]) = (Unset, Nil: List[Token])
 
+    // An alias of a match type ends with its scrutinee and `match`, its cases beneath.
     val (marker, result) = declaration.result.lay(unmarked): (result: Syntax) =>
       declaration.kind match
         case Api.Kind.Type => result match
           case Syntax.Compound(_) => (Unset, tokens(result, api, scope))
-          case _                  => (t"=", tokens(result, api, scope))
+
+          case Syntax.Match(scrutinee, _) =>
+            (t"=", tokens(scrutinee, api, scope) + List(space, keyword(t"match")))
+
+          case _ => (t"=", tokens(result, api, scope))
 
         case _ => (t":", tokens(result, api, scope))
+
+    val cases: scala.List[(List[Token], List[Token])] = declaration.kind match
+      case Api.Kind.Type => declaration.result match
+        case Syntax.Match(_, items) => items.stdlib.map(caseOf(_, api, scope))
+        case _                      => scala.Nil
+
+      case _ => scala.Nil
 
     val trails: scala.List[List[Token]] = trailing(declaration, api, scope)
 
@@ -343,7 +386,7 @@ object Signatures:
       case Api.Kind.Extension =>
         val head: List[Token] = group(declaration.group, api, scope) + List(space) + modifiers
         val declared: List[Token] = head + List(keyword(t"def"), space, named) + typed
-        Parts(declared, clauses, marker, result, scala.Nil)
+        Parts(declared, clauses, marker, result, scala.Nil, typed)
 
       case Api.Kind.Package =>
         Parts(List(keyword(t"package"), space, named), scala.Nil, Unset, Nil, scala.Nil)
@@ -356,7 +399,7 @@ object Signatures:
 
       case kind =>
         val head: List[Token] = modifiers + List(keyword(kind.keyword), space) + shape
-        Parts(head, clauses, marker, result, trails)
+        Parts(head, clauses, marker, result, trails, typed, cases)
 
   // A clause written tight, as part of a line: `(a: A, using b: B)`.
   private def compact(clause: Clause): List[Token] =
@@ -433,21 +476,33 @@ object Signatures:
       val firstLine: scala.List[List[Token]] = if first.nil then scala.Nil else scala.List(first)
       firstLine ++ clauseLines ++ resultLine ++ parts.trails
 
+  // A match type's cases, a line each, indented two, with their arrows aligned.
+  private def caseLines(parts: Parts): scala.List[List[Token]] =
+    val column: Int = parts.cases.map { (pattern, _) => width(pattern) }.maxOption.getOrElse(0)
+
+    parts.cases.map: (pattern, result) =>
+      val arrow: List[Token] =
+        if result.nil then Nil
+        else List(spaces(column - width(pattern) + 1), symbol(t"=>"), space) + result
+
+      List(spaces(2), keyword(t"case"), space) + pattern + arrow
+
   // A declaration's signature as the lines of a code block on its page.
   def block
     ( name: Text, declaration: Api.Declaration, api: Api, scope: Scope, width: Int = pageWidth )
   :   Block.Code =
 
-    val lines: scala.List[List[Token]] = layout(parts(name, declaration, api, scope), width)
+    val parts0: Parts = parts(name, declaration, api, scope)
+    val lines: scala.List[List[Token]] = layout(parts0, width) ++ caseLines(parts0)
     Block.Code(Language.Scala, List.from(lines.map(Block.Line(_))))
 
-  // A declaration's clauses and result, without its name, as a snippet for a table's cell: its
-  // lines joined by line breaks, which a fixed table keeps.
+  // A declaration's type parameters, clauses and result, without its keyword or its name, as a
+  // snippet for a table's cell: its lines joined by line breaks, which a fixed table keeps.
   def cell(declaration: Api.Declaration, api: Api, scope: Scope, width: Int = cellWidth)
   :   Inline.Snippet =
 
     val all: Parts = parts(t"", declaration, api, scope)
-    val headless: Parts = all.copy(head = Nil)
+    val headless: Parts = all.copy(head = all.typed)
 
     // Without a head there is nothing for a clause to be indented beneath: each line comes in by
     // the two columns of that indent.
@@ -458,7 +513,7 @@ object Signatures:
 
       case _ => line
 
-    val lines: scala.List[List[Token]] = layout(headless, width).map(dedent)
+    val lines: scala.List[List[Token]] = layout(headless, width).map(dedent) ++ caseLines(all)
 
     val broken: scala.List[Token] = lines.zipWithIndex.flatMap: (line, i) =>
       (if i == 0 then scala.Nil else scala.List(plain(t"\n"))) ++ line.stdlib
