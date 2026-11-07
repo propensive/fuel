@@ -72,8 +72,9 @@ object Linker:
       plain.copy(link = linker.link(token.text, meta.tpe))
 
   def lines(linker: Linker, source: SourceCode): List[pyrocosm.Block.Line] =
-    source.lines.to[List].map: (line: List[harlequin.Token]) =>
-      pyrocosm.Block.Line(chain(line.map(token(linker, _))))
+    Comments.mark:
+      source.lines.to[List].map: (line: List[harlequin.Token]) =>
+        pyrocosm.Block.Line(chain(line.map(token(linker, _))))
 
   // A line of code with each qualified name chained: a linked token, a `.` or `#`, and a linked
   // token whose page is a member of the first's — `com`, `.`, `example` — continue the name the

@@ -156,7 +156,7 @@ object Blocks:
 
         blocks.each: (block: Block) =>
           block match
-            case Block.Code(_, _, _, _, _, id) => id.let(context.anchored(_))
+            case Block.Code(_, _, _, _, _, id, _, _) => id.let(context.anchored(_))
             case _                             => ()
 
         blocks
@@ -323,7 +323,7 @@ object Blocks:
   // A document's prose with each sentinel replaced by its fence's output.
   def fill(blocks: List[Block], outputs: List[List[Block]]): List[Block] =
     Markdowns.rewrite(blocks):
-      case Block.Code(Output.fence, _, _, index: Int, _, _) =>
+      case Block.Code(Output.fence, _, _, index: Int, _, _, _, _) =>
         val empty: List[Block] = Nil
         outputs.skip(index).head.or(empty)
 

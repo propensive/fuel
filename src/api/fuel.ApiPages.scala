@@ -199,8 +199,11 @@ object ApiPages:
     // The glyphs of what the name declares, a type's and a term's where it is both, before it.
     val glyph: List[Inline] = Icons.all(entity, entity.exported)
 
+    // The name as code, in the monospace face, which a heading sets at its own size and weight.
     val space: List[Inline] = List(Inline.Textual(t" "))
-    val title: List[Inline] = glyph + space + Inline.text(entity.name) + space + marks
+    val accent: Token.Accent = if entity.template.present then Token.Accent.Typal else Token.Accent.Term
+    val name: Inline = Inline.Snippet(Language.Scala, List(Token(entity.name, accent)))
+    val title: List[Inline] = glyph + space + List(name) + space + marks
     val heading: Block = Block.Heading(1, title)
 
     val info: List[Block] = doc.let(_.info).lay(Nil: List[Block]): (text: Text) =>

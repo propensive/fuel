@@ -88,6 +88,40 @@ object Embedding:
 
     private var fragments: List[(Text, Text)] = Nil
     private var history: List[Joined] = Nil
+
+    // Where a fence with a `path` writes its content: a directory of this document's own, made
+    // when first needed, which a `run` fragment's relative paths resolve against, through the
+    // `WorkingDirectory` its unit is given.
+    private lazy val samples: Text =
+      Text(java.nio.file.Files.createTempDirectory("fuel-samples").nn.toString)
+
+    private var sampled: Boolean = false
+
+    // The content written at its path, within the samples: a path which leads out of them (or
+    // nowhere) is a problem at the fence.
+    private def sample(relative: Text, content: Text, line: Int): Unit =
+      val segments: List[Text] = relative.cut(t"/")
+      val escapes: Boolean = relative.starts(t"/") || segments.exists { s => s == t".." || s == t"" }
+
+      if escapes then
+        val message: Text = t"A `path` is a file within the document's own directory, as `data/config.json`; `$relative` is not."
+        report(Block.Location(path, line), message)
+      else
+        try
+          val file: java.nio.file.Path = java.nio.file.Path.of(samples.s, relative.s).nn
+          java.nio.file.Files.createDirectories(file.getParent.nn)
+          java.nio.file.Files.writeString(file, content.s)
+          sampled = true
+        catch case error: Exception =>
+          report(Block.Location(path, line), t"The file `$relative` could not be written: ${error.toString.tt}")
+
+    // The given a `run` fragment resolves a relative path against, once a sample has been
+    // written: written in full, since a fragment's own imports are its own to say.
+    private def workingDirectory(preamble: Preamble): Text =
+      if !sampled || !preamble.run then t"" else
+        t"given ambience.WorkingDirectory = new ambience.WorkingDirectory { " +
+          t"def directory(): anticipation.Text = anticipation.Text(\"$samples\") }\n"
+
     private var features: List[Text] = Nil
     private var prepared: Boolean = false
     private var count: Int = 0
@@ -222,7 +256,7 @@ object Embedding:
       // on in fuel's own compile: a feature whose checking is a phase after typer, such as
       // capture checking, would reject in the session's full compile a fragment typer
       // accepted, and fuel checks only as far as typer.
-      val imports: Text = fileScope.map { (line: Text) => t"$line\n" }.join(t"")
+      val imports: Text = fileScope.map { (line: Text) => t"$line\n" }.join(t"") + workingDirectory(preamble)
       val opening: Text = t"object ${objectName(count)} {\n"
       val body: Text = (inner + followed).map { (text: Text) => t"$text\n" }.join(t"")
 
@@ -434,10 +468,31 @@ object Embedding:
         reason.absent
       }
 
-      def compile(): List[Block] =
-        if !frames.nil then animated(frames, preamble, language, framed, mode, checked, id, start)
+      // The frames of an alternative which have code, as `described` has the fence's own.
+      def withCode(frames: List[Preamble.Frame], label: Text): List[Preamble.Frame] =
+        frames.indexed.bind: (frame: Preamble.Frame, index: Ordinal) =>
+          if frame.code.present then List(frame) else
+            report(Block.Location(path, fence + 1), t"Frame ${(index.n0 + 1).show} of `$label` has no `code`.")
+            Nil
+
+      // One version of the fragment: animated when it has frames, compiled when Scala, else
+      // highlighted; it joins the session, and is run, only as the fence's own.
+      def version
+        ( language:      Text,
+          code:          Text,
+          frames:        List[Preamble.Frame],
+          marks:         List[Preamble.Mark],
+          substitutions: List[Preamble.Substitution],
+          joining:       Boolean,
+          run:           Boolean,
+          id:            Text )
+      :   List[Block] =
+
+        val versioned: Preamble = preamble.copy(marks = marks, substitutions = substitutions)
+
+        if !frames.nil then animated(frames, versioned, language, framed, mode, checked, id, start, joining)
         else if language == t"scala"
-        then embedPlain(code, preamble, framed, mode, checked, id, start, runnable)
+        then embedPlain(code, versioned, framed, mode, checked, id, start, run, joining)
         else
           val bare: Framing = Framing(t"", t"", 0, Unset)
 
@@ -445,7 +500,59 @@ object Embedding:
             case source: SourceCode => linked(source)
             case _                  => lines(code)
 
-          List(Block.Code(Language(language), shown, notes(code, preamble.marks), start, Unset, id))
+          val replaced: List[Block.Line] = Substitutions(shown, code, substitutions)
+          List(Block.Code(Language(language), replaced, notes(code, marks), start, Unset, id))
+
+      def compile(): List[Block] =
+        preamble.path.let { (relative: Text) => sample(relative, code, fence + 1) }
+
+        val own: List[Block] =
+          if preamble.alternatives.nil
+          then version(language, code, frames, preamble.marks, preamble.substitutions, true, runnable, id)
+          else
+            if code.trim != t"" then
+              val message: Text =
+                t"With `alternative`s, every version of the code is in one; the code after `##` is not shown."
+
+              report(Block.Location(path, fence + 1), message)
+
+            def of(alternative: Preamble.Alternative, joining: Boolean, run: Boolean, id: Text)
+            :   List[Block] =
+
+              version
+                ( alternative.language.or(language),
+                  alternative.code.or(t""),
+                  withCode(alternative.frames, alternative.label),
+                  preamble.marks + alternative.marks,
+                  preamble.substitutions + alternative.substitutions,
+                  joining,
+                  run,
+                  id )
+
+            val all: scala.List[Preamble.Alternative] = preamble.alternatives.stdlib.toList
+
+            val versions: scala.List[(Preamble.Alternative, List[Block])] =
+              all.zipWithIndex.map: (alternative, index) =>
+                if index == 0 then (alternative, of(alternative, true, runnable, id))
+                else (alternative, of(alternative, false, false, t"$id-${(index + 1).show}"))
+
+            val alternatives: List[Block.Alternative] = List.from:
+              versions.flatMap: (alternative, blocks) =>
+                blocks.head match
+                  case code: Block.Code =>
+                    val label: List[Inline] = Blocks.inline(alternative.label, linker)
+                    scala.List(Block.Alternative(label, code.language, code.lines, code.notes, code.animation))
+
+                  case _ =>
+                    scala.Nil
+
+            versions.headOption.map(_(1)).getOrElse(Nil) match
+              case (code: Block.Code) :: rest => code.copy(alternatives = alternatives) :: rest
+              case other                      => other
+
+        own match
+          case (code: Block.Code) :: rest if preamble.path.present => code.copy(path = preamble.path) :: rest
+          case other                                               => other
 
       // The fence's key: in a session, chained from the fence before it; outside one, with
       // the text of what it follows. Its line is not part of it, since its output moves.
@@ -524,7 +631,8 @@ object Embedding:
         mode:     Preamble.Mode,
         checked:  Boolean,
         id:       Text,
-        start:    Int )
+        start:    Int,
+        joining:  Boolean = true )
     :   List[Block] =
 
       val built: List[(List[Block.Line], Block.Slide.Detail)] =
@@ -537,7 +645,7 @@ object Embedding:
           val highlighted: Optional[SourceCode | Throwable] =
             highlight(own, code, framing, mode, checked && scala)
 
-          val frameLines: List[Block.Line] = highlighted match
+          val raw: List[Block.Line] = highlighted match
             case error: Throwable =>
               val message: Text = t"Frame $number could not be highlighted: ${error.toString.tt}"
               report(Block.Location(path, start), message)
@@ -554,6 +662,9 @@ object Embedding:
             case _ =>
               lines(code)
 
+          val frameLines: List[Block.Line] =
+            Substitutions(raw, code, preamble.substitutions + frame.substitutions)
+
           val detail: Block.Slide.Detail =
             Block.Slide.Detail
               ( frame.label,
@@ -569,9 +680,10 @@ object Embedding:
 
       val followed: Text = last.let(_.code).or(t"")
 
-      fragments = (id, followed) :: fragments
-      linker.define(id, Embedding.definitions(followed))
-      join(followed, framing, false, preamble, mode)
+      if joining then
+        fragments = (id, followed) :: fragments
+        linker.define(id, Embedding.definitions(followed))
+        join(followed, framing, false, preamble, mode)
 
       val frameLines: List[List[Block.Line]] = built.map(_(0))
       val details: List[Block.Slide.Detail] = built.map(_(1))
@@ -592,7 +704,8 @@ object Embedding:
         checked:  Boolean,
         id:       Text,
         start:    Int,
-        run:      Boolean )
+        run:      Boolean,
+        joining:  Boolean = true )
     :   List[Block] =
 
       // The lines marked as not compiling are blanked out of the fragment proper, so that
@@ -609,8 +722,9 @@ object Embedding:
       val attempt: Optional[SourceCode | Throwable] =
         highlight(t"scala", positive, framing, mode, checked)
 
-      fragments = (id, positive) :: fragments
-      linker.define(id, Embedding.definitions(positive))
+      if joining then
+        fragments = (id, positive) :: fragments
+        linker.define(id, Embedding.definitions(positive))
 
       attempt match
         case error: Throwable =>
@@ -622,7 +736,7 @@ object Embedding:
           val (block, reports, failed) =
             embedSource(source, positive, framing, checked, preamble, start, id)
 
-          join(positive, framing, failed, preamble, mode)
+          if joining then join(positive, framing, failed, preamble, mode)
 
           val (restored, cards) =
             marked.fold((block, reports)):
@@ -633,7 +747,10 @@ object Embedding:
           val output: List[Block] =
             if run && checked && !failed then ran(positive, framing, preamble, start) else Nil
 
-          restored :: cards + output
+          val shown: Block.Code =
+            restored.copy(lines = Substitutions(restored.lines, code, preamble.substitutions))
+
+          shown :: cards + output
 
         case _ =>
           List(Block.Code(Language.Scala, lines(code), Nil, start, Unset, id))

@@ -85,7 +85,7 @@ make run
 
       test(m"a scala fence is highlighted into several tokens"):
         Doc.parse(t"doc/intro.md", intro).blocks match
-          case _ :: _ :: Block.Code(Language.Scala, line :: _, _, _, _, _) :: _ =>
+          case _ :: _ :: Block.Code(Language.Scala, line :: _, _, _, _, _, _, _) :: _ =>
             line.tokens.size > 1
 
           case _ =>
@@ -95,7 +95,7 @@ make run
 
       test(m"a fence in an unknown language is plain, under that language"):
         Doc.parse(t"doc/intro.md", intro).blocks match
-          case _ :: _ :: _ :: Block.Code(language, lines, _, _, _, _) :: _ =>
+          case _ :: _ :: _ :: Block.Code(language, lines, _, _, _, _, _, _) :: _ =>
             (language.name, lines.size)
 
           case _ =>
@@ -182,7 +182,7 @@ error oops
         val text: Text = t"# Title\n\n```scala fuel\nid one\n##\nval x = 1\n```\n"
 
         Doc.parse(t"doc/n.md", text).blocks match
-          case _ :: Block.Code(_, _, _, start, _, _) :: _ => start
+          case _ :: Block.Code(_, _, _, start, _, _, _, _) :: _ => start
           case _                                          => Unset
 
       . assert(_ == 6)
@@ -246,7 +246,7 @@ error oops
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           Doc.parse(t"doc/check.md", fence, checker).blocks match
-            case Block.Code(_, _, note :: _, _, _, _) :: Block.Diagnostic(_, _, _, _, _) :: _ =>
+            case Block.Code(_, _, note :: _, _, _, _, _, _) :: Block.Diagnostic(_, _, _, _, _) :: _ =>
               (note.line, note.style)
 
             case _ =>
@@ -259,7 +259,7 @@ error oops
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           Doc.parse(t"doc/check.md", fence, checker).blocks match
-            case Block.Code(_, _, note :: _, _, _, _) :: Block.Diagnostic(_, _, _, _, _) :: _ =>
+            case Block.Code(_, _, note :: _, _, _, _, _, _) :: Block.Diagnostic(_, _, _, _, _) :: _ =>
               note.caption.nil
 
             case _ =>
@@ -272,7 +272,7 @@ error oops
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           Doc.parse(t"doc/check.md", fence, checker).blocks match
-            case Block.Code(_, _, note :: _, _, _, _) :: Nil =>
+            case Block.Code(_, _, note :: _, _, _, _, _, _) :: Nil =>
               Blocks.plain(note.caption).contains(t"missing")
 
             case _ =>
@@ -377,7 +377,7 @@ error oops
             (Unset, false)
 
         val frames = doc.blocks match
-          case _ :: Block.Code(_, _, _, _, animation, _) :: _ => animation.let(_.slides.size)
+          case _ :: Block.Code(_, _, _, _, animation, _, _, _) :: _ => animation.let(_.slides.size)
           case _                                              => Unset
 
         (problem, frames)
@@ -391,7 +391,7 @@ error oops
             t"  highlight y  the new one\n  code\n      val y: Int = 2\n##\n```\n"
 
         Doc.parse(t"doc/anim.md", text).blocks match
-          case Block.Code(_, _, notes, _, animation, _) :: Nil =>
+          case Block.Code(_, _, notes, _, animation, _, _, _) :: Nil =>
             animation.let: (animation: Block.Animation) =>
               val second: Block.Slide = animation.slides.skip(1).head.or(Block.Slide(-1))
               val label: Text = Blocks.plain(second.label)
@@ -411,7 +411,7 @@ error oops
           val doc = Doc.parse(t"doc/anim.md", text, checker)
 
           doc.blocks match
-            case Block.Code(_, _, _, _, animation, _) :: Nil =>
+            case Block.Code(_, _, _, _, animation, _, _, _) :: Nil =>
               animation.let: (animation: Block.Animation) =>
                 ( doc.problems.size,
                   animation.slides.skip(1).head.let(_.language),
@@ -424,7 +424,7 @@ error oops
 
       test(m"a java fence with a preamble is read by the preamble embedding"):
         Doc.parse(t"doc/j.md", t"```java fuel\nid j\n##\nint x = 1;\n```\n").blocks match
-          case Block.Code(language, line :: _, _, _, _, _) :: Nil =>
+          case Block.Code(language, line :: _, _, _, _, _, _, _) :: Nil =>
             (language, line.tokens.size > 1)
 
           case _ =>
@@ -446,7 +446,7 @@ error oops
 
       test(m"an animated fence becomes one block whose lines are the first frame"):
         Doc.parse(t"doc/anim.md", animatedFence).blocks match
-          case Block.Code(_, lines, _, _, animation, _) :: Nil =>
+          case Block.Code(_, lines, _, _, animation, _, _, _) :: Nil =>
             (lines.size, animation.let(_.slides.size), animation.let(_.lines(1).size))
 
           case _ =>
@@ -456,7 +456,7 @@ error oops
 
       test(m"a surviving token keeps its atom across frames"):
         Doc.parse(t"doc/anim.md", animatedFence).blocks match
-          case Block.Code(_, _, _, _, animation, _) :: Nil =>
+          case Block.Code(_, _, _, _, animation, _, _, _) :: Nil =>
             animation.let: (animation: Block.Animation) =>
               val first: List[Text] = animation.placements.filter(_.slide == 0).map(_.atom)
               val second: List[Text] = animation.placements.filter(_.slide == 1).map(_.atom)
@@ -483,6 +483,95 @@ error oops
               false
 
       . assert(_ == true)
+
+    suite(m"Code rendering"):
+      def doc(markdown: Text): Doc = Doc.parse(t"doc/code.md", markdown)
+      def fence(language: Text, preamble: Text, code: Text): Text =
+        t"```$language fuel\n$preamble\n##\n$code\n```\n"
+
+      def code(doc: Doc): Optional[Block.Code] = doc.blocks.seek { case _: Block.Code => true; case _ => false }.let:
+        case code: Block.Code => code
+        case _                => Unset
+
+      def accents(line: Block.Line): List[(Text, Token.Accent)] =
+        line.tokens.map { token => (token.text, token.accent) }.filter(_(0).trim != t"")
+
+      test(m"the preamble reads a path, substitutes, a focus and alternatives"):
+        val text: Text =
+          t"path data/config.json\nsubstitute 2..3  ...\nsubstitute 4\n  text  etc\nfocus x..y\n" +
+            t"alternative Bash\n  code\n      export X=1\nalternative Fish\n  language fish\n  frame\n    code set X 1\n"
+
+        Preamble.parse(text) match
+          case p: Preamble =>
+            ( p.path,
+              p.substitutions.map { s => (s.selection.start, s.text) },
+              p.marks.map(_.style),
+              p.alternatives.map { a => (a.label, a.code, a.language, a.frames.map(_.code)) } )
+
+          case _ => Unset
+
+      . assert(_ == ( t"data/config.json",
+                      List((t"2", t"..."), (t"4", t"etc")),
+                      List(Block.Note.Style.Focus),
+                      List( (t"Bash", t"export X=1", Unset, Nil),
+                            (t"Fish", Unset, t"fish", List(t"set X 1")) ) ))
+
+      test(m"a comment, to the end of its line or to the `*/` which closes it, is a comment"):
+        val source: Text = t"val x = 1 // one\n/* two\n   lines */ val y = 2\nval z = \"// not\""
+        code(doc(fence(t"scala", t"", source))).let: (block: Block.Code) =>
+          block.lines.map(accents(_).filter(_(1) == Token.Accent.Comment).map(_(0)))
+
+      . assert(_ == List(List(t"// one"), List(t"/* two"), List(t"   lines */"), Nil))
+
+      test(m"a substitute shows its text in place of the range, in its own accent; the code compiles"):
+        val compiled: Doc = doc(fence(t"scala", t"substitute 2..3  ...", t"val total: Int = 1 + 2 + 3"))
+        code(compiled).let: (block: Block.Code) =>
+          ( block.lines.map(_.tokens.map(_.text).join),
+            block.lines.head.let(accents(_).filter(_(1) == Token.Accent.Substitute)).or(Nil),
+            compiled.problems )
+
+      . assert(_ == (List(t"val total: Int = 1 + ..."), List((t"...", Token.Accent.Substitute)), Nil))
+
+      test(m"a fence with a path is the content of that file, named on its block"):
+        code(doc(fence(t"json", t"path config.json", t"{ \"a\": 1 }"))).let(_.path)
+
+      . assert(_ == t"config.json")
+
+      test(m"a path leading out of the document's directory is a problem"):
+        doc(fence(t"json", t"path ../secret", t"x")).problems.size
+
+      . assert(_ == 1)
+
+      test(m"alternatives are the block's, each with its lines; the first is its own"):
+        val preamble: Text =
+          t"alternative Braces\n  code\n      object X { def y = 1 }\n" +
+            t"alternative Whitespace\n  code\n      object X:\n        def y = 1\n"
+
+        val compiled: Doc = doc(fence(t"scala", preamble, t""))
+        code(compiled).let: (block: Block.Code) =>
+          ( block.alternatives.map { a => Inline.plain(a.label) },
+            block.alternatives.map(_.lines.size),
+            block.lines.size,
+            compiled.problems.size )
+
+      . assert(_ == (List(t"Braces", t"Whitespace"), List(1, 2), 1, 0))
+
+      test(m"with alternatives, code after ## is a problem"):
+        val preamble: Text = t"alternative A\n  code val a = 1\n"
+        doc(fence(t"scala", preamble, t"val b = 2")).problems.size
+
+      . assert(_ == 1)
+
+      test(m"an animated alternative carries its animation, and a focus mark its style"):
+        val preamble: Text =
+          t"alternative One\n  frame\n    code val a = 1\n    focus a\n  frame\n    code val a = 2\n" +
+            t"alternative Two\n  code val b = 1\n"
+
+        code(doc(fence(t"scala", preamble, t""))).let: (block: Block.Code) =>
+          ( block.alternatives.map(_.animation.let(_.slides.size)),
+            block.animation.let(_.slides.head.let(_.notes.map(_.style))) )
+
+      . assert(_ == (List(2, Unset), List(Block.Note.Style.Focus)))
 
     suite(m"Sessions"):
       def problems(markdown: Text, fixture: Optional[(Text, Text)] = Unset): List[Block] =
@@ -595,7 +684,7 @@ error oops
         val text: Text = t"```scala\nval n: Int = 1\nval m: Int = \"x\" // does not compile\n```\n"
 
         val note: Optional[(Int, Block.Note.Style)] = blocks(text) match
-          case Block.Code(_, _, note :: _, _, _, _) :: _ => (note.line, note.style)
+          case Block.Code(_, _, note :: _, _, _, _, _, _) :: _ => (note.line, note.style)
           case _                                         => Unset
 
         (problems(text).size, note)
@@ -694,6 +783,22 @@ error oops
 
       . assert(_ == List(t"x\n"))
 
+      test(m"a fragment run reads a sample file by its relative path"):
+        val sample: Text = t"```json fuel\npath data/config.json\n##\n{ \"name\": \"fuel\" }\n```\n\n"
+
+        val reader: Text =
+          t"val dir = summon[ambience.WorkingDirectory].directory()\n" +
+            t"println(java.nio.file.Files.readString(java.nio.file.Path.of(dir.toString, \"data/config.json\")))"
+
+        // Soundness is experimental, as a project which uses it says in its options.
+        val doc: Doc =
+          Checking.session(classpath, List(t"-experimental")): (checker: Checker) =>
+            Doc.parse(t"doc/run.md", sample + fence(t"run", reader), checker, true)
+
+        (outputs(doc).map(_.text), doc.problems)
+
+      . assert(_ == (List(t"{ \"name\": \"fuel\" }\n"), Nil))
+
       test(m"a fragment run in a session sees what came before it"):
         val first: Text = t"```scala\nval base = 41\n```\n\n"
         val markdown: Text = first + fence(t"run", t"println(base + 1)")
@@ -791,7 +896,7 @@ slide
 
         val animated: List[Int] = all.bind: (leaf: Block.Leaf) =>
           leaf.content.bind:
-            case Block.Code(_, _, _, _, animation: Block.Animation, _) =>
+            case Block.Code(_, _, _, _, animation: Block.Animation, _, _, _) =>
               List(animation.slides.size)
 
             case _ =>
@@ -3286,7 +3391,7 @@ entry .Doc   a document
         val d: Doc = doc(text)
 
         val id: Optional[Text] = d.blocks match
-          case Block.Code(_, _, _, _, _, id) :: _ => id
+          case Block.Code(_, _, _, _, _, id, _, _) :: _ => id
           case _                                  => Unset
 
         (token(d).let(_(2)), id, d.anchors)
