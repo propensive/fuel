@@ -60,7 +60,8 @@ object Dashboard:
         List(Block.Notice(Tone.Warning, Inline.text(t"Query"), message))
 
       case query: Query =>
-        ApiPages.search(api, text, api.search(query), Resolver(api, scope), scope)
+        val outcome: Search.Outcome = api.search(query, Server.terms)
+        ApiPages.search(api, text, outcome, Resolver(api, scope), scope)
 
   // Where the documents on `port` are found.
   def address(port: Int): Text = Fuel.address(port)

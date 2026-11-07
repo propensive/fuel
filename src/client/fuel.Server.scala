@@ -72,6 +72,10 @@ object Server:
   @volatile
   private var glossary0: List[Block] = Nil
 
+  @scala.caps.unsafe.untrackedCaptures
+  @volatile
+  private var terms0: Glossary = Glossary.none
+
   private val edition0: juc.atomic.AtomicLong = juc.atomic.AtomicLong(0L)
   private val jars: juc.ConcurrentHashMap[(Text, Long), Api] = juc.ConcurrentHashMap()
 
@@ -81,9 +85,11 @@ object Server:
       pages:    sci.Map[Text, List[Block]] = sci.Map(),
       imports:  List[Text]                 = Nil,
       glossary: List[Block]                = Nil,
-      standard: List[Designator]           = Scope.standard )
+      standard: List[Designator]           = Scope.standard,
+      terms:    Glossary                   = Glossary.none )
   :   Unit =
 
+    terms0 = terms
     corpus0 = corpus
     api0 = api
     pages0 = pages
@@ -103,6 +109,7 @@ object Server:
   def imports: List[Text] = imports0
   def standard: List[Designator] = standard0
   def glossary: List[Block] = glossary0
+  def terms: Glossary = terms0
   def edition: Long = edition0.get
 
   def page(key: Text): Optional[List[Block]] = pages0.get(key) match

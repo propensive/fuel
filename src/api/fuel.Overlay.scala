@@ -64,7 +64,9 @@ object Overlay:
   // What a file may hold, what an entry may, and which of those it holds at most once; the
   // rest hold atoms alone.
   private val fileKeywords: List[Text] =
-    List(t"base", t"import", t"info", t"detail", t"refer", t"hidden", t"until", t"entry")
+    List
+      ( t"base", t"import", t"info", t"detail", t"refer", t"hidden", t"until", t"entry",
+        t"keyword" )
 
   private val entryKeywords: List[Text] = fileKeywords.filter(_ != t"base")
   private val once: List[Text] = List(t"base", t"info", t"detail", t"hidden", t"until")
@@ -253,6 +255,11 @@ object Overlay:
 
   private def flag(node: Tel, keyword: Text): Boolean = !node.fields(keyword).to[List].nil
 
+  // Each child of the keyword as one text: a keyword of several words is one keyword.
+  private def phrases(node: Tel, keyword: Text): List[Text] =
+    node.fields(keyword).to[List].map(_.atomTexts.to[List].filter(_ != t"").join(t" "))
+    . filter(_ != t"")
+
   // What a node says of its entity, with the imports of those enclosing it.
   private def doc(node: Tel, line: Int, inherited: List[Text]): Api.Entry =
     val until: Optional[Api.Until] =
@@ -267,7 +274,8 @@ object Overlay:
         until   = until,
         refer   = atoms(node, t"refer"),
         imports = inherited + atoms(node, t"import"),
-        line    = line )
+        line    = line,
+        keywords = phrases(node, t"keyword") )
 
   private def entries(node: Tel, lines: Lines): List[Entry] = entries(node, lines, Nil)
 

@@ -157,7 +157,21 @@ object ApiPages:
     val rows: List[Block.Row] = drawn.map: (hit: Search.Hit) =>
       row(hit.entity, hit.declaration, false, api, scope, resolver, qualified = true)
 
-    List(heading, asked) + notices + table(t"Name", t"Signature", rows)
+    // The glossary's terms the query names, before the declarations: each a link to its entry,
+    // with its definition.
+    val terms: List[Block] =
+      if outcome.terms.nil then Nil
+      else
+        val items: List[Block.Item] = outcome.terms.map: (term: Glossary.Term) =>
+          val destination: Inline.Destination = Inline.Destination.Local(t"/glossary", term.slug)
+          val link: Inline = Inline.Link(destination, Inline.text(term.name))
+          val definition: List[Inline] = Blocks.inline(term.definition, resolver)
+          val content: List[Inline] = link :: Inline.text(t": ") + definition
+          Block.Item(List(Block.Paragraph(content)))
+
+        List(Block.Heading(2, Inline.text(t"Glossary")), Block.Listing(false, items))
+
+    List(heading, asked) + notices + terms + table(t"Name", t"Signature", rows)
 
   def page
     ( api: Api, entity: Api.Entity, resolver: Resolver, scope: Scope, embeddings: List[Embedding] )

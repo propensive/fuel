@@ -56,7 +56,9 @@ import pyrocosm.Control
 // and no further. A `-T[…]` against a strict supertype matches by head alone.
 object Search:
   case class Hit(entity: Api.Entity, declaration: Api.Declaration, exact: Boolean)
-  case class Outcome(hits: List[Hit], notices: List[Text])
+  // The declarations found, what could be said of the query, and the glossary's terms a name
+  // of the query names.
+  case class Outcome(hits: List[Hit], notices: List[Text], terms: List[Glossary.Term] = Nil)
 
   // The names of the universal types, which have no entity, and the keys they stand for.
   private val universal: sci.Map[Text, Text] =
@@ -130,15 +132,24 @@ final class Search private (api: Api, lattice: Lattice):
     entries.indices.groupBy { index => entries(index).entity.key }.map: (key, indices) =>
       (key, indices.toArray)
 
+  // The entities a name finds exactly: those of the name, and those with it as a keyword.
+  private def exactly(name: Text): scala.List[Api.Entity] =
+    val named: scala.List[Api.Entity] = api.byName.get(name).map(_.stdlib).getOrElse(scala.Nil)
+    val keyed: scala.List[Api.Entity] = api.byKeyword.get(name.lower).map(_.stdlib).getOrElse(scala.Nil)
+    (named ++ keyed).distinct
+
   // Built with the index, so that the daemon's warm-up pays for it rather than the first
-  // keystroke which searches by name.
+  // keystroke which searches by name. A keyword is in it as a name is.
   private val lexicon: Lexicon[List[Api.Entity]] =
     Lexicon[List[Api.Entity]]().tap: lexicon =>
       api.byName.foreach: (name, entities) => lexicon(name) = entities
+      api.byKeyword.foreach: (keyword, entities) =>
+        val named: List[Api.Entity] = api.byName.get(keyword).getOrElse(Nil)
+        lexicon(keyword) = named + entities
 
   // The entities a name finds: exactly, or at the smallest radius which finds any.
   private def named(name: Query.Name): (scala.List[Api.Entity], Boolean) =
-    if name.exact then (api.byName.get(name.text).map(_.stdlib).getOrElse(scala.Nil), true)
+    if name.exact then (exactly(name.text), true)
     else
       def search(radius: Int): (scala.List[Api.Entity], Boolean) =
         if radius > 2 then (scala.Nil, false)
@@ -299,8 +310,12 @@ final class Search private (api: Api, lattice: Lattice):
 
       List.from(found)
 
-  def apply(query: Query): Outcome =
+  def apply(query: Query, glossary: Glossary = Glossary.none): Outcome =
     val notices: scm.ListBuffer[Text] = scm.ListBuffer.from(query.warnings.stdlib)
+
+    // The glossary's terms any name of the query names, once each.
+    val terms: scala.List[Glossary.Term] =
+      query.names.stdlib.toList.flatMap { name => glossary.search(name.text).stdlib }.distinct
 
     // The entries which satisfy every criterion met so far; `None` before the first.
     var survivors: Option[java.util.BitSet] = None
@@ -377,4 +392,4 @@ final class Search private (api: Api, lattice: Lattice):
 
     // Exactly-named hits first, then the project's own before its dependencies', then by key.
     val ordered: scala.List[Hit] = hits.toList.sortBy: hit => (!hit.exact, !hit.entity.own)
-    Outcome(List.from(ordered), List.from(notices))
+    Outcome(List.from(ordered), List.from(notices), List.from(terms))

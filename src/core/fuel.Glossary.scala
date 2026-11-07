@@ -49,7 +49,20 @@ import pyrocosm.{Block, Inline, Tone}
 //       definition
 //           A shared boundary where two systems meet and exchange information.
 object Glossary:
-  case class Term(name: Text, definition: Text, link: Optional[Text], file: Text, line: Int):
+  // `keywords` are what a search finds the term by, besides its name; they are shown nowhere.
+  case class Term
+    ( name:       Text,
+      definition: Text,
+      link:       Optional[Text],
+      file:       Text,
+      line:       Int,
+      keywords:   List[Text] = Nil ):
+
+    // Whether a word of a query names the term: its name or a keyword, in any case.
+    def matches(word: Text): Boolean =
+      val sought: Text = word.lower
+      name.lower == sought || keywords.exists(_.lower == sought)
+
     // The term's anchor on the glossary page, and the key a document's `[term]` leads to.
     def slug: Text = Blocks.slug(name)
 
@@ -95,7 +108,11 @@ object Glossary:
 
           . let(_(1).n0 + 1).or(1)
 
-        Term(name, child(node, t"definition").or(t""), child(node, t"link"), path, line)
+        val keywords: List[Text] =
+          node.fields(t"keyword").to[List].map(_.atomTexts.to[List].filter(_ != t"").join(t" "))
+          . filter(_ != t"")
+
+        Term(name, child(node, t"definition").or(t""), child(node, t"link"), path, line, keywords)
 
       Glossary(terms)
 
@@ -155,6 +172,9 @@ object Glossary:
 
 case class Glossary(terms: List[Glossary.Term]):
   def apply(slug: Text): Optional[Glossary.Term] = terms.seek(_.slug == slug)
+
+  // The terms a word names, by their names or their keywords.
+  def search(word: Text): List[Glossary.Term] = terms.filter(_.matches(word))
 
   // The link reference definitions added after a document's text before it is parsed, so that
   // `[term]` is a link the parser makes, not a pattern searched for; a definition the author
