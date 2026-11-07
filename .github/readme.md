@@ -251,6 +251,8 @@ entry .Text   a one-line summary     # `.name` is a member of the term, `#Name` 
   entry .Internal
     hidden                           # not listed, and its members not asked for
   refer gossamer.Textual             # "See also"
+  keyword string                     # found by a search for `string`; shown nowhere
+  keyword character sequence
 ```
 
 An overlay is held to its format, each failure at its line: a keyword other than those above
@@ -319,6 +321,7 @@ tel 1.0
 
 define interface
   link  /doc/guide/interfaces.md
+  keyword API                        # found by a search for `API`; shown nowhere
   definition
       A shared boundary, connection, or point of interaction where two or more separate
       systems, devices, or people meet and exchange information.

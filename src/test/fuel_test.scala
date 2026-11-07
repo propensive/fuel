@@ -2521,6 +2521,42 @@ class Logger() uses Io.out initially, Io.out:
             t"  fourth: Fourth,\n  fifth:  Fifth )\n" +
             t":   ReturnType"
 
+        // `type Compass[points <: 4 | 16] = points match { case 4 => A; case 16 => B }`
+        val compass: Api.Declaration =
+          def item(pattern: Text, result: Text): Syntax =
+            Syntax.Prefix(t"case", Syntax.Infix(Syntax.Primitive(pattern), t"=>", ret(result)))
+
+          val bound: Syntax = Syntax.Infix(Syntax.Primitive(t"4"), t"|", Syntax.Primitive(t"16"))
+          val param: Syntax = Syntax.Infix(Syntax.Symbolic(t"points"), t"<:", bound)
+          val matched: Syntax = Syntax.Match(Syntax.Symbolic(t"points"), List(item(t"4", t"A"), item(t"16", t"B")))
+          Api.Declaration(Api.Kind.Type, clauses = List(Syntax.Sequence('[', List(param))), result = matched)
+
+        test(m"a match type's cases are a line each, without braces, their arrows aligned"):
+          shown(t"Compass", compass, 88)
+
+        . assert(_ == List( t"type Compass[points <: 4 | 16] = points match",
+                            t"  case 4  => A",
+                            t"  case 16 => B" ))
+
+        test(m"a table cell keeps a declaration's type parameters, and a match type's cases"):
+          val generic: Api.Declaration =
+            Api.Declaration
+              ( Api.Kind.Def,
+                clauses = List(Syntax.Sequence('[', List(Syntax.Symbolic(t"A"))), clause(named(t"x", t"A"))),
+                result = ret(t"A") )
+
+          ( Signatures.cell(generic, Api.empty, scope, 40).tokens.map(_.text).join,
+            Signatures.cell(compass, Api.empty, scope, 40).tokens.map(_.text).join )
+
+        . assert(_ == ( t"[A](x: A): A",
+                        t"[points <: 4 | 16] = points match\n  case 4  => A\n  case 16 => B" ))
+
+        test(m"a match type within another type is written on one line"):
+          val nested: Syntax = Syntax.Application(ret(t"List"), List(compass.result.or(ret(t"X"))), false)
+          Signatures.tokens(nested, Api.empty, scope).map(_.text).join
+
+        . assert(_ == t"List[points match { case 4 => A; case 16 => B }]")
+
         test(m"a table cell holds the clauses and result on lines of their own"):
           Signatures.cell(wide, Api.empty, scope, 40).tokens.map(_.text).join
 
@@ -2952,6 +2988,8 @@ entry .Doc   a document
 entry .Util   utilities
   hidden
 entry .Shape   a shape
+  keyword outline
+  keyword two dimensional
 entry .nowhere   nothing of the sort
 """
 
@@ -2969,6 +3007,17 @@ entry .nowhere   nothing of the sort
           case _                        => Nil
 
         Blocks.plain(inlines)
+
+      test(m"an entry's keywords find it in a search, exactly, fuzzily and in any case"):
+        def found(text: Text): List[Text] =
+          merged.lay(Nil: List[Text]): (m: (Api, List[Block])) =>
+            Query.read(text) match
+              case query: Query => m(0).search(query).hits.map(_.entity.key).filter(_.starts(t"sample.")).distinct
+              case _            => Nil
+
+        (found(t"outline"), found(t"outlin"), found(t"`Two Dimensional`"), found(t"shape"))
+
+      . assert(_ == (List(t"sample.Shape"), List(t"sample.Shape"), List(t"sample.Shape"), List(t"sample.Shape")))
 
       def problems(tone: Tone): List[Text] =
         merged.lay(Nil: List[Block]) { (m: (Api, List[Block])) => m(1) }.bind:
@@ -3031,7 +3080,7 @@ entry .nowhere   nothing of the sort
       . assert(_ == t"its title")
 
       val nowhere: Text =
-        t"doc/api/sample.tel:23: `.nowhere` is documented here, " +
+        t"doc/api/sample.tel:25: `.nowhere` is documented here, " +
           t"but no such member of `sample` is declared."
 
       test(m"an entry for a member nothing declares is a failure at its line"):
@@ -3060,11 +3109,11 @@ entry .nowhere   nothing of the sort
       val formatFailures: List[Text] =
         List
           ( t"2: `domain` is not part of an overlay: An overlay may hold `base`, `import`, " +
-            t"`info`, `detail`, `refer`, `hidden`, `until`, `entry`.",
+            t"`info`, `detail`, `refer`, `hidden`, `until`, `entry`, `keyword`.",
             t"4: `info` is given more than once here.",
             t"6: This entry's info is already given on its line.",
             t"7: `detial` is not part of an overlay: An entry may hold `import`, `info`, " +
-              t"`detail`, `refer`, `hidden`, `until`, `entry`.",
+              t"`detail`, `refer`, `hidden`, `until`, `entry`, `keyword`.",
             t"10: `#title` already has an entry here.",
             t"11: An `entry` must name the member it documents, as `.name` or `#Name`." )
 
@@ -3542,6 +3591,8 @@ entry .Doc   a document
       A *monad* is a monoid in the category of endofunctors.
 
 define type class
+  keyword  typeclass
+  keyword  interface
   definition  A set of operations over a type, given apart from it.
 """
 
@@ -3559,6 +3610,15 @@ define type class
             Linker.none,
             section = t"doc",
             glossary = glossary )
+
+      test(m"a term's keywords find it in a search, with its name, in any case"):
+        def found(text: Text): List[Text] = Query.read(text) match
+          case query: Query => api0.search(query, glossary).terms.map(_.name)
+          case _            => Nil
+
+        (found(t"typeclass"), found(t"Interface"), found(t"monad"), found(t"nothing"))
+
+      . assert(_ == (List(t"type class"), List(t"type class"), List(t"monad"), Nil))
 
       // The first paragraph's second inline, after the text which leads to the term.
       def term(doc: Doc): Optional[Inline] = doc.blocks match
