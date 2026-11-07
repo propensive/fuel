@@ -2416,6 +2416,42 @@ class Logger() uses Io.out initially, Io.out:
             t"  fourth: Fourth,\n  fifth:  Fifth )\n" +
             t":   ReturnType"
 
+        // `type Compass[points <: 4 | 16] = points match { case 4 => A; case 16 => B }`
+        val compass: Api.Declaration =
+          def item(pattern: Text, result: Text): Syntax =
+            Syntax.Prefix(t"case", Syntax.Infix(Syntax.Primitive(pattern), t"=>", ret(result)))
+
+          val bound: Syntax = Syntax.Infix(Syntax.Primitive(t"4"), t"|", Syntax.Primitive(t"16"))
+          val param: Syntax = Syntax.Infix(Syntax.Symbolic(t"points"), t"<:", bound)
+          val matched: Syntax = Syntax.Match(Syntax.Symbolic(t"points"), List(item(t"4", t"A"), item(t"16", t"B")))
+          Api.Declaration(Api.Kind.Type, clauses = List(Syntax.Sequence('[', List(param))), result = matched)
+
+        test(m"a match type's cases are a line each, without braces, their arrows aligned"):
+          shown(t"Compass", compass, 88)
+
+        . assert(_ == List( t"type Compass[points <: 4 | 16] = points match",
+                            t"  case 4  => A",
+                            t"  case 16 => B" ))
+
+        test(m"a table cell keeps a declaration's type parameters, and a match type's cases"):
+          val generic: Api.Declaration =
+            Api.Declaration
+              ( Api.Kind.Def,
+                clauses = List(Syntax.Sequence('[', List(Syntax.Symbolic(t"A"))), clause(named(t"x", t"A"))),
+                result = ret(t"A") )
+
+          ( Signatures.cell(generic, Api.empty, scope, 40).tokens.map(_.text).join,
+            Signatures.cell(compass, Api.empty, scope, 40).tokens.map(_.text).join )
+
+        . assert(_ == ( t"[A](x: A): A",
+                        t"[points <: 4 | 16] = points match\n  case 4  => A\n  case 16 => B" ))
+
+        test(m"a match type within another type is written on one line"):
+          val nested: Syntax = Syntax.Application(ret(t"List"), List(compass.result.or(ret(t"X"))), false)
+          Signatures.tokens(nested, Api.empty, scope).map(_.text).join
+
+        . assert(_ == t"List[points match { case 4 => A; case 16 => B }]")
+
         test(m"a table cell holds the clauses and result on lines of their own"):
           Signatures.cell(wide, Api.empty, scope, 40).tokens.map(_.text).join
 
