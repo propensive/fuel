@@ -140,78 +140,95 @@ object ForcedAlignment:
 
     spoken(found)
 
-  // When each word of a transcript is spoken: the words are matched in order to the aligned
-  // words, each to the next aligned word with its label within a few of where the count puts
-  // it — so that a word the aligner did not know (`<unk>`), or split or joined, puts the match
-  // off by no more than itself — else to the aligned word at that place; `Unset` once the
-  // alignment runs out.
-  def times(transcript: List[Text], aligned: List[Word]): List[Optional[Double]] =
-    var cursor: Int = 0
+  // The word MFA writes for one it does not know, which stands for any one word.
+  private val unknown: Text = t"<unk>"
 
-    transcript.map: (word: Text) =>
-      if cursor >= aligned.size then Unset else
-        val window: List[(Word, Ordinal)] = aligned.skip(cursor).keep(4).indexed
-        val hit: Optional[Int] = window.filter(_(0).label == word).head.let(_(1).n0)
+  // The transcript's words beside the alignment's: the edits which turn the one into the
+  // other, a word the aligner did not know pairing with whichever word it stands in for. The
+  // two correspond closely enough to time a presentation by when no more than one word in
+  // ten, and never fewer than one word, differs — is in the one and not the other.
+  case class Comparison(expected: List[Text], actual: List[Text], edits: List[Edit[Text]]):
+    def differing: Int = edits.filter { edit => !edit.isInstanceOf[Par[?]] }.size
+    def close: Boolean = differing <= (expected.size/10).max(1)
 
-        hit.lay(aligned.at(Ordinal.zerary(cursor)).let(_.start).also { cursor += 1 }):
-          (offset: Int) =>
-            val found: Optional[Double] = aligned.at(Ordinal.zerary(cursor + offset)).let(_.start)
-            cursor += offset + 1
-            found
+    // The place in the alignment of each word of the transcript, by its index, where it is.
+    def places: sci.Map[Int, Int] =
+      sci.Map.from(edits.stdlib.collect { case Par(left, right, _) => left -> right })
 
-  // The deck's schedule and what had to be decided: a time for each slide after the first, at
-  // which its step lands, being the time the first word of its transcript is spoken. A slide
-  // without a transcript, or whose transcript the alignment does not reach, has no time of
-  // its own: one between two timed slides is given a time between theirs, evenly, and one
-  // after the last timed slide follows the last spoken word by a second, each a second apart.
-  def schedule(presentation: Presentation, aligned: List[Word]): (List[Double], List[Text]) =
-    val transcripts: List[List[Text]] =
-      presentation.slides.map(_.transcript.let(words).or(Nil))
+    // The differences, each shown with up to three words either side: a word of the
+    // transcript not spoken as `-word`, one spoken which the transcript lacks as `+word`.
+    def shown: List[Text] =
+      val marked: List[(Text, Boolean)] = edits.map:
+        case Par(left, _, _) => (expected.at(Ordinal.zerary(left)).or(t""), false)
+        case Del(left, _)    => (t"-${expected.at(Ordinal.zerary(left)).or(t"")}", true)
+        case Ins(right, _)   => (t"+${actual.at(Ordinal.zerary(right)).or(t"")}", true)
 
-    val spoken: List[Optional[Double]] = times(transcripts.bind(identity(_)), aligned)
+      val changed: List[Int] = marked.indexed.filter(_(0)(1)).map(_(1).n0)
 
-    // Each slide's own time: that of its first word.
-    val own: List[Optional[Double]] =
-      transcripts.indexed.map: (words: List[Text], index: Ordinal) =>
-        if words.nil then Unset
-        else spoken.at(Ordinal.zerary(transcripts.keep(index.n0).map(_.size).stdlib.sum)).or(Unset)
+      // Runs of changes, those within six words of each other shown together.
+      def runs(indices: List[Int], current: List[Int]): List[List[Int]] = indices match
+        case head :: tail =>
+          current match
+            case last :: _ if head - last <= 6 => runs(tail, head :: current)
+            case Nil                           => runs(tail, List(head))
+            case _                             => current.reverse :: runs(tail, List(head))
 
-    val lastWord: Double = aligned.reverse.head.let(_.end).or(0.0)
-    val count: Int = own.size
+        case Nil =>
+          if current.nil then Nil else List(current.reverse)
 
-    def timed(index: Int): Optional[Double] = own.at(Ordinal.zerary(index)).or(Unset)
+      runs(changed, Nil).map: (run: List[Int]) =>
+        val first: Int = (run.head.or(0) - 3).max(0)
+        val last: Int = (run.reverse.head.or(0) + 3).min(marked.size - 1)
+        val words: Text = marked.skip(first).keep(last - first + 1).map(_(0)).join(t" ")
+        val before: Text = if first > 0 then t"… " else t""
+        val after: Text = if last < marked.size - 1 then t" …" else t""
+        t"$before$words$after"
 
-    // The nearest timed slide before (the first slide counting as shown at its own time, or
-    // zero) and after an untimed one.
-    def before(index: Int): (Int, Double) =
-      var i: Int = index - 1
-      while i > 0 && timed(i).absent do i -= 1
-      (i, timed(i).or(0.0))
+  def compare(expected: List[Text], aligned: List[Word]): Comparison =
+    val actual: List[Text] = aligned.map(_.label)
+    val same: (Text, Text) => Boolean = (left, right) => left == right || right == unknown
+    val edits: List[Edit[Text]] = diff(expected.to[Sequence], actual.to[Sequence], same).edits.to(List)
+    Comparison(expected, actual, edits)
 
-    def after(index: Int): Optional[(Int, Double)] =
-      var i: Int = index + 1
-      while i < count && timed(i).absent do i += 1
-      if i < count then timed(i).let((i, _)) else Unset
+  enum Outcome:
+    case Timed(schedule: List[Double], comparison: Comparison)
+    case Failed(messages: List[Text])
 
-    var notes: List[Text] = Nil
+  // The deck's schedule from the alignment: a time for each slide after the first, at which
+  // its step lands, being the time the first word of its transcript is spoken — or the first
+  // word of it the alignment has, if the aligner missed that one. Every slide must have a
+  // transcript, and the transcripts and the alignment must correspond closely, else the
+  // outcome says what is wrong, and shows where they differ.
+  def schedule(presentation: Presentation, aligned: List[Word]): Outcome =
+    val transcripts: List[List[Text]] = presentation.slides.map(_.transcript.let(words).or(Nil))
 
-    val all: List[Double] = List.range(0, count).map: (index: Int) =>
-      timed(index).or:
-        val slide: Int = index + 1
-        val line: Int = presentation.slides.at(Ordinal.zerary(index)).let(_.line).or(1)
-        val why: Text =
-          if transcripts.at(Ordinal.zerary(index)).or(Nil).nil then t"has no transcript"
-          else t"has a transcript the alignment does not reach"
+    val missing: List[Text] = presentation.slides.indexed.bind: (slide: Presentation.Slide, index: Ordinal) =>
+      if transcripts.at(index).or(Nil).nil
+      then List(t"slide ${(index.n0 + 1).toString.tt} (line ${slide.line.toString.tt}) has no transcript, which timing it by an alignment needs")
+      else Nil
 
-        if index == 0 then 0.0 else
-          val (from, start) = before(index)
-          val time: Double = after(index) match
-            case (to: Int, stop: Double) => start + (stop - start)*(index - from)/(to - from)
-            case _                       => lastWord + (index - from)*1.0
+    if !missing.nil then Outcome.Failed(missing) else
+      val expected: List[Text] = transcripts.bind(identity(_))
+      val comparison: Comparison = compare(expected, aligned)
 
-          val boxed: java.lang.Double = java.lang.Double.valueOf(time).nn
-          val said: Text = Text(String.format(java.util.Locale.ROOT, "%.2f", boxed).nn)
-          notes = notes :+ t"slide $slide (line $line) $why, so its step is placed at $said s"
-          time
+      if !comparison.close then
+        val count: Text = comparison.differing.toString.tt
+        val total: Text = expected.size.toString.tt
+        val heading: Text = t"the transcript and the alignment differ in $count of $total words, which is too many to time the presentation by:"
+        Outcome.Failed(heading :: comparison.shown.map { hunk => t"  $hunk" })
+      else
+        val places: sci.Map[Int, Int] = comparison.places
 
-    (all.skip(1), notes)
+        // Each slide's time: that of the first of its words the alignment has.
+        val times: List[Optional[Double]] = transcripts.indexed.map: (words: List[Text], index: Ordinal) =>
+          val offset: Int = transcripts.keep(index.n0).map(_.size).stdlib.sum
+          val found: List[Int] = List.range(offset, offset + words.size).bind(places.get(_).toList.pipe(List.from(_)))
+          found.head.let { (place: Int) => aligned.at(Ordinal.zerary(place)) }.let(_.start)
+
+        val unplaced: List[Text] = times.indexed.bind: (time: Optional[Double], index: Ordinal) =>
+          if time.present then Nil else
+            val line: Int = presentation.slides.at(index).let(_.line).or(1)
+            List(t"slide ${(index.n0 + 1).toString.tt} (line ${line.toString.tt}) has a transcript none of whose words the alignment has")
+
+        if !unplaced.nil then Outcome.Failed(unplaced)
+        else Outcome.Timed(times.skip(1).map(_.or(0.0)), comparison)

@@ -1049,36 +1049,49 @@ item []:
 
       . assert(_ == List(t"hello", t"world", t"it's", t"well-known", t"that's", t"3"))
 
-      test(m"the transcript's words are timed in order, a word the aligner did not know by its place"):
-        ForcedAlignment.read(grid) match
-          case words: List[ForcedAlignment.Word] @unchecked =>
-            ForcedAlignment.times(List(t"one", t"two", t"three", t"four", t"five", t"six", t"seven"), words)
+      def aligned: List[ForcedAlignment.Word] = ForcedAlignment.read(grid) match
+        case words: List[ForcedAlignment.Word] @unchecked => words
+        case _                                            => Nil
 
-          case _ =>
-            Nil
+      def slides(transcripts: List[Optional[Text]]): Text =
+        transcripts.map: (transcript: Optional[Text]) =>
+          t"slide\n  markdown\n      a\n" + transcript.lay(t"") { text => t"  transcript\n      $text\n" }
+        . join
 
-      . assert(_ == List(0.5, 1.0, 1.5, 3.0, 3.5, 4.0, Unset))
+      def timed(transcripts: List[Optional[Text]]): List[Double] | List[Text] =
+        read(slides(transcripts)).lay(List[Text]()): (presentation: Presentation, _) =>
+          ForcedAlignment.schedule(presentation, aligned) match
+            case ForcedAlignment.Outcome.Timed(schedule, _) => schedule
+            case ForcedAlignment.Outcome.Failed(messages)   => messages
 
-      test(m"the schedule is each later slide's first word's time; an untimed slide is placed between its neighbours"):
-        val text: Text =
-          t"slide\n  markdown\n      a\n  transcript\n      One, two three.\n" +
-            t"slide\n  markdown\n      b\n" +
-            t"slide\n  markdown\n      c\n  transcript\n      Four five.\n" +
-            t"slide\n  markdown\n      d\n  transcript\n      Six!\n" +
-            t"slide\n  markdown\n      e\n"
+      test(m"the transcript's words are compared with the alignment's, a word the aligner did not know standing for any"):
+        val comparison = ForcedAlignment.compare(List(t"one", t"two", t"three", t"four", t"five", t"six"), aligned)
+        (comparison.differing, comparison.close, comparison.places.get(3), comparison.places.get(5))
 
-        val none: (List[Double], List[Text]) = (List[Double](), List[Text]())
+      . assert(_ == (0, true, Some(3), Some(5)))
 
-        read(text).lay(none): (presentation: Presentation, _) =>
-          ForcedAlignment.read(grid) match
-            case words: List[ForcedAlignment.Word] @unchecked =>
-              val (schedule, notes) = ForcedAlignment.schedule(presentation, words)
-              (schedule, notes.map(_.keep(7)))
+      test(m"the schedule is each later slide's first word's time"):
+        timed(List(t"One, two three.", t"Four five.", t"Six!"))
 
-            case _ =>
-              none
+      . assert(_ == List(3.0, 4.0))
 
-      . assert(_ == (List(1.75, 3.0, 4.0, 7.5), List(t"slide 2", t"slide 5")))
+      test(m"a slide whose first word the aligner missed is timed by its next word"):
+        timed(List(t"One, two.", t"Tree three four.", t"Five six!"))
+
+      . assert(_ == List(1.5, 3.5))
+
+      test(m"a slide without a transcript cannot be timed by an alignment"):
+        timed(List(t"One, two three.", Unset, t"Four five six.")) match
+          case messages: List[Text] @unchecked => messages.map(_.keep(16))
+
+      . assert(_ == List(t"slide 2 (line 6)"))
+
+      test(m"a transcript which differs from the alignment in more than a word in ten is refused, with the differences shown"):
+        timed(List(t"One, two, three.", t"Nine ten eleven twelve thirteen."))
+
+      . assert(_ == List
+          ( t"the transcript and the alignment differ in 6 of 8 words, which is too many to time the presentation by:",
+            t"  … two three nine -ten -eleven -twelve -thirteen +five +six" ))
 
       test(m"a presentation's transcript is its slides' transcripts, in order, as paragraphs"):
         read(talk).lay(Nil): (presentation: Presentation, _) =>

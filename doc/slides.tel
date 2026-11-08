@@ -31,6 +31,8 @@ slide
     code
         val greeting: Text = t"Hello"
         val shouted: Text = greeting.upper
+  transcript
+      Then a second value, derived from the first.
 
 slide
   syntax scala
@@ -40,6 +42,8 @@ slide
         val greeting: Text = t"Hello"
         val shouted: Text = greeting.upper
         val size: Int = shouted.length
+  transcript
+      And its size.
 
 slide
   markdown

@@ -442,7 +442,9 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   and reloading a presentation as its file changes. `--alignment <file>` takes the schedule
   from a forced alignment (Montreal Forced Aligner's TextGrid, JSON or CSV) of a reading of the
   slides' transcripts: each slide after the first lands when the first word of its transcript
-  is spoken (`ForcedAlignment`); running the aligner is the user's for now. The format has a
+  is spoken (`ForcedAlignment`), every slide needing a transcript and the transcript and the
+  alignment having to agree (a Myers diff of their words, one in ten differing at most, shown
+  as a word diff when they do not); running the aligner is the user's for now. The format has a
   TEL schema,
   `presentation` (`Presentation.schemaText`): a slide's `syntax <language>` holds its code (the
   keyword `code` being its code beneath a preamble, as a frame's), and its `transcript` what

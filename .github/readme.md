@@ -35,8 +35,8 @@ fuel quit          # stop the daemon, and any server it runs
 A failure of the daemon itself while it carries out a command (running out of memory, say) is
 reported on the standard error, where it was thrown, and the command exits with status 6, apart
 from a compile's own failures (status 4), from a tracker whose issues could not be fetched
-(status 7) and from a command line it did not understand
-(status 2).
+(status 7), from a presentation whose transcript and alignment do not correspond (status 8)
+and from a command line it did not understand (status 2).
 
 `fuel compile` reads every `*.md` beneath each configured `document` directory, parses it as
 CommonMark, and converts it to Pyrocosm blocks: a fenced block whose info string is `scala` or
@@ -195,10 +195,13 @@ recording and the transcript (`fuel transcript <file>` prints it), and give its 
 `fuel present <file> --alignment <output>`, in any of MFA's formats — a TextGrid (its default),
 JSON or CSV. The words of its `words` tier are matched, in order, to the words of the slides'
 transcripts, and each slide after the first is shown at the moment the first word of its
-transcript is spoken; a word the aligner did not know (`<unk>`) is matched by its place. A slide
-with no transcript, or one the alignment does not reach, is given a time between its timed
-neighbours' (or a second after the last word, at the end), and this is said. `--alignment`
-implies `--autoplay`.
+transcript is spoken — or of the first word of it the aligner caught. Every slide must have a
+transcript, and the transcripts and the alignment must correspond: a word the aligner did not
+know (`<unk>`) stands for any one word, but if more than one word in ten is in the one and not
+the other, the presentation is not shown, and the differences are printed as a word diff
+(`-word` for a word of the transcript not spoken, `+word` for one spoken that the transcript
+lacks), with status 8; fewer differences are shown the same way, and the presentation goes
+ahead. `--alignment` implies `--autoplay`.
 
 A slide may have a `transcript`: what is said while it is shown. `fuel transcript <file>` prints
 the presentation's transcript — each slide's, in order, a blank line dividing paragraphs — set

@@ -55,6 +55,7 @@ object NoDocuments extends Status(3, t"no document directory is configured")
 object NoDocument extends Status(5, t"the document could not be read")
 object CompileFailed extends Status(4, t"a code fragment did not do as its preamble said")
 object DaemonFailed extends Status(6, t"the daemon failed while carrying out the command")
+object Misaligned extends Status(8, t"the transcript and its alignment do not correspond")
 object SyncFailed extends Status(7, t"the issues of an attached tracker could not be fetched")
 
 // What ends an invocation which a failure escaped: an `Error`, such as the daemon running out of
@@ -235,18 +236,22 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
             val prepared =
               Presenter.prepare(config, absolute(directory, operand), width, autoplay, alignment)
 
-            type Outcome = Exit | Tool.UsageError.type | NoDocument.type
+            type Outcome = Exit | Tool.UsageError.type | NoDocument.type | Misaligned.type
 
-            prepared.lay[Outcome](NoDocument): (title, deck) =>
-              val frontend: pyrocosm.WebFrontend = Presenter.frontend(port)
-              async(frontend.run(Presenter.interface(title, deck))((_: pyrocosm.Event) => ()))
-              val url: Text = t"http://localhost:${port.toString.tt}/"
-              Out.println(t"fuel: presenting $title at $url (Ctrl+C to stop)")
+            prepared match
+              case Presenter.Problem.Unreadable => NoDocument
+              case Presenter.Problem.Misaligned => Misaligned
 
-              Attend.interrupt()
-              frontend.stop()
-              Out.println(t"fuel: the presentation has stopped")
-              Exit.Ok
+              case (title: Text, deck: Block) =>
+                val frontend: pyrocosm.WebFrontend = Presenter.frontend(port)
+                async(frontend.run(Presenter.interface(title, deck))((_: pyrocosm.Event) => ()))
+                val url: Text = t"http://localhost:${port.toString.tt}/"
+                Out.println(t"fuel: presenting $title at $url (Ctrl+C to stop)")
+
+                Attend.interrupt()
+                frontend.stop()
+                Out.println(t"fuel: the presentation has stopped")
+                Exit.Ok
 
           case _ =>
             Out.println(t"fuel: usage: fuel present <file> [--autoplay] [--alignment <file>]")
