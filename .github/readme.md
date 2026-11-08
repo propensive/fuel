@@ -22,7 +22,7 @@ fuel serve stop    # stop serving them
 fuel show doc/x.md # one document, set in the terminal: justified, hyphenated, highlighted
 fuel present doc/slides.tel  # a presentation's slides in a browser until Ctrl+C
 fuel present doc/slides.tel --autoplay  # the same, played by itself to a schedule
-fuel present doc/slides.tel --alignment talk.TextGrid  # the same, timed to a reading of the transcript
+fuel present doc/slides.tel --align talk.wav  # the same, timed to a recording of the transcript
 fuel transcript doc/slides.tel  # the presentation's transcript, set to the terminal's width
 fuel sync github propensive/fuel  # attach a repository's issues to the API pages, and fetch them
 fuel sync          # fetch every attached tracker's issues again
@@ -35,8 +35,9 @@ fuel quit          # stop the daemon, and any server it runs
 A failure of the daemon itself while it carries out a command (running out of memory, say) is
 reported on the standard error, where it was thrown, and the command exits with status 6, apart
 from a compile's own failures (status 4), from a tracker whose issues could not be fetched
-(status 7), from a presentation whose transcript and alignment do not correspond (status 8)
-and from a command line it did not understand (status 2).
+(status 7), from a presentation whose transcript and alignment do not correspond (status 8),
+from an aligner that could not be installed or run (status 9) and from a command line it did
+not understand (status 2).
 
 `fuel compile` reads every `*.md` beneath each configured `document` directory, parses it as
 CommonMark, and converts it to Pyrocosm blocks: a fenced block whose info string is `scala` or
@@ -189,19 +190,35 @@ that 1.2 s. The schedule is a stand-in for now, a step every four seconds, and t
 how many steps the deck has; the timings will be read from a file alongside the presentation
 later. Pressing a key takes the deck back from the schedule.
 
-The schedule can instead come from a recording of the transcript being read, by way of a forced
-alignment: run [Montreal Forced Aligner](https://montreal-forced-aligner.readthedocs.io/) on the
-recording and the transcript (`fuel transcript <file>` prints it), and give its output to
-`fuel present <file> --alignment <output>`, in any of MFA's formats — a TextGrid (its default),
-JSON or CSV. The words of its `words` tier are matched, in order, to the words of the slides'
-transcripts, and each slide after the first is shown at the moment the first word of its
-transcript is spoken — or of the first word of it the aligner caught. Every slide must have a
-transcript, and the transcripts and the alignment must correspond: a word the aligner did not
-know (`<unk>`) stands for any one word, but if more than one word in ten is in the one and not
-the other, the presentation is not shown, and the differences are printed as a word diff
-(`-word` for a word of the transcript not spoken, `+word` for one spoken that the transcript
-lacks), with status 8; fewer differences are shown the same way, and the presentation goes
-ahead. `--alignment` implies `--autoplay`.
+The schedule can instead come from a recording of the transcript being read:
+`fuel present <file> --align talk.wav` aligns the recording against the transcript
+(`fuel transcript <file>` prints it, to read from) with
+[Montreal Forced Aligner](https://montreal-forced-aligner.readthedocs.io/), and each slide after
+the first is shown at the moment the first word of its transcript is spoken — or of the first
+word of it the aligner caught. `--align` also takes an alignment already made, in any of MFA's
+formats — a TextGrid (its default), JSON or CSV — telling a recording from an alignment by its
+extension or its first bytes. Every slide must have a transcript, and the transcripts and the
+alignment must correspond: a word the aligner did not know (`<unk>`) stands for any one word,
+but if more than one word in ten is in the one and not the other, the presentation is not
+shown, and the differences are printed as a word diff (`-word` for a word of the transcript not
+spoken, `+word` for one spoken that the transcript lacks), with status 8; fewer differences are
+shown the same way, and the presentation goes ahead. `--align` implies `--autoplay`.
+
+MFA is published only as conda-forge packages, so fuel installs it itself the first time a
+recording is aligned, into `$XDG_CACHE_HOME/fuel/mfa` (`~/.cache/fuel/mfa`): it fetches
+micromamba (a single static executable which installs conda-forge packages into a directory,
+with no Anaconda, no shell set-up and no activation), makes an environment there with MFA 3.4
+(about 2 GB, a few minutes), and downloads the `english_mfa` dictionary and acoustic model.
+Nothing else on the machine is touched; `rm -rf ~/.cache/fuel/mfa` removes it all. An alignment
+is kept in the project's cache by a digest of the recording and the transcript, so a
+presentation is aligned again only when either changes; MFA itself takes tens of seconds to
+start and align. If fuel cannot install MFA — there is no micromamba for the platform, or a
+download fails — it says so and prints the three commands to do it by hand (`brew install
+micromamba`, `micromamba create -p ~/.cache/fuel/mfa/env -c conda-forge
+"montreal-forced-aligner>=3.4,<4"`, `mfa model download …`), and exits with status 9. Record in
+one take, as WAV or FLAC for choice (MFA's own sox and ffmpeg convert the other formats); a
+whole talk is aligned as one utterance, which MFA manages but is its weakest case, so if it
+finds no alignment fuel tries once more with wider beams.
 
 A slide may have a `transcript`: what is said while it is shown. `fuel transcript <file>` prints
 the presentation's transcript — each slide's, in order, a blank line dividing paragraphs — set

@@ -230,5 +230,8 @@ object ForcedAlignment:
             val line: Int = presentation.slides.at(index).let(_.line).or(1)
             List(t"slide ${(index.n0 + 1).toString.tt} (line ${line.toString.tt}) has a transcript none of whose words the alignment has")
 
+        // Times to the millisecond: an aligner's floats carry noise beyond it.
+        def rounded(time: Double): Double = java.lang.Math.round(time*1000.0)/1000.0
+
         if !unplaced.nil then Outcome.Failed(unplaced)
-        else Outcome.Timed(times.skip(1).map(_.or(0.0)), comparison)
+        else Outcome.Timed(times.skip(1).map(_.or(0.0)).map(rounded), comparison)
