@@ -845,27 +845,31 @@ slide
       A *short* talk.
 
 slide
-  code scala
+  syntax scala
       val x = 1
 
 slide
-  code scala
+  syntax scala
       val x = 1
       val y = x + 1
 
 slide
-  code scala
+  syntax scala
       val x = 1
       val y = x + 1
       val z = y * 2
 
 slide
-  code java
+  syntax java
       int x = 1;
 
 slide
   markdown
       The end.
+  transcript
+      That is all there is to say.
+
+      Thank you.
 """
 
       def read(text: Text): Optional[(Presentation, List[Block])] =
@@ -926,7 +930,176 @@ slide
           case Block.Diagnostic(_, location, _, _, _) => location.let(_.line)
           case _                                      => Unset
 
-      . assert(_ == List(1, 1, 4))
+      . assert(_ == List(2, 4))
+
+      test(m"the schema reads, and a presentation which follows it has no faults"):
+        (Presentation.schema.name, read(talk).lay(Nil)(_(1)).size)
+
+      . assert(_ == (t"presentation", 0))
+
+      test(m"a slide's `code` is reported as now being `syntax`, at its line"):
+        read(t"slide\n  code scala\n      val x = 1\n").lay(Nil)(_(1)).map:
+          case Block.Diagnostic(_, location, content, _, _) =>
+            val said: Text = content.head match
+              case Block.Paragraph(inlines) => Blocks.plain(inlines)
+              case _                        => t""
+
+            (location.let(_.line), said.contains(t"syntax"))
+          case _ =>
+            (Unset, false)
+
+      . assert(_ == List((2, true)))
+
+      test(m"what a slide's syntax does not say, and a `syntax` without a language, are faults"):
+        val text: Text = t"slide\n  syntax\n    highlite x\n    code\n        val x = 1\n"
+        read(text).lay(Nil)(_(1)).map:
+          case Block.Diagnostic(_, location, _, _, _) => location.let(_.line)
+          case _                                      => Unset
+
+      . assert(_ == List(3, 2))
+
+      // An alignment of a reading of three slides' transcripts — "one two three", "four five"
+      // and "six" — in MFA's three formats, with a pause, a word MFA did not know, and the
+      // phones tier a reader must pass over.
+      val grid: Text = t"""File type = "ooTextFile"
+Object class = "TextGrid"
+
+xmin = 0
+xmax = 6.5
+tiers? <exists>
+size = 2
+item []:
+    item [1]:
+        class = "IntervalTier"
+        name = "words"
+        xmin = 0
+        xmax = 6.5
+        intervals: size = 8
+        intervals [1]:
+            xmin = 0
+            xmax = 0.5
+            text = ""
+        intervals [2]:
+            xmin = 0.5
+            xmax = 1.0
+            text = "one"
+        intervals [3]:
+            xmin = 1.0
+            xmax = 1.5
+            text = "two"
+        intervals [4]:
+            xmin = 1.5
+            xmax = 2.0
+            text = "three"
+        intervals [5]:
+            xmin = 2.0
+            xmax = 3.0
+            text = ""
+        intervals [6]:
+            xmin = 3.0
+            xmax = 3.5
+            text = "<unk>"
+        intervals [7]:
+            xmin = 3.5
+            xmax = 4.0
+            text = "five"
+        intervals [8]:
+            xmin = 4.0
+            xmax = 6.5
+            text = "six"
+    item [2]:
+        class = "IntervalTier"
+        name = "phones"
+        xmin = 0
+        xmax = 6.5
+        intervals: size = 1
+        intervals [1]:
+            xmin = 0
+            xmax = 6.5
+            text = "sil"
+"""
+
+      val json: Text =
+        t"""{"start": 0, "end": 6.5, "tiers": {"words": {"type": "interval", "entries": [[0.5, 1.0, "one"], [1.0, 1.5, "two"], [1.5, 2.0, "three"], [2.0, 3.0, ""], [3.0, 3.5, "<unk>"], [3.5, 4.0, "five"], [4.0, 6.5, "six"]]}, "phones": {"type": "interval", "entries": [[0, 6.5, "sil"]]}}}"""
+
+      val csv: Text =
+        t"Begin,End,Label,Type,Speaker\n0.5,1.0,one,words,x\n1.0,1.5,two,words,x\n1.5,2.0,three,words,x\n" +
+          t"2.0,3.0,,words,x\n3.0,3.5,<unk>,words,x\n3.5,4.0,five,words,x\n4.0,6.5,six,words,x\n0,6.5,sil,phones,x\n"
+
+      def spoken(text: Text): List[(Text, Double)] = ForcedAlignment.read(text) match
+        case words: List[ForcedAlignment.Word] @unchecked => words.map { word => (word.label, word.start) }
+        case problem: Text                                => List((problem, -1.0))
+        case _                                            => Nil
+
+      test(m"an alignment's spoken words are read alike from a TextGrid, JSON and CSV"):
+        val expected: List[(Text, Double)] =
+          List((t"one", 0.5), (t"two", 1.0), (t"three", 1.5), (t"<unk>", 3.0), (t"five", 3.5), (t"six", 4.0))
+
+        (spoken(grid) == expected, spoken(json) == expected, spoken(csv) == expected)
+
+      . assert(_ == (true, true, true))
+
+      test(m"text which is no alignment, or a TextGrid without a words tier, says why"):
+        (spoken(t"hello"), spoken(grid.sub(t"name = \"words\"", t"name = \"mots\"")).map(_(0)))
+
+      . assert(_ == (List((t"not a TextGrid, JSON or CSV alignment", -1.0)), List(t"the TextGrid has no tier named `words`")))
+
+      test(m"a transcript's words are normalised as the aligner's are"):
+        ForcedAlignment.words(t"  Hello, World! It's  well-known —\nthat's 3.\n")
+
+      . assert(_ == List(t"hello", t"world", t"it's", t"well-known", t"that's", t"3"))
+
+      def aligned: List[ForcedAlignment.Word] = ForcedAlignment.read(grid) match
+        case words: List[ForcedAlignment.Word] @unchecked => words
+        case _                                            => Nil
+
+      def slides(transcripts: List[Optional[Text]]): Text =
+        transcripts.map: (transcript: Optional[Text]) =>
+          t"slide\n  markdown\n      a\n" + transcript.lay(t"") { text => t"  transcript\n      $text\n" }
+        . join
+
+      def timed(transcripts: List[Optional[Text]]): List[Double] | List[Text] =
+        read(slides(transcripts)).lay(List[Text]()): (presentation: Presentation, _) =>
+          ForcedAlignment.schedule(presentation, aligned) match
+            case ForcedAlignment.Outcome.Timed(schedule, _) => schedule
+            case ForcedAlignment.Outcome.Failed(messages)   => messages
+
+      test(m"the transcript's words are compared with the alignment's, a word the aligner did not know standing for any"):
+        val comparison = ForcedAlignment.compare(List(t"one", t"two", t"three", t"four", t"five", t"six"), aligned)
+        (comparison.differing, comparison.close, comparison.places.get(3), comparison.places.get(5))
+
+      . assert(_ == (0, true, Some(3), Some(5)))
+
+      test(m"the schedule is each later slide's first word's time"):
+        timed(List(t"One, two three.", t"Four five.", t"Six!"))
+
+      . assert(_ == List(3.0, 4.0))
+
+      test(m"a slide whose first word the aligner missed is timed by its next word"):
+        timed(List(t"One, two.", t"Tree three four.", t"Five six!"))
+
+      . assert(_ == List(1.5, 3.5))
+
+      test(m"a slide without a transcript cannot be timed by an alignment"):
+        timed(List(t"One, two three.", Unset, t"Four five six.")) match
+          case messages: List[Text] @unchecked => messages.map(_.keep(16))
+
+      . assert(_ == List(t"slide 2 (line 6)"))
+
+      test(m"a transcript which differs from the alignment in more than a word in ten is refused, with the differences shown"):
+        timed(List(t"One, two, three.", t"Nine ten eleven twelve thirteen."))
+
+      . assert(_ == List
+          ( t"the transcript and the alignment differ in 6 of 8 words, which is too many to time the presentation by:",
+            t"  … two three nine -ten -eleven -twelve -thirteen +five +six" ))
+
+      test(m"a presentation's transcript is its slides' transcripts, in order, as paragraphs"):
+        read(talk).lay(Nil): (presentation: Presentation, _) =>
+          Presentation.transcript(presentation).map:
+            case Block.Paragraph(content) => Blocks.plain(content)
+            case _                        => t"?"
+
+      . assert(_ == List(t"That is all there is to say.", t"Thank you."))
 
       def codes(text: Text): List[Block.Code] =
         leaves(text).bind(_.content).bind:
@@ -935,7 +1108,7 @@ slide
 
       test(m"a slide's code may say what a fence's preamble says, its code beneath `code`"):
         val slide: Text =
-          t"slide\n  code scala\n    highlight y  a new name\n    code\n" +
+          t"slide\n  syntax scala\n    highlight y  a new name\n    code\n" +
             t"        val x = 1\n        val y = x + 1\n"
 
         codes(slide).bind(_.notes).map: (note: Block.Note) =>
@@ -947,8 +1120,8 @@ slide
         def frame(code: Text): Text = t"    frame\n      code\n$code"
         val second: Text = t"          val a = 1\n          val b = 2\n"
         val first: Text = t"          val a = 1\n"
-        val framed: Text = t"slide\n  code scala\n" + frame(first) + frame(second)
-        val plain: Text = t"slide\n  code scala\n      val c = 3\n"
+        val framed: Text = t"slide\n  syntax scala\n" + frame(first) + frame(second)
+        val plain: Text = t"slide\n  syntax scala\n      val c = 3\n"
 
         codes(framed + plain).map(_.animation.let(_.slides.size))
 
@@ -956,7 +1129,7 @@ slide
 
       test(m"each slide of a run is a frame, with the slide's label"):
         def step(label: Text, code: Text): Text =
-          t"slide\n  code scala\n    label  $label\n    code\n        $code\n"
+          t"slide\n  syntax scala\n    label  $label\n    code\n        $code\n"
 
         val run: Text = step(t"first", t"val x = 1") + step(t"second", t"val y = 2")
 

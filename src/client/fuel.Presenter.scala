@@ -34,6 +34,7 @@ package fuel
 
 import soundness.*
 
+import dysasymptotics.{linearAccess, linearSize}
 import palettes.solarizedDarkGaugePalette
 import pyrocosm.{Block, Hints, Inline, Interface, Live, Panel, TerminalRenderer}
 import tableStyles.thickTableStyle
@@ -56,41 +57,97 @@ object Presenter:
   // timings a presentation will read from a file.
   val interval: Double = 4.0
 
+  // Why a presentation cannot be shown: its file cannot be read or is not TEL; or the
+  // alignment it is to be timed by cannot be read or does not correspond to its transcript.
+  enum Problem:
+    case Unreadable, Misaligned
+
   // The presentation at `path`, read and compiled, as its title and its deck, with what the
-  // compile reported printed at the terminal's width; `Unset` if it cannot be read or is not
-  // TEL, which is printed too. An `autoplay` deck is given a schedule, a step every `interval`
-  // seconds, and says how many steps it has.
-  def prepare(config: Workspace.Config, path: Text, width: Int, autoplay: Boolean = false)
+  // compile reported printed at the terminal's width; or the problem, which is printed too.
+  // An `autoplay` deck is given a schedule — the times the slides' transcripts are spoken in
+  // the `alignment`, a forced alignment of a reading of them, or else a step every `interval`
+  // seconds — and says how many steps it has.
+  def prepare
+    ( config:    Workspace.Config,
+      path:      Text,
+      width:     Int,
+      autoplay:  Boolean        = false,
+      alignment: Optional[Text] = Unset )
     (using Stdio)
-  :   Optional[(Text, Block)] =
+  :   (Text, Block) | Problem =
 
     val renderer = TerminalRenderer()
 
     def print(blocks: List[Block]): Unit =
       renderer.blocks(blocks, width).each(Out.println(_))
 
-    read(path).lay(Unset): (text: Text) =>
+    read(path).lay[(Text, Block) | Problem](Problem.Unreadable): (text: Text) =>
       Presentation.read(path, text) match
         case diagnostic: Block.Diagnostic =>
           print(List(diagnostic))
-          Unset
+          Problem.Unreadable
 
         case (presentation: Presentation, problems: List[Block] @unchecked) =>
           val (deck, raised) = compile(config, path, presentation)
           print(problems + raised)
           val name: Text = path.cut(t"/").reverse.head.or(path)
-          (presentation.title.or(name), if autoplay then conducted(deck) else deck)
+          val title: Text = presentation.title.or(name)
 
-  // The deck with its schedule: a step every `interval` seconds, counted and said.
-  private def conducted(deck: Block)(using Stdio): Block = deck match
-    case deck: Block.Deck =>
-      val steps: Int = Presentation.steps(deck)
-      val seconds: Text = interval.toString.tt
-      Out.println(t"fuel: autoplaying ${steps.toString.tt} steps, one every $seconds s")
-      Presentation.scheduled(deck, Presentation.regular(steps, interval))
+          if !autoplay then (title, deck)
+          else conducted(deck, presentation, alignment) match
+            case problem: Problem => problem
+            case deck: Block      => (title, deck)
 
-    case other =>
-      other
+  // The deck with its schedule, counted and said: the slides' times in the alignment, with
+  // what had to be decided about slides it does not time; or a step every `interval` seconds.
+  private def conducted(deck: Block, presentation: Presentation, alignment: Optional[Text])
+    (using Stdio)
+  :   Block | Problem =
+
+    deck match
+      case deck: Block.Deck =>
+        val steps: Int = Presentation.steps(deck)
+        val count: Text = steps.toString.tt
+
+        alignment match
+          case file: Text => read(file) match
+            case content: Text => ForcedAlignment.read(content) match
+              case problem: Text =>
+                Out.println(t"fuel: $file is not an alignment fuel can read: $problem")
+                Problem.Misaligned
+
+              case words: List[ForcedAlignment.Word] @unchecked =>
+                ForcedAlignment.schedule(presentation, words) match
+                  case ForcedAlignment.Outcome.Failed(messages) =>
+                    messages.each { (message: Text) => Out.println(t"fuel: $message") }
+                    Problem.Misaligned
+
+                  case ForcedAlignment.Outcome.Timed(schedule, comparison) =>
+                    val spoken: Text = words.size.toString.tt
+                    Out.println(t"fuel: autoplaying $count steps, timed by $spoken words of $file")
+
+                    if comparison.differing > 0 then
+                      val differ: Text = comparison.differing.toString.tt
+                      Out.println(t"fuel: the transcript and the alignment differ in $differ words:")
+                      comparison.shown.each { (hunk: Text) => Out.println(t"fuel:   $hunk") }
+
+                    val times: Text = schedule.size.toString.tt
+                    if schedule.size != steps
+                    then Out.println(t"fuel: the deck has $count steps but the slides give $times times")
+
+                    Presentation.scheduled(deck, schedule)
+
+            case _ =>
+              Out.println(t"fuel: $file could not be read")
+              Problem.Unreadable
+
+          case _ =>
+            val seconds: Text = interval.toString.tt
+            Out.println(t"fuel: autoplaying $count steps, one every $seconds s")
+            Presentation.scheduled(deck, Presentation.regular(steps, interval))
+
+      case other =>
+        other
 
   private def compile(config: Workspace.Config, path: Text, presentation: Presentation)
   :   (Block, List[Block]) =

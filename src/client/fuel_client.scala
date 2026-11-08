@@ -55,6 +55,7 @@ object NoDocuments extends Status(3, t"no document directory is configured")
 object NoDocument extends Status(5, t"the document could not be read")
 object CompileFailed extends Status(4, t"a code fragment did not do as its preamble said")
 object DaemonFailed extends Status(6, t"the daemon failed while carrying out the command")
+object Misaligned extends Status(8, t"the transcript and its alignment do not correspond")
 object SyncFailed extends Status(7, t"the issues of an attached tracker could not be fetched")
 
 // What ends an invocation which a failure escaped: an `Error`, such as the daemon running out of
@@ -83,6 +84,9 @@ object ui:
     Subcommand("search", "search the compiled API by name, kind, package, result or parameter type")
 
   val Sync   = Subcommand("sync", "attach a tracker's issues to the API documentation, and fetch them")
+
+  val Transcript =
+    Subcommand("transcript", "print a presentation's transcript, its slides' in order")
   val Github = Subcommand("github", "a GitHub repository, as owner/repo")
 
   // Each is read from the cascade every Pyrocosm tool shares: the flag, the `fuel.*` property,
@@ -141,6 +145,13 @@ object ui:
         Nil,
         "play the presentation by itself, to a schedule of one step every four seconds" )
 
+  val Alignment =
+    Flag[Text]
+      ( "alignment",
+        false,
+        Nil,
+        "time the autoplay by a forced alignment (MFA's TextGrid, JSON or CSV) of a reading of the transcript" )
+
   val PresentPort =
     Setting[Text](t"presentPort", t"the port `fuel present` serves on (8061 by default)")
 
@@ -190,8 +201,21 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
     // `fuel present <file>`: a presentation's slides in a browser, until Ctrl+C.
     case ui.Present() :: rest =>
       val config: Workspace.Config = Workspace.load(directory)
-      val operand: Optional[Text] = rest.map(_()).filter(!_.starts(t"-")).head
-      val autoplay: Boolean = ui.Autoplay().present
+
+      // Registered here, so that it is offered and documented; its value is read in the
+      // execution, where a flag's value is a value.
+      ui.Alignment()
+
+      // The operand is the first word which is not a flag, nor a flag's value.
+      val words: List[Text] = rest.map(_())
+
+      val operand: Optional[Text] = words.indexed.filter: (word: Text, index: Ordinal) =>
+        val valued: Boolean = index.n0 > 0 && words.stdlib(index.n0 - 1) == t"--alignment"
+        !word.starts(t"-") && !valued
+
+      . head.let(_(0))
+
+      val autoplay0: Boolean = ui.Autoplay().present
 
       val port: Int = ui.PresentPort() match
         case text: Text => safely(text.as[Int]).or(Presenter.port)
@@ -202,26 +226,42 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
         given Environment = caps.unsafe.unsafeAssumePure(summon[Invocation].environment)
         val stdio: Stdio = summon[Stdio]
 
+        val alignment: Optional[Text] = ui.Alignment.value.let(absolute(directory, _))
+
+        // `--alignment` plays the presentation to the alignment's times, so it implies `--autoplay`.
+        val autoplay: Boolean = autoplay0 || alignment.present
+
         operand match
           case operand: Text =>
-            val prepared = Presenter.prepare(config, absolute(directory, operand), width, autoplay)
+            val prepared =
+              Presenter.prepare(config, absolute(directory, operand), width, autoplay, alignment)
 
-            type Outcome = Exit | Tool.UsageError.type | NoDocument.type
+            type Outcome = Exit | Tool.UsageError.type | NoDocument.type | Misaligned.type
 
-            prepared.lay[Outcome](NoDocument): (title, deck) =>
-              val frontend: pyrocosm.WebFrontend = Presenter.frontend(port)
-              async(frontend.run(Presenter.interface(title, deck))((_: pyrocosm.Event) => ()))
-              val url: Text = t"http://localhost:${port.toString.tt}/"
-              Out.println(t"fuel: presenting $title at $url (Ctrl+C to stop)")
+            prepared match
+              case Presenter.Problem.Unreadable => NoDocument
+              case Presenter.Problem.Misaligned => Misaligned
 
-              Attend.interrupt()
-              frontend.stop()
-              Out.println(t"fuel: the presentation has stopped")
-              Exit.Ok
+              case (title: Text, deck: Block) =>
+                val frontend: pyrocosm.WebFrontend = Presenter.frontend(port)
+                async(frontend.run(Presenter.interface(title, deck))((_: pyrocosm.Event) => ()))
+                val url: Text = t"http://localhost:${port.toString.tt}/"
+                Out.println(t"fuel: presenting $title at $url (Ctrl+C to stop)")
+
+                Attend.interrupt()
+                frontend.stop()
+                Out.println(t"fuel: the presentation has stopped")
+                Exit.Ok
 
           case _ =>
-            Out.println(t"fuel: usage: fuel present <file> [--autoplay]")
+            Out.println(t"fuel: usage: fuel present <file> [--autoplay] [--alignment <file>]")
             Tool.UsageError
+
+    // `fuel transcript <file>`: a presentation's transcript, its slides' in order, set to the
+    // terminal's width.
+    case ui.Transcript() :: rest =>
+      val operand: Optional[Text] = rest.map(_()).filter(!_.starts(t"-")).head
+      ambient(transcript(directory, operand))
 
     // `fuel compile`: read the settings here, where completion mode registers them, and
     // compile within the execution.
@@ -254,7 +294,9 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
       ambient(sync(config, directory, Unset, named = false))
 
     case _ =>
-      ambient(Fuel.usage(List(ui.Compile, ui.Show, ui.Search, ui.Present, ui.Sync)))
+      ambient
+        ( Fuel.usage
+            ( List(ui.Compile, ui.Show, ui.Search, ui.Present, ui.Transcript, ui.Sync) ) )
 
 // Compiles every configured directory into the daemon's corpus, which the dashboard shows, and
 // reports a line per section and a line per file that could not be read.
@@ -779,6 +821,46 @@ private def rendered
 // and hyphenated, code highlighted, an animated block as its steps in sequence; its problems
 // after it. Compiled as `compile` compiles, with the session and the classpath the
 // configuration gives, so what the page shows is what the dashboard would.
+// A presentation's transcript, printed as paragraphs wrapped to the terminal's width, words
+// whole; what the presentation's reading reports follows it.
+private def transcript(directory: Text, operand: Optional[Text])(using Stdio, Environment)
+:   Exit | Tool.UsageError.type | NoDocument.type =
+
+  operand match
+    case operand: Text =>
+      val path: Text = absolute(directory, operand)
+      val renderer = TerminalRenderer()
+
+      def print(blocks: List[Block]): Unit =
+        renderer.blocks(blocks, width).each: (line: Teletype) => Out.println(line)
+
+      val content: Optional[Text] =
+        try Text(java.nio.file.Files.readString(java.nio.file.Path.of(path.s)).nn)
+        catch case _: Exception => Unset
+
+      content match
+        case content: Text => Presentation.read(path, content) match
+          case diagnostic: Block.Diagnostic =>
+            print(List(diagnostic))
+            NoDocument
+
+          case (presentation: Presentation, problems: List[Block] @unchecked) =>
+            print(Presentation.transcript(presentation))
+
+            if !problems.nil then
+              Out.println(blank)
+              print(problems)
+
+            Exit.Ok
+
+        case _ =>
+          Out.println(t"fuel: $path could not be read")
+          NoDocument
+
+    case _ =>
+      Out.println(t"fuel: usage: fuel transcript <file>")
+      Tool.UsageError
+
 private def show(config: Workspace.Config, directory: Text, operand: Optional[Text])
   ( using Stdio, Environment )
 :   Exit | Tool.UsageError.type | NoDocument.type | CompileFailed.type =
