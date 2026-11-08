@@ -83,6 +83,9 @@ object ui:
     Subcommand("search", "search the compiled API by name, kind, package, result or parameter type")
 
   val Sync   = Subcommand("sync", "attach a tracker's issues to the API documentation, and fetch them")
+
+  val Transcript =
+    Subcommand("transcript", "print a presentation's transcript, its slides' in order")
   val Github = Subcommand("github", "a GitHub repository, as owner/repo")
 
   // Each is read from the cascade every Pyrocosm tool shares: the flag, the `fuel.*` property,
@@ -223,6 +226,12 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
             Out.println(t"fuel: usage: fuel present <file> [--autoplay]")
             Tool.UsageError
 
+    // `fuel transcript <file>`: a presentation's transcript, its slides' in order, set to the
+    // terminal's width.
+    case ui.Transcript() :: rest =>
+      val operand: Optional[Text] = rest.map(_()).filter(!_.starts(t"-")).head
+      ambient(transcript(directory, operand))
+
     // `fuel compile`: read the settings here, where completion mode registers them, and
     // compile within the execution.
     // `fuel show <file>`: one document, compiled as `compile` would, set in the terminal.
@@ -254,7 +263,9 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
       ambient(sync(config, directory, Unset, named = false))
 
     case _ =>
-      ambient(Fuel.usage(List(ui.Compile, ui.Show, ui.Search, ui.Present, ui.Sync)))
+      ambient
+        ( Fuel.usage
+            ( List(ui.Compile, ui.Show, ui.Search, ui.Present, ui.Transcript, ui.Sync) ) )
 
 // Compiles every configured directory into the daemon's corpus, which the dashboard shows, and
 // reports a line per section and a line per file that could not be read.
@@ -779,6 +790,46 @@ private def rendered
 // and hyphenated, code highlighted, an animated block as its steps in sequence; its problems
 // after it. Compiled as `compile` compiles, with the session and the classpath the
 // configuration gives, so what the page shows is what the dashboard would.
+// A presentation's transcript, printed as paragraphs wrapped to the terminal's width, words
+// whole; what the presentation's reading reports follows it.
+private def transcript(directory: Text, operand: Optional[Text])(using Stdio, Environment)
+:   Exit | Tool.UsageError.type | NoDocument.type =
+
+  operand match
+    case operand: Text =>
+      val path: Text = absolute(directory, operand)
+      val renderer = TerminalRenderer()
+
+      def print(blocks: List[Block]): Unit =
+        renderer.blocks(blocks, width).each: (line: Teletype) => Out.println(line)
+
+      val content: Optional[Text] =
+        try Text(java.nio.file.Files.readString(java.nio.file.Path.of(path.s)).nn)
+        catch case _: Exception => Unset
+
+      content match
+        case content: Text => Presentation.read(path, content) match
+          case diagnostic: Block.Diagnostic =>
+            print(List(diagnostic))
+            NoDocument
+
+          case (presentation: Presentation, problems: List[Block] @unchecked) =>
+            print(Presentation.transcript(presentation))
+
+            if !problems.nil then
+              Out.println(blank)
+              print(problems)
+
+            Exit.Ok
+
+        case _ =>
+          Out.println(t"fuel: $path could not be read")
+          NoDocument
+
+    case _ =>
+      Out.println(t"fuel: usage: fuel transcript <file>")
+      Tool.UsageError
+
 private def show(config: Workspace.Config, directory: Text, operand: Optional[Text])
   ( using Stdio, Environment )
 :   Exit | Tool.UsageError.type | NoDocument.type | CompileFailed.type =

@@ -845,27 +845,31 @@ slide
       A *short* talk.
 
 slide
-  code scala
+  syntax scala
       val x = 1
 
 slide
-  code scala
+  syntax scala
       val x = 1
       val y = x + 1
 
 slide
-  code scala
+  syntax scala
       val x = 1
       val y = x + 1
       val z = y * 2
 
 slide
-  code java
+  syntax java
       int x = 1;
 
 slide
   markdown
       The end.
+  transcript
+      That is all there is to say.
+
+      Thank you.
 """
 
       def read(text: Text): Optional[(Presentation, List[Block])] =
@@ -926,7 +930,41 @@ slide
           case Block.Diagnostic(_, location, _, _, _) => location.let(_.line)
           case _                                      => Unset
 
-      . assert(_ == List(1, 1, 4))
+      . assert(_ == List(2, 4))
+
+      test(m"the schema reads, and a presentation which follows it has no faults"):
+        (Presentation.schema.name, read(talk).lay(Nil)(_(1)).size)
+
+      . assert(_ == (t"presentation", 0))
+
+      test(m"a slide's `code` is reported as now being `syntax`, at its line"):
+        read(t"slide\n  code scala\n      val x = 1\n").lay(Nil)(_(1)).map:
+          case Block.Diagnostic(_, location, content, _, _) =>
+            val said: Text = content.head match
+              case Block.Paragraph(inlines) => Blocks.plain(inlines)
+              case _                        => t""
+
+            (location.let(_.line), said.contains(t"syntax"))
+          case _ =>
+            (Unset, false)
+
+      . assert(_ == List((2, true)))
+
+      test(m"what a slide's syntax does not say, and a `syntax` without a language, are faults"):
+        val text: Text = t"slide\n  syntax\n    highlite x\n    code\n        val x = 1\n"
+        read(text).lay(Nil)(_(1)).map:
+          case Block.Diagnostic(_, location, _, _, _) => location.let(_.line)
+          case _                                      => Unset
+
+      . assert(_ == List(3, 2))
+
+      test(m"a presentation's transcript is its slides' transcripts, in order, as paragraphs"):
+        read(talk).lay(Nil): (presentation: Presentation, _) =>
+          Presentation.transcript(presentation).map:
+            case Block.Paragraph(content) => Blocks.plain(content)
+            case _                        => t"?"
+
+      . assert(_ == List(t"That is all there is to say.", t"Thank you."))
 
       def codes(text: Text): List[Block.Code] =
         leaves(text).bind(_.content).bind:
@@ -935,7 +973,7 @@ slide
 
       test(m"a slide's code may say what a fence's preamble says, its code beneath `code`"):
         val slide: Text =
-          t"slide\n  code scala\n    highlight y  a new name\n    code\n" +
+          t"slide\n  syntax scala\n    highlight y  a new name\n    code\n" +
             t"        val x = 1\n        val y = x + 1\n"
 
         codes(slide).bind(_.notes).map: (note: Block.Note) =>
@@ -947,8 +985,8 @@ slide
         def frame(code: Text): Text = t"    frame\n      code\n$code"
         val second: Text = t"          val a = 1\n          val b = 2\n"
         val first: Text = t"          val a = 1\n"
-        val framed: Text = t"slide\n  code scala\n" + frame(first) + frame(second)
-        val plain: Text = t"slide\n  code scala\n      val c = 3\n"
+        val framed: Text = t"slide\n  syntax scala\n" + frame(first) + frame(second)
+        val plain: Text = t"slide\n  syntax scala\n      val c = 3\n"
 
         codes(framed + plain).map(_.animation.let(_.slides.size))
 
@@ -956,7 +994,7 @@ slide
 
       test(m"each slide of a run is a frame, with the slide's label"):
         def step(label: Text, code: Text): Text =
-          t"slide\n  code scala\n    label  $label\n    code\n        $code\n"
+          t"slide\n  syntax scala\n    label  $label\n    code\n        $code\n"
 
         val run: Text = step(t"first", t"val x = 1") + step(t"second", t"val y = 2")
 

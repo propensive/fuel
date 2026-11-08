@@ -439,8 +439,10 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   out, 0.4 s dark, 0.4 s in) and an animation's step both end on their time. The schedule is
   a stand-in for now, a step every four seconds; its source, a file of timings beside the
   presentation, comes later, as do bullets appearing one by one (which would be steps too),
-  the customisation a slide's children will carry, and reloading a presentation as its file
-  changes.
+  and reloading a presentation as its file changes. The format has a TEL schema,
+  `presentation` (`Presentation.schemaText`): a slide's `syntax <language>` holds its code (the
+  keyword `code` being its code beneath a preamble, as a frame's), and its `transcript` what
+  is said while it is shown, from which `fuel transcript` makes the presentation's.
 
 ### Decisions
 

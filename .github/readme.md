@@ -22,6 +22,7 @@ fuel serve stop    # stop serving them
 fuel show doc/x.md # one document, set in the terminal: justified, hyphenated, highlighted
 fuel present doc/slides.tel  # a presentation's slides in a browser until Ctrl+C
 fuel present doc/slides.tel --autoplay  # the same, played by itself to a schedule
+fuel transcript doc/slides.tel  # the presentation's transcript, set to the terminal's width
 fuel sync github propensive/fuel  # attach a repository's issues to the API pages, and fetch them
 fuel sync          # fetch every attached tracker's issues again
 fuel install       # install tab-completions and the manpage
@@ -152,11 +153,13 @@ slide
       A *short* talk.
 
 slide
-  code scala
+  syntax scala
       val x = 1
+  transcript
+      One value, to start with.
 
 slide
-  code scala
+  syntax scala
     label      a second name
     highlight  y  new
     code
@@ -164,9 +167,11 @@ slide
         val y = x + 1
 ```
 
-A slide's code is either the code alone, or what a fence's preamble says — marks, `context`,
-`errors`, `parse`/`typecheck`/`compile`, `frame`s, `autoplay`, `loop` and the rest — with the code
-itself beneath `code`, as a `frame`'s is. Consecutive slides which each hold one block of code
+A slide's `syntax` names the language its code is highlighted as, and is either the code alone,
+or what a fence's preamble says — marks, `context`, `errors`, `parse`/`typecheck`/`compile`,
+`frame`s, `autoplay`, `loop` and the rest — with the code itself beneath `code`, as a `frame`'s
+is. A presentation is checked against its TEL schema, `presentation` (`Presentation.schemaText`),
+and each fault is reported at its line. Consecutive slides which each hold one block of code
 without frames of its own, in the same language, are one animated block, its frames those
 slides, each with the slide's marks and its `label`, `hold` and `at`: stepping from one to the
 next moves what stays and fades what arrives and departs, as a fence's `frame`s do. A slide
@@ -182,6 +187,11 @@ fades the slide out over 0.4 s, shows nothing for 0.4 s, and fades the next in o
 that 1.2 s. The schedule is a stand-in for now, a step every four seconds, and the command says
 how many steps the deck has; the timings will be read from a file alongside the presentation
 later. Pressing a key takes the deck back from the schedule.
+
+A slide may have a `transcript`: what is said while it is shown. `fuel transcript <file>` prints
+the presentation's transcript — each slide's, in order, a blank line dividing paragraphs — set
+to the terminal's width without breaking a word across lines, with what the reading of the
+presentation reports after it.
 
 ## Output
 
