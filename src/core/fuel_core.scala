@@ -531,10 +531,18 @@ object Embedding:
 
             val all: scala.List[Preamble.Alternative] = preamble.alternatives.stdlib.toList
 
-            val versions: scala.List[(Preamble.Alternative, List[Block])] =
-              all.zipWithIndex.map: (alternative, index) =>
-                if index == 0 then (alternative, of(alternative, true, runnable, id))
-                else (alternative, of(alternative, false, false, t"$id-${(index + 1).show}"))
+            // The others are compiled before the fence's own, which joins the session: each is
+            // compiled as the object the fence's own is entered as, so one compiled after the
+            // join would displace it, and every later fence would find a stale object.
+            val others: scala.List[(Preamble.Alternative, List[Block])] =
+              all.zipWithIndex.drop(1).map: (alternative, index) =>
+                (alternative, of(alternative, false, false, t"$id-${(index + 1).show}"))
+
+            val own: scala.List[(Preamble.Alternative, List[Block])] =
+              all.take(1).map: alternative =>
+                (alternative, of(alternative, true, runnable, id))
+
+            val versions: scala.List[(Preamble.Alternative, List[Block])] = own ++ others
 
             val alternatives: List[Block.Alternative] = List.from:
               versions.flatMap: (alternative, blocks) =>
