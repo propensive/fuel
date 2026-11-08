@@ -276,4 +276,28 @@ object Presentation:
 
     Block.Deck(recur(presentation.slides))
 
+  // The steps a deck is stepped through: on each slide, the frames after the first of its
+  // last animated block, which the deck steps before it moves on; and the move to each slide
+  // after the first. A schedule has a time for each.
+  def steps(deck: Block.Deck): Int =
+    val frames: Int = deck.leaves.map: (leaf: Block.Leaf) =>
+      val animated: List[Block.Animation] = leaf.content.bind:
+        case Block.Code(_, _, _, _, animation: Block.Animation, _, _, _) => List(animation)
+        case _                                                            => Nil
+
+      animated.reverse.head.let(_.slides.size - 1).or(0)
+
+    . stdlib.sum
+
+    frames + (deck.leaves.size - 1).max(0)
+
+  // A schedule which lands a step every `interval` seconds, the first after one interval: a
+  // stand-in until a presentation's own timings are read from a file.
+  def regular(steps: Int, interval: Double): List[Double] =
+    List.range(1, steps + 1).map(_ * interval)
+
+  // The deck, playing itself to the schedule.
+  def scheduled(deck: Block.Deck, schedule: List[Double]): Block.Deck =
+    deck.copy(schedule = schedule)
+
 case class Presentation(title: Optional[Text], slides: List[Presentation.Slide])

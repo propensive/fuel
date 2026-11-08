@@ -881,7 +881,7 @@ slide
           val scala = Embedding.ScalaCode(Checker.tokenized, t"talk.tel")
 
           Presentation.deck(presentation, scala, Linker.none) match
-            case Block.Deck(leaves) => leaves
+            case Block.Deck(leaves, _) => leaves
             case _                  => Nil
 
       test(m"a presentation is its title and its slides, each with its parts"):
@@ -971,6 +971,19 @@ slide
         Presenter.interface(t"Talk", Block.Deck(Nil)).hints.has[pyrocosm.hints.web.Stage.type]
 
       . assert(_ == true)
+
+      test(m"a deck's steps are its animations' later frames and the moves between its slides"):
+        val deck: Block.Deck = Block.Deck(leaves(talk))
+        (Presentation.steps(deck), Presentation.steps(Block.Deck(Nil)))
+
+      . assert(_ == (3 + 2, 0))
+
+      test(m"a regular schedule lands a step every interval, and a scheduled deck carries it"):
+        val deck: Block.Deck = Block.Deck(leaves(talk))
+        val schedule: List[Double] = Presentation.regular(Presentation.steps(deck), 4.0)
+        (schedule, Presentation.scheduled(deck, schedule).schedule == schedule)
+
+      . assert(_ == (List(4.0, 8.0, 12.0, 16.0, 20.0), true))
 
       test(m"a presentation which is not TEL is a diagnostic"):
         Presentation.read(t"talk.tel", t"slide\n      too deep\n  markdown\n") match
