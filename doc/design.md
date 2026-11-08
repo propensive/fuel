@@ -439,7 +439,11 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   out, 0.4 s dark, 0.4 s in) and an animation's step both end on their time. The schedule is
   a stand-in for now, a step every four seconds; its source, a file of timings beside the
   presentation, comes later, as do bullets appearing one by one (which would be steps too),
-  and reloading a presentation as its file changes. The format has a TEL schema,
+  and reloading a presentation as its file changes. `--alignment <file>` takes the schedule
+  from a forced alignment (Montreal Forced Aligner's TextGrid, JSON or CSV) of a reading of the
+  slides' transcripts: each slide after the first lands when the first word of its transcript
+  is spoken (`ForcedAlignment`); running the aligner is the user's for now. The format has a
+  TEL schema,
   `presentation` (`Presentation.schemaText`): a slide's `syntax <language>` holds its code (the
   keyword `code` being its code beneath a preamble, as a frame's), and its `transcript` what
   is said while it is shown, from which `fuel transcript` makes the presentation's.

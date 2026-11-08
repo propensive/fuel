@@ -144,6 +144,13 @@ object ui:
         Nil,
         "play the presentation by itself, to a schedule of one step every four seconds" )
 
+  val Alignment =
+    Flag[Text]
+      ( "alignment",
+        false,
+        Nil,
+        "time the autoplay by a forced alignment (MFA's TextGrid, JSON or CSV) of a reading of the transcript" )
+
   val PresentPort =
     Setting[Text](t"presentPort", t"the port `fuel present` serves on (8061 by default)")
 
@@ -193,8 +200,21 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
     // `fuel present <file>`: a presentation's slides in a browser, until Ctrl+C.
     case ui.Present() :: rest =>
       val config: Workspace.Config = Workspace.load(directory)
-      val operand: Optional[Text] = rest.map(_()).filter(!_.starts(t"-")).head
-      val autoplay: Boolean = ui.Autoplay().present
+
+      // Registered here, so that it is offered and documented; its value is read in the
+      // execution, where a flag's value is a value.
+      ui.Alignment()
+
+      // The operand is the first word which is not a flag, nor a flag's value.
+      val words: List[Text] = rest.map(_())
+
+      val operand: Optional[Text] = words.indexed.filter: (word: Text, index: Ordinal) =>
+        val valued: Boolean = index.n0 > 0 && words.stdlib(index.n0 - 1) == t"--alignment"
+        !word.starts(t"-") && !valued
+
+      . head.let(_(0))
+
+      val autoplay0: Boolean = ui.Autoplay().present
 
       val port: Int = ui.PresentPort() match
         case text: Text => safely(text.as[Int]).or(Presenter.port)
@@ -205,9 +225,15 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
         given Environment = caps.unsafe.unsafeAssumePure(summon[Invocation].environment)
         val stdio: Stdio = summon[Stdio]
 
+        val alignment: Optional[Text] = ui.Alignment.value.let(absolute(directory, _))
+
+        // `--alignment` plays the presentation to the alignment's times, so it implies `--autoplay`.
+        val autoplay: Boolean = autoplay0 || alignment.present
+
         operand match
           case operand: Text =>
-            val prepared = Presenter.prepare(config, absolute(directory, operand), width, autoplay)
+            val prepared =
+              Presenter.prepare(config, absolute(directory, operand), width, autoplay, alignment)
 
             type Outcome = Exit | Tool.UsageError.type | NoDocument.type
 
@@ -223,7 +249,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
               Exit.Ok
 
           case _ =>
-            Out.println(t"fuel: usage: fuel present <file> [--autoplay]")
+            Out.println(t"fuel: usage: fuel present <file> [--autoplay] [--alignment <file>]")
             Tool.UsageError
 
     // `fuel transcript <file>`: a presentation's transcript, its slides' in order, set to the

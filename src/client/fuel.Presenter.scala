@@ -34,6 +34,7 @@ package fuel
 
 import soundness.*
 
+import dysasymptotics.{linearAccess, linearSize}
 import palettes.solarizedDarkGaugePalette
 import pyrocosm.{Block, Hints, Inline, Interface, Live, Panel, TerminalRenderer}
 import tableStyles.thickTableStyle
@@ -58,9 +59,16 @@ object Presenter:
 
   // The presentation at `path`, read and compiled, as its title and its deck, with what the
   // compile reported printed at the terminal's width; `Unset` if it cannot be read or is not
-  // TEL, which is printed too. An `autoplay` deck is given a schedule, a step every `interval`
-  // seconds, and says how many steps it has.
-  def prepare(config: Workspace.Config, path: Text, width: Int, autoplay: Boolean = false)
+  // TEL, which is printed too. An `autoplay` deck is given a schedule — the times the slides'
+  // transcripts are spoken in the `alignment`, a forced alignment of a reading of them, or
+  // else a step every `interval` seconds — and says how many steps it has; an alignment which
+  // cannot be read is printed, and is `Unset`.
+  def prepare
+    ( config:    Workspace.Config,
+      path:      Text,
+      width:     Int,
+      autoplay:  Boolean        = false,
+      alignment: Optional[Text] = Unset )
     (using Stdio)
   :   Optional[(Text, Block)] =
 
@@ -79,18 +87,52 @@ object Presenter:
           val (deck, raised) = compile(config, path, presentation)
           print(problems + raised)
           val name: Text = path.cut(t"/").reverse.head.or(path)
-          (presentation.title.or(name), if autoplay then conducted(deck) else deck)
+          val title: Text = presentation.title.or(name)
 
-  // The deck with its schedule: a step every `interval` seconds, counted and said.
-  private def conducted(deck: Block)(using Stdio): Block = deck match
-    case deck: Block.Deck =>
-      val steps: Int = Presentation.steps(deck)
-      val seconds: Text = interval.toString.tt
-      Out.println(t"fuel: autoplaying ${steps.toString.tt} steps, one every $seconds s")
-      Presentation.scheduled(deck, Presentation.regular(steps, interval))
+          if !autoplay then (title, deck)
+          else conducted(deck, presentation, alignment).let((title, _))
 
-    case other =>
-      other
+  // The deck with its schedule, counted and said: the slides' times in the alignment, with
+  // what had to be decided about slides it does not time; or a step every `interval` seconds.
+  private def conducted(deck: Block, presentation: Presentation, alignment: Optional[Text])
+    (using Stdio)
+  :   Optional[Block] =
+
+    deck match
+      case deck: Block.Deck =>
+        val steps: Int = Presentation.steps(deck)
+        val count: Text = steps.toString.tt
+
+        alignment match
+          case file: Text => read(file) match
+            case content: Text => ForcedAlignment.read(content) match
+              case problem: Text =>
+                Out.println(t"fuel: $file is not an alignment fuel can read: $problem")
+                Unset
+
+              case words: List[ForcedAlignment.Word] @unchecked =>
+                val (schedule, notes) = ForcedAlignment.schedule(presentation, words)
+                val spoken: Text = words.size.toString.tt
+                Out.println(t"fuel: autoplaying $count steps, timed by $spoken words of $file")
+                notes.each { (note: Text) => Out.println(t"fuel: $note") }
+
+                val times: Text = schedule.size.toString.tt
+                if schedule.size != steps
+                then Out.println(t"fuel: the deck has $count steps but the slides give $times times")
+
+                Presentation.scheduled(deck, schedule)
+
+            case _ =>
+              Out.println(t"fuel: $file could not be read")
+              Unset
+
+          case _ =>
+            val seconds: Text = interval.toString.tt
+            Out.println(t"fuel: autoplaying $count steps, one every $seconds s")
+            Presentation.scheduled(deck, Presentation.regular(steps, interval))
+
+      case other =>
+        other
 
   private def compile(config: Workspace.Config, path: Text, presentation: Presentation)
   :   (Block, List[Block]) =

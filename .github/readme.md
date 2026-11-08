@@ -22,6 +22,7 @@ fuel serve stop    # stop serving them
 fuel show doc/x.md # one document, set in the terminal: justified, hyphenated, highlighted
 fuel present doc/slides.tel  # a presentation's slides in a browser until Ctrl+C
 fuel present doc/slides.tel --autoplay  # the same, played by itself to a schedule
+fuel present doc/slides.tel --alignment talk.TextGrid  # the same, timed to a reading of the transcript
 fuel transcript doc/slides.tel  # the presentation's transcript, set to the terminal's width
 fuel sync github propensive/fuel  # attach a repository's issues to the API pages, and fetch them
 fuel sync          # fetch every attached tracker's issues again
@@ -187,6 +188,17 @@ fades the slide out over 0.4 s, shows nothing for 0.4 s, and fades the next in o
 that 1.2 s. The schedule is a stand-in for now, a step every four seconds, and the command says
 how many steps the deck has; the timings will be read from a file alongside the presentation
 later. Pressing a key takes the deck back from the schedule.
+
+The schedule can instead come from a recording of the transcript being read, by way of a forced
+alignment: run [Montreal Forced Aligner](https://montreal-forced-aligner.readthedocs.io/) on the
+recording and the transcript (`fuel transcript <file>` prints it), and give its output to
+`fuel present <file> --alignment <output>`, in any of MFA's formats — a TextGrid (its default),
+JSON or CSV. The words of its `words` tier are matched, in order, to the words of the slides'
+transcripts, and each slide after the first is shown at the moment the first word of its
+transcript is spoken; a word the aligner did not know (`<unk>`) is matched by its place. A slide
+with no transcript, or one the alignment does not reach, is given a time between its timed
+neighbours' (or a second after the last word, at the end), and this is said. `--alignment`
+implies `--autoplay`.
 
 A slide may have a `transcript`: what is said while it is shown. `fuel transcript <file>` prints
 the presentation's transcript — each slide's, in order, a blank line dividing paragraphs — set

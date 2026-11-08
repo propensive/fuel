@@ -958,6 +958,128 @@ slide
 
       . assert(_ == List(3, 2))
 
+      // An alignment of a reading of three slides' transcripts — "one two three", "four five"
+      // and "six" — in MFA's three formats, with a pause, a word MFA did not know, and the
+      // phones tier a reader must pass over.
+      val grid: Text = t"""File type = "ooTextFile"
+Object class = "TextGrid"
+
+xmin = 0
+xmax = 6.5
+tiers? <exists>
+size = 2
+item []:
+    item [1]:
+        class = "IntervalTier"
+        name = "words"
+        xmin = 0
+        xmax = 6.5
+        intervals: size = 8
+        intervals [1]:
+            xmin = 0
+            xmax = 0.5
+            text = ""
+        intervals [2]:
+            xmin = 0.5
+            xmax = 1.0
+            text = "one"
+        intervals [3]:
+            xmin = 1.0
+            xmax = 1.5
+            text = "two"
+        intervals [4]:
+            xmin = 1.5
+            xmax = 2.0
+            text = "three"
+        intervals [5]:
+            xmin = 2.0
+            xmax = 3.0
+            text = ""
+        intervals [6]:
+            xmin = 3.0
+            xmax = 3.5
+            text = "<unk>"
+        intervals [7]:
+            xmin = 3.5
+            xmax = 4.0
+            text = "five"
+        intervals [8]:
+            xmin = 4.0
+            xmax = 6.5
+            text = "six"
+    item [2]:
+        class = "IntervalTier"
+        name = "phones"
+        xmin = 0
+        xmax = 6.5
+        intervals: size = 1
+        intervals [1]:
+            xmin = 0
+            xmax = 6.5
+            text = "sil"
+"""
+
+      val json: Text =
+        t"""{"start": 0, "end": 6.5, "tiers": {"words": {"type": "interval", "entries": [[0.5, 1.0, "one"], [1.0, 1.5, "two"], [1.5, 2.0, "three"], [2.0, 3.0, ""], [3.0, 3.5, "<unk>"], [3.5, 4.0, "five"], [4.0, 6.5, "six"]]}, "phones": {"type": "interval", "entries": [[0, 6.5, "sil"]]}}}"""
+
+      val csv: Text =
+        t"Begin,End,Label,Type,Speaker\n0.5,1.0,one,words,x\n1.0,1.5,two,words,x\n1.5,2.0,three,words,x\n" +
+          t"2.0,3.0,,words,x\n3.0,3.5,<unk>,words,x\n3.5,4.0,five,words,x\n4.0,6.5,six,words,x\n0,6.5,sil,phones,x\n"
+
+      def spoken(text: Text): List[(Text, Double)] = ForcedAlignment.read(text) match
+        case words: List[ForcedAlignment.Word] @unchecked => words.map { word => (word.label, word.start) }
+        case problem: Text                                => List((problem, -1.0))
+        case _                                            => Nil
+
+      test(m"an alignment's spoken words are read alike from a TextGrid, JSON and CSV"):
+        val expected: List[(Text, Double)] =
+          List((t"one", 0.5), (t"two", 1.0), (t"three", 1.5), (t"<unk>", 3.0), (t"five", 3.5), (t"six", 4.0))
+
+        (spoken(grid) == expected, spoken(json) == expected, spoken(csv) == expected)
+
+      . assert(_ == (true, true, true))
+
+      test(m"text which is no alignment, or a TextGrid without a words tier, says why"):
+        (spoken(t"hello"), spoken(grid.sub(t"name = \"words\"", t"name = \"mots\"")).map(_(0)))
+
+      . assert(_ == (List((t"not a TextGrid, JSON or CSV alignment", -1.0)), List(t"the TextGrid has no tier named `words`")))
+
+      test(m"a transcript's words are normalised as the aligner's are"):
+        ForcedAlignment.words(t"  Hello, World! It's  well-known —\nthat's 3.\n")
+
+      . assert(_ == List(t"hello", t"world", t"it's", t"well-known", t"that's", t"3"))
+
+      test(m"the transcript's words are timed in order, a word the aligner did not know by its place"):
+        ForcedAlignment.read(grid) match
+          case words: List[ForcedAlignment.Word] @unchecked =>
+            ForcedAlignment.times(List(t"one", t"two", t"three", t"four", t"five", t"six", t"seven"), words)
+
+          case _ =>
+            Nil
+
+      . assert(_ == List(0.5, 1.0, 1.5, 3.0, 3.5, 4.0, Unset))
+
+      test(m"the schedule is each later slide's first word's time; an untimed slide is placed between its neighbours"):
+        val text: Text =
+          t"slide\n  markdown\n      a\n  transcript\n      One, two three.\n" +
+            t"slide\n  markdown\n      b\n" +
+            t"slide\n  markdown\n      c\n  transcript\n      Four five.\n" +
+            t"slide\n  markdown\n      d\n  transcript\n      Six!\n" +
+            t"slide\n  markdown\n      e\n"
+
+        val none: (List[Double], List[Text]) = (List[Double](), List[Text]())
+
+        read(text).lay(none): (presentation: Presentation, _) =>
+          ForcedAlignment.read(grid) match
+            case words: List[ForcedAlignment.Word] @unchecked =>
+              val (schedule, notes) = ForcedAlignment.schedule(presentation, words)
+              (schedule, notes.map(_.keep(7)))
+
+            case _ =>
+              none
+
+      . assert(_ == (List(1.75, 3.0, 4.0, 7.5), List(t"slide 2", t"slide 5")))
+
       test(m"a presentation's transcript is its slides' transcripts, in order, as paragraphs"):
         read(talk).lay(Nil): (presentation: Presentation, _) =>
           Presentation.transcript(presentation).map:
