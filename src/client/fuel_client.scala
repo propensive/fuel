@@ -56,6 +56,7 @@ object NoDocument extends Status(5, t"the document could not be read")
 object CompileFailed extends Status(4, t"a code fragment did not do as its preamble said")
 object DaemonFailed extends Status(6, t"the daemon failed while carrying out the command")
 object Misaligned extends Status(8, t"the transcript and its alignment do not correspond")
+object Unaligned extends Status(9, t"the aligner could not be installed or run on the recording")
 object SyncFailed extends Status(7, t"the issues of an attached tracker could not be fetched")
 
 // What ends an invocation which a failure escaped: an `Error`, such as the daemon running out of
@@ -145,12 +146,12 @@ object ui:
         Nil,
         "play the presentation by itself, to a schedule of one step every four seconds" )
 
-  val Alignment =
+  val Align =
     Flag[Text]
-      ( "alignment",
+      ( "align",
         false,
-        Nil,
-        "time the autoplay by a forced alignment (MFA's TextGrid, JSON or CSV) of a reading of the transcript" )
+        List(t"alignment"),
+        "time the autoplay by a recording of the transcript being read, or by a forced alignment of one (MFA's TextGrid, JSON or CSV)" )
 
   val PresentPort =
     Setting[Text](t"presentPort", t"the port `fuel present` serves on (8061 by default)")
@@ -204,13 +205,14 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
 
       // Registered here, so that it is offered and documented; its value is read in the
       // execution, where a flag's value is a value.
-      ui.Alignment()
+      ui.Align()
 
       // The operand is the first word which is not a flag, nor a flag's value.
       val words: List[Text] = rest.map(_())
 
       val operand: Optional[Text] = words.indexed.filter: (word: Text, index: Ordinal) =>
-        val valued: Boolean = index.n0 > 0 && words.stdlib(index.n0 - 1) == t"--alignment"
+        val flags: List[Text] = List(t"--align", t"--alignment")
+        val valued: Boolean = index.n0 > 0 && flags.has(words.stdlib(index.n0 - 1))
         !word.starts(t"-") && !valued
 
       . head.let(_(0))
@@ -226,21 +228,23 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
         given Environment = caps.unsafe.unsafeAssumePure(summon[Invocation].environment)
         val stdio: Stdio = summon[Stdio]
 
-        val alignment: Optional[Text] = ui.Alignment.value.let(absolute(directory, _))
+        val align: Optional[Text] = ui.Align.value.let(absolute(directory, _))
 
-        // `--alignment` plays the presentation to the alignment's times, so it implies `--autoplay`.
-        val autoplay: Boolean = autoplay0 || alignment.present
+        // `--align` plays the presentation to the recording's times, so it implies `--autoplay`.
+        val autoplay: Boolean = autoplay0 || align.present
 
         operand match
           case operand: Text =>
             val prepared =
-              Presenter.prepare(config, absolute(directory, operand), width, autoplay, alignment)
+              Presenter.prepare(config, absolute(directory, operand), width, autoplay, align)
 
-            type Outcome = Exit | Tool.UsageError.type | NoDocument.type | Misaligned.type
+            type Outcome =
+              Exit | Tool.UsageError.type | NoDocument.type | Misaligned.type | Unaligned.type
 
             prepared match
               case Presenter.Problem.Unreadable => NoDocument
               case Presenter.Problem.Misaligned => Misaligned
+              case Presenter.Problem.Unaligned  => Unaligned
 
               case (title: Text, deck: Block) =>
                 val frontend: pyrocosm.WebFrontend = Presenter.frontend(port)
@@ -254,7 +258,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
                 Exit.Ok
 
           case _ =>
-            Out.println(t"fuel: usage: fuel present <file> [--autoplay] [--alignment <file>]")
+            Out.println(t"fuel: usage: fuel present <file> [--autoplay] [--align <recording or alignment>]")
             Tool.UsageError
 
     // `fuel transcript <file>`: a presentation's transcript, its slides' in order, set to the

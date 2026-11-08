@@ -32,6 +32,8 @@
                                                                                                   */
 package fuel
 
+import java.nio.file as jnf
+
 import soundness.*
 
 import dysasymptotics.{linearAccess, linearSize}
@@ -57,23 +59,25 @@ object Presenter:
   // timings a presentation will read from a file.
   val interval: Double = 4.0
 
-  // Why a presentation cannot be shown: its file cannot be read or is not TEL; or the
-  // alignment it is to be timed by cannot be read or does not correspond to its transcript.
+  // Why a presentation cannot be shown: its file cannot be read or is not TEL; the alignment
+  // it is to be timed by cannot be read or does not correspond to its transcript; or the
+  // aligner could not be installed or run on the recording.
   enum Problem:
-    case Unreadable, Misaligned
+    case Unreadable, Misaligned, Unaligned
 
   // The presentation at `path`, read and compiled, as its title and its deck, with what the
   // compile reported printed at the terminal's width; or the problem, which is printed too.
-  // An `autoplay` deck is given a schedule — the times the slides' transcripts are spoken in
-  // the `alignment`, a forced alignment of a reading of them, or else a step every `interval`
-  // seconds — and says how many steps it has.
+  // An `autoplay` deck is given a schedule — the times the slides' transcripts are spoken,
+  // from `align`, a recording of them read aloud (aligned by Montreal Forced Aligner, which
+  // fuel installs on first use) or a forced alignment already made; or else a step every
+  // `interval` seconds — and says how many steps it has.
   def prepare
-    ( config:    Workspace.Config,
-      path:      Text,
-      width:     Int,
-      autoplay:  Boolean        = false,
-      alignment: Optional[Text] = Unset )
-    (using Stdio)
+    ( config:   Workspace.Config,
+      path:     Text,
+      width:    Int,
+      autoplay: Boolean        = false,
+      align:    Optional[Text] = Unset )
+    (using Stdio, Environment)
   :   (Text, Block) | Problem =
 
     val renderer = TerminalRenderer()
@@ -94,14 +98,58 @@ object Presenter:
           val title: Text = presentation.title.or(name)
 
           if !autoplay then (title, deck)
-          else conducted(deck, presentation, alignment) match
+          else conducted(config, deck, presentation, align) match
             case problem: Problem => problem
             case deck: Block      => (title, deck)
 
+  // The project's cache directory, where alignments are kept: beside its `.fuel` directory
+  // where there is no cache directory, as the compiled sources are.
+  private def cache(config: Workspace.Config)(using Environment): Text =
+    Fuel.projectCache(config.root).let { (cache: Path on Linux) => cache.encode }
+    . or(t"${config.root}/.fuel")
+
+  // A file given to `--align`: a recording, aligned to the transcript by MFA (from the cache
+  // when it has been before), or an alignment already made; either way, the alignment's text.
+  private def alignment(config: Workspace.Config, presentation: Presentation, file: Text)
+    (using Stdio, Environment)
+  :   Text | Problem =
+
+    if !jnf.Files.exists(jnf.Path.of(file.s)) then
+      Out.println(t"fuel: $file could not be read")
+      Problem.Unreadable
+    else if !Aligner.isAudio(file) then read(file).or(Problem.Unreadable)
+    else Aligner.home match
+      case home: Aligner.Home =>
+        Aligner.ensure(home) match
+          case problem: Text =>
+            Out.println(t"fuel: Montreal Forced Aligner could not be installed: $problem")
+            Aligner.manual(home).each { (line: Text) => Out.println(t"fuel: $line") }
+            Problem.Unaligned
+
+          case _ =>
+            val transcript: Text = Presentation.transcript(presentation).map:
+              case Block.Paragraph(inlines) => Blocks.plain(inlines)
+              case _                        => t""
+            . join(t"\n\n")
+
+            Aligner.align(home, file, transcript, cache(config)) match
+              case Aligner.Outcome.Aligned(json, cached) =>
+                if cached then Out.println(t"fuel: using the alignment of $file made before")
+                json
+
+              case Aligner.Outcome.Failed(message) =>
+                Out.println(t"fuel: $message")
+                Problem.Unaligned
+
+      case _ =>
+        Out.println(t"fuel: there is no cache directory to install Montreal Forced Aligner in")
+        Problem.Unaligned
+
   // The deck with its schedule, counted and said: the slides' times in the alignment, with
   // what had to be decided about slides it does not time; or a step every `interval` seconds.
-  private def conducted(deck: Block, presentation: Presentation, alignment: Optional[Text])
-    (using Stdio)
+  private def conducted
+    ( config: Workspace.Config, deck: Block, presentation: Presentation, align: Optional[Text] )
+    (using Stdio, Environment)
   :   Block | Problem =
 
     deck match
@@ -109,8 +157,9 @@ object Presenter:
         val steps: Int = Presentation.steps(deck)
         val count: Text = steps.toString.tt
 
-        alignment match
-          case file: Text => read(file) match
+        align match
+          case file: Text => alignment(config, presentation, file) match
+            case problem: Problem => problem
             case content: Text => ForcedAlignment.read(content) match
               case problem: Text =>
                 Out.println(t"fuel: $file is not an alignment fuel can read: $problem")
@@ -136,10 +185,6 @@ object Presenter:
                     then Out.println(t"fuel: the deck has $count steps but the slides give $times times")
 
                     Presentation.scheduled(deck, schedule)
-
-            case _ =>
-              Out.println(t"fuel: $file could not be read")
-              Problem.Unreadable
 
           case _ =>
             val seconds: Text = interval.toString.tt

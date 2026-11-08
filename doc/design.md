@@ -444,8 +444,11 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   slides' transcripts: each slide after the first lands when the first word of its transcript
   is spoken (`ForcedAlignment`), every slide needing a transcript and the transcript and the
   alignment having to agree (a Myers diff of their words, one in ten differing at most, shown
-  as a word diff when they do not); running the aligner is the user's for now. The format has a
-  TEL schema,
+  as a word diff when they do not). Given a recording instead, fuel runs MFA itself
+  (`Aligner`): MFA exists only as conda-forge packages, so fuel fetches micromamba (a static
+  executable) into `~/.cache/fuel/mfa`, makes an environment with MFA 3.4 there and downloads
+  the English models, once; alignments are cached by a digest of recording and transcript. The
+  format has a TEL schema,
   `presentation` (`Presentation.schemaText`): a slide's `syntax <language>` holds its code (the
   keyword `code` being its code beneath a preamble, as a frame's), and its `transcript` what
   is said while it is shown, from which `fuel transcript` makes the presentation's.

@@ -1093,6 +1093,46 @@ item []:
           ( t"the transcript and the alignment differ in 6 of 8 words, which is too many to time the presentation by:",
             t"  … two three nine -ten -eleven -twelve -thirteen +five +six" ))
 
+      test(m"micromamba's platform is named from the JVM's, and unknown ones are not"):
+        ( Aligner.platform(t"Mac OS X", t"aarch64"), Aligner.platform(t"Mac OS X", t"x86_64"),
+          Aligner.platform(t"Linux", t"amd64"), Aligner.platform(t"Linux", t"aarch64"),
+          Aligner.platform(t"Windows 11", t"amd64"), Aligner.platform(t"Linux", t"riscv64") )
+
+      . assert(_ == (t"osx-arm64", t"osx-64", t"linux-64", t"linux-aarch64", Unset, Unset))
+
+      test(m"a recording is known by its extension or its first bytes; an alignment's text is not"):
+        def bytes(text: Text): Data = Array.unsafeFrozen(text.s.getBytes("US-ASCII").nn)
+        val m4a: Data = bytes(t"\u0000\u0000\u0000 ftypM4A ")
+
+        ( Aligner.isAudio(t"talk.wav", Array.empty[Byte]), Aligner.isAudio(t"talk.FLAC", Array.empty[Byte]),
+          Aligner.isAudio(t"talk", bytes(t"RIFF$$$$WAVEfmt ")), Aligner.isAudio(t"talk.bin", m4a),
+          Aligner.isAudio(t"talk.TextGrid", bytes(grid.keep(12))), Aligner.isAudio(t"talk.json", bytes(t"{\"start\": 0")) )
+
+      . assert(_ == (true, true, true, true, false, false))
+
+      test(m"an alignment's cache key changes with the recording and with the transcript"):
+        val sound: Data = Array[Byte](1, 2, 3)
+        val one: Text = Aligner.key(sound, t"one two")
+        (one.length, one == Aligner.key(sound, t"one two"), one == Aligner.key(sound, t"one too"), one == Aligner.key(Array[Byte](1, 2, 4), t"one two"))
+
+      . assert(_ == (24, true, false, false))
+
+      test(m"the aligner's commands name the environment, the models and the corpus"):
+        val home: Aligner.Home = Aligner.Home(t"/c/fuel/mfa")
+        val create: List[Text] = Aligner.createCommand(home)
+        val align: List[Text] = Aligner.alignCommand(home, t"/p/corpus", t"/p/out", false)
+        val wide: List[Text] = Aligner.alignCommand(home, t"/p/corpus", t"/p/out", true)
+
+        ( create.head, create.has(t"/c/fuel/mfa/env"), create.reverse.head,
+          Aligner.downloadCommand(home, t"acoustic").skip(4),
+          align.skip(4).keep(2), align.reverse.keep(4).reverse, align.has(t"--beam"), wide.has(t"--retry_beam"),
+          Aligner.variables(home).get(t"MFA_ROOT_DIR") )
+
+      . assert(_ == ( t"/c/fuel/mfa/bin/micromamba", true, t"montreal-forced-aligner>=3.4,<4",
+                      List(t"mfa", t"model", t"download", t"acoustic", t"english_mfa"),
+                      List(t"mfa", t"align"), List(t"/p/corpus", t"english_mfa", t"english_mfa", t"/p/out"), false, true,
+                      Some(t"/c/fuel/mfa/root") ))
+
       test(m"a presentation's transcript is its slides' transcripts, in order, as paragraphs"):
         read(talk).lay(Nil): (presentation: Presentation, _) =>
           Presentation.transcript(presentation).map:
