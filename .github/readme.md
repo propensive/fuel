@@ -21,6 +21,7 @@ fuel serve         # serve the compiled documents at http://localhost:8090/fuel/
 fuel serve stop    # stop serving them
 fuel show doc/x.md # one document, set in the terminal: justified, hyphenated, highlighted
 fuel present doc/slides.tel  # a presentation's slides in a browser until Ctrl+C
+fuel present doc/slides.tel --autoplay  # the same, played by itself to a schedule
 fuel sync github propensive/fuel  # attach a repository's issues to the API pages, and fetch them
 fuel sync          # fetch every attached tracker's issues again
 fuel install       # install tab-completions and the manpage
@@ -172,6 +173,15 @@ next moves what stays and fades what arrives and departs, as a fence's `frame`s 
 whose code has `frame`s of its own is an animation alone. Code is compiled as `fuel show`
 compiles a document, against the configured classpath where there is one, and what it reports is
 printed before the slides are served.
+
+`fuel present <file> --autoplay` plays the presentation by itself, to a schedule: a time, from the
+page's opening, at which each step lands — the frame an animation steps to fully arrived, or the
+next slide fully in. A step is started as long before its time as it will take: an animation's
+step by its own measure (its fades and the move of what stays), and a change of slide, which
+fades the slide out over 0.4 s, shows nothing for 0.4 s, and fades the next in over 0.4 s, by
+that 1.2 s. The schedule is a stand-in for now, a step every four seconds, and the command says
+how many steps the deck has; the timings will be read from a file alongside the presentation
+later. Pressing a key takes the deck back from the schedule.
 
 ## Output
 

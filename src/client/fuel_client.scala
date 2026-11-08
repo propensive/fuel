@@ -134,6 +134,13 @@ object ui:
         List('f'),
         "compile everything again, ignoring what the output directory keeps" )
 
+  val Autoplay =
+    Flag[Unit]
+      ( "autoplay",
+        false,
+        Nil,
+        "play the presentation by itself, to a schedule of one step every four seconds" )
+
   val PresentPort =
     Setting[Text](t"presentPort", t"the port `fuel present` serves on (8061 by default)")
 
@@ -184,6 +191,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
     case ui.Present() :: rest =>
       val config: Workspace.Config = Workspace.load(directory)
       val operand: Optional[Text] = rest.map(_()).filter(!_.starts(t"-")).head
+      val autoplay: Boolean = ui.Autoplay().present
 
       val port: Int = ui.PresentPort() match
         case text: Text => safely(text.as[Int]).or(Presenter.port)
@@ -196,7 +204,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
 
         operand match
           case operand: Text =>
-            val prepared = Presenter.prepare(config, absolute(directory, operand), width)
+            val prepared = Presenter.prepare(config, absolute(directory, operand), width, autoplay)
 
             type Outcome = Exit | Tool.UsageError.type | NoDocument.type
 
@@ -212,7 +220,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
               Exit.Ok
 
           case _ =>
-            Out.println(t"fuel: usage: fuel present <file>")
+            Out.println(t"fuel: usage: fuel present <file> [--autoplay]")
             Tool.UsageError
 
     // `fuel compile`: read the settings here, where completion mode registers them, and

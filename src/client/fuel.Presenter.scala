@@ -52,10 +52,16 @@ object Presenter:
     try Text(java.nio.file.Files.readString(java.nio.file.Path.of(path.s)).nn)
     catch case _: Exception => Unset
 
+  // How often a step lands when a presentation plays itself, in seconds: a stand-in for the
+  // timings a presentation will read from a file.
+  val interval: Double = 4.0
+
   // The presentation at `path`, read and compiled, as its title and its deck, with what the
   // compile reported printed at the terminal's width; `Unset` if it cannot be read or is not
-  // TEL, which is printed too.
-  def prepare(config: Workspace.Config, path: Text, width: Int)(using Stdio)
+  // TEL, which is printed too. An `autoplay` deck is given a schedule, a step every `interval`
+  // seconds, and says how many steps it has.
+  def prepare(config: Workspace.Config, path: Text, width: Int, autoplay: Boolean = false)
+    (using Stdio)
   :   Optional[(Text, Block)] =
 
     val renderer = TerminalRenderer()
@@ -73,7 +79,18 @@ object Presenter:
           val (deck, raised) = compile(config, path, presentation)
           print(problems + raised)
           val name: Text = path.cut(t"/").reverse.head.or(path)
-          (presentation.title.or(name), deck)
+          (presentation.title.or(name), if autoplay then conducted(deck) else deck)
+
+  // The deck with its schedule: a step every `interval` seconds, counted and said.
+  private def conducted(deck: Block)(using Stdio): Block = deck match
+    case deck: Block.Deck =>
+      val steps: Int = Presentation.steps(deck)
+      val seconds: Text = interval.toString.tt
+      Out.println(t"fuel: autoplaying ${steps.toString.tt} steps, one every $seconds s")
+      Presentation.scheduled(deck, Presentation.regular(steps, interval))
+
+    case other =>
+      other
 
   private def compile(config: Workspace.Config, path: Text, presentation: Presentation)
   :   (Block, List[Block]) =
@@ -81,7 +98,8 @@ object Presenter:
     def build(checker: Checker): (Block, List[Block]) =
       val scala = Embedding.ScalaCode(checker, path, config.session)
       val tables: Tables = Tables(path)
-      (Presentation.deck(presentation, scala, Linker.none, tables), scala.problems + tables.problems)
+      val deck: Block = Presentation.deck(presentation, scala, Linker.none, tables)
+      (deck, scala.problems + tables.problems)
 
     val checked: Boolean = !config.classpath.nil && config.classpath.all(exists(_))
 

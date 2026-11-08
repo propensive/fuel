@@ -433,9 +433,14 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   holding Markdown or a block of code, as a Pyrocosm `Block.Deck` (propensive/pyrocosm#80) in a
   browser: one slide at a time, stepped by the keys. Consecutive slides of code in one language
   are one animated block, made by the embedding a fence with `frame`s goes through, so the
-  animation is M3's; the deck steps through its frames before moving on. Not yet: a schedule to
-  autoplay slides and animations to, the customisation a slide's children will carry (labels,
-  marks, holds), and reloading a presentation as its file changes.
+  animation is M3's; the deck steps through its frames before moving on. `--autoplay` plays
+  the deck to a schedule: a time for each step — an animation's frame or a change of slide —
+  at which it lands, each step started as long before as it takes, so a slide's fade (0.4 s
+  out, 0.4 s dark, 0.4 s in) and an animation's step both end on their time. The schedule is
+  a stand-in for now, a step every four seconds; its source, a file of timings beside the
+  presentation, comes later, as do bullets appearing one by one (which would be steps too),
+  the customisation a slide's children will carry, and reloading a presentation as its file
+  changes.
 
 ### Decisions
 
