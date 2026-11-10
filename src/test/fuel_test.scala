@@ -4255,3 +4255,49 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
         Compilation.name(t"/home/me/project/doc/modules/")
 
       . assert(_ == t"modules")
+
+    suite(m"Help"):
+      val documented: Api.Entity =
+        Api.Entity
+          ( Designator.Top(t"sample"),
+            t"Doc",
+            true,
+            template = Api.Declaration(Api.Kind.Class),
+            doc = Api.Entry(info = t"one *Markdown* document, as `#Doc` keeps it") )
+
+      val member: Api.Entity =
+        Api.Entity
+          ( Designator.Type(Designator.Top(t"sample"), t"Doc"),
+            t"title",
+            true,
+            definition = Api.Declaration(Api.Kind.Def),
+            doc = Api.Entry(info = t"the first heading") )
+
+      val silent: Api.Entity =
+        Api.Entity(Designator.Top(t"sample"), t"Quiet", true, Api.Declaration(Api.Kind.Object))
+
+      val api: Api =
+        Api(sci.Map(documented.key -> documented, member.key -> member, silent.key -> silent))
+
+      test(m"the index has every documented entity's key and info, as plain text"):
+        Server.publish(Corpus(Nil), api)
+        List.from(fuel.Help.index().entries.stdlib.sortBy(_.key.s).map { entry => (entry.key, entry.info) })
+
+      . assert(_ == List
+          ( (t"sample.Doc", t"one Markdown document, as Doc keeps it"),
+            (t"sample.Doc#title", t"the first heading") ))
+
+      test(m"the index is made again for a new edition"):
+        Server.publish(Corpus(Nil), api)
+        val before: Long = fuel.Help.index().edition
+        Server.publish(Corpus(Nil), Api(sci.Map(documented.key -> documented)))
+        val after: fuel.Help.Message.Index = fuel.Help.index()
+        (after.edition > before, after.entries.map(_.key))
+
+      . assert(_ == (true, List(t"sample.Doc")))
+
+      test(m"the index survives its codec"):
+        val index = fuel.Help.Message.Index(3L, List(fuel.Help.Entry(t"a.B#c", t"a member")))
+        fuel.Help.codec.decode(fuel.Help.codec.encode(index))
+
+      . assert(_ == fuel.Help.Message.Index(3L, List(fuel.Help.Entry(t"a.B#c", t"a member"))))
