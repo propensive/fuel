@@ -29,6 +29,7 @@ scalac-option -Zgiven-prefixes
 scalac-option -Zopaque-mutability
 scalac-option -Zpure-iarrays
 scalac-option -Zfrozen-pure
+scalac-option -Zgatherable-varargs
 scalac-option -Zretains-bounds
 scalac-option -Zretains-skolems
 scalac-option -Zspreadable-varargs

@@ -74,7 +74,7 @@ object Icons:
   // A drawing: its elements, and how far it reaches left and right, past the grid where a
   // decoration needs to.
   private case class Drawing(elements: List[Text], left: Double = 0, right: Double = grid):
-    def add(more: Text*): Drawing = copy(elements = elements + List.from(more))
+    def add(more: Text*): Drawing = copy(elements = elements + more)
 
     def reach(from: Double, to: Double): Drawing =
       copy(left = left.min(from), right = right.max(to))
@@ -109,7 +109,7 @@ object Icons:
     t"""<rect x="${num(x)}" y="${num(y)}" width="${num(width)}" height="${num(height)}"/>"""
 
   private def polygon(points: (Double, Double)*): Text =
-    val listed: Text = List.from(points).map { (x, y) => t"${num(x)},${num(y)}" }.join(t" ")
+    val listed: Text = points.map { (x, y) => t"${num(x)},${num(y)}" }.join(t" ")
     t"""<polygon points="$listed"/>"""
 
   // A ring between two radii, as one path with a hole.
