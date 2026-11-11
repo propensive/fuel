@@ -34,7 +34,7 @@ package fuel
 
 import scala.collection.immutable as sci
 
-import soundness.*
+import soundness.{Format as _, *}
 
 import stenography.{Designator, Syntax}
 
@@ -45,36 +45,35 @@ import stenography.{Designator, Syntax}
 // belongs to is what the parent's kind says, and what the URL's separator encodes — `.` for a
 // member of a term, `~` for a member of a type (`#` being a URL's fragment).
 object Api:
-  // The kinds of declaration, each with the keyword it is declared by. A parameter is an
-  // entity too, a member of the type form of what it parameterises (`quux.foo#bar`,
-  // `quux.Box#T`), so that an overlay documents it as it does any member.
-  enum Kind:
-    case Package, Object, Class, CaseClass, Trait, Enum, Case, Type
-    case Def, Val, Var, Given, Extension, Param, TypeParam
+  // The kinds of declaration, each with the keyword it is declared by, and whether a declaration
+  // of it is a type (a template, as Amok said) or a term. A format has kinds of its own; Scala's
+  // are `Kind.Scala`'s. A parameter is an entity too, a member of the type form of what it
+  // parameterises (`quux.foo#bar`, `quux.Box#T`), so that an overlay documents it as it does
+  // any member.
+  trait Kind:
+    def keyword: Text
+    def isType: Boolean
+    def isParameter: Boolean = false
 
-    def keyword: Text = this match
-      case Package   => t"package"
-      case Object    => t"object"
-      case Class     => t"class"
-      case CaseClass => t"case class"
-      case Trait     => t"trait"
-      case Enum      => t"enum"
-      case Case      => t"case"
-      case Type      => t"type"
-      case Def       => t"def"
-      case Val       => t"val"
-      case Var       => t"var"
-      case Given     => t"given"
-      case Extension => t"extension"
-      case Param     => t"param"
-      case TypeParam => t"type"
+  object Kind:
+    sealed abstract class Scala(val keyword: Text, val isType: Boolean = false) extends Kind:
+      override def isParameter: Boolean = this == Param || this == TypeParam
 
-    // Whether a declaration of this kind is a type (a template, as Amok said) or a term.
-    def isType: Boolean = this match
-      case Class | CaseClass | Trait | Enum | Type | TypeParam => true
-      case _                                                   => false
-
-    def isParameter: Boolean = this == Param || this == TypeParam
+    case object Package   extends Scala(t"package")
+    case object Object    extends Scala(t"object")
+    case object Class     extends Scala(t"class", true)
+    case object CaseClass extends Scala(t"case class", true)
+    case object Trait     extends Scala(t"trait", true)
+    case object Enum      extends Scala(t"enum", true)
+    case object Case      extends Scala(t"case")
+    case object Type      extends Scala(t"type", true)
+    case object Def       extends Scala(t"def")
+    case object Val       extends Scala(t"val")
+    case object Var       extends Scala(t"var")
+    case object Given     extends Scala(t"given")
+    case object Extension extends Scala(t"extension")
+    case object Param     extends Scala(t"param")
+    case object TypeParam extends Scala(t"type", true)
 
   // The structure of a type as far as matching needs it — an extension's receiver against the
   // type it may extend, a given's type against the type it is for — apart from how it is
@@ -258,9 +257,10 @@ object Api:
 
   def empty: Api = Api(sci.Map())
 
-// The entities, by key (a standard map, which the inspection builds and the overlay amends);
-// `roots` are the packages with no parent.
-case class Api(entities: sci.Map[Text, Api.Entity]):
+// The entities of one format, by key (a standard map, which the inspection builds and the
+// overlay amends); `roots` are the packages with no parent. The `format` is what the entities
+// are declared in, which says how they are drawn and what their pages show.
+case class Api(entities: sci.Map[Text, Api.Entity], format: Format = ScalaFormat):
   def apply(key: Text): Optional[Api.Entity] = entities.get(key) match
     case Some(entity) => entity
     case _            => Unset
@@ -409,7 +409,7 @@ case class Api(entities: sci.Map[Text, Api.Entity]):
   lazy val lattice: Lattice = Lattice.build(this)
   lazy val search: Search = Search.build(this)
 
-  def add(entity: Api.Entity): Api = Api(entities.updated(entity.key, entity))
+  def add(entity: Api.Entity): Api = copy(entities = entities.updated(entity.key, entity))
 
   // Two models as one: an entity in both keeps the project's own declaration, and its members
   // are those of either; the members are relinked afterwards.
@@ -431,7 +431,7 @@ case class Api(entities: sci.Map[Text, Api.Entity]):
 
         case None => acc.updated(key, entity)
 
-    Api(combined).relinked
+    copy(entities = combined).relinked
 
   // Every entity's `members`, from the parents its children name, sorted by name.
   def relinked: Api =
@@ -445,7 +445,7 @@ case class Api(entities: sci.Map[Text, Api.Entity]):
       val known: scala.List[Api.Entity] = children.getOrElse(key, scala.Nil)
       (key, entity.copy(members = List.from(known.sortBy(_.name.s).map(_.key))))
 
-    Api(linked)
+    copy(entities = linked)
 
   def update(key: Text)(change: Api.Entity => Api.Entity): Api =
     apply(key).lay(this): (entity: Api.Entity) => add(change(entity))

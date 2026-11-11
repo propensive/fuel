@@ -419,4 +419,4 @@ object Applicables:
 
       (key, entity.copy(extensions = extensions, givens = known))
 
-    Api(decorated).relinked
+    api.copy(entities = decorated).relinked
