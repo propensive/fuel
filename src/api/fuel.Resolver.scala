@@ -48,15 +48,15 @@ import stenography.{Designator, Syntax}
 // written, then under each enclosing entity, then under each import; one entity found is the
 // link, several are an ambiguity, none is plain text.
 object Scope:
-  val standard: List[Designator] =
-    List(Designator(t"java.lang"), Designator(t"scala"), Designator(t"scala.Predef"))
+  val standard: List[Locator] =
+    List(Locator(t"java.lang"), Locator(t"scala"), Locator(t"scala.Predef"))
 
   // What every source of a project sees without importing it, in the order the compiler
   // imports them, each shadowing those before it: the compiler's own three packages, or those
   // the project's `-Yimports` option names instead, less `scala.Predef`
   // under `-Yno-predef` and all of them under `-Yno-imports`. A name from one of them is
   // written by its leaf, as the project's sources write it.
-  def standardOf(options: List[Text]): List[Designator] =
+  def standardOf(options: List[Text]): List[Locator] =
     // The option is written `-Yimports:a,b` or as two words, which is how the configuration
     // keeps it, since its options are cut at colons.
     def value(options: List[Text]): Optional[Text] = options match
@@ -65,25 +65,25 @@ object Scope:
       case _ :: rest                                      => value(rest)
       case _                                              => Unset
 
-    val named: Optional[List[Designator]] =
-      value(options).let: (value: Text) => value.cut(t",").filter(_ != t"").map(Designator(_))
+    val named: Optional[List[Locator]] =
+      value(options).let: (value: Text) => value.cut(t",").filter(_ != t"").map(Locator(_))
 
-    val base: List[Designator] =
+    val base: List[Locator] =
       if options.has(t"-Yno-imports") then Nil else named.or(standard)
 
-    if options.has(t"-Yno-predef") then base.filter(_ != Designator(t"scala.Predef")) else base
+    if options.has(t"-Yno-predef") then base.filter(_ != Locator(t"scala.Predef")) else base
 
   // An entity's scope: itself and its parents, with the imports its overlay gives it.
-  def of(entity: Api.Entity, imports: List[Text], standard: List[Designator] = standard): Scope =
-    def parents(designator: Optional[Designator]): List[Designator] =
-      designator.lay(Nil: List[Designator]): (d: Designator) => List(d) + parents(d.parent)
+  def of(entity: Api.Entity, imports: List[Text], standard: List[Locator] = standard): Scope =
+    def parents(designator: Optional[Locator]): List[Locator] =
+      designator.lay(Nil: List[Locator]): (d: Locator) => List(d) + parents(d.parent)
 
-    val enclosing: List[Designator] = List(entity.term, entity.tpe) + parents(entity.parent)
-    Scope(enclosing, imports.map(Designator(_)), standard)
+    val enclosing: List[Locator] = List(entity.term, entity.tpe) + parents(entity.parent)
+    Scope(enclosing, imports.map(Locator(_)), standard)
 
   // A document's scope: no enclosing entity, and the project's imports.
-  def document(imports: List[Text], standard: List[Designator] = standard): Scope =
-    Scope(Nil, imports.map(Designator(_)), standard)
+  def document(imports: List[Text], standard: List[Locator] = standard): Scope =
+    Scope(Nil, imports.map(Locator(_)), standard)
 
   // The imports as a reader's starting purview: each is the page of the package or object it
   // names, which is where a renderer elides them from, and what a reader may toggle.
@@ -91,17 +91,17 @@ object Scope:
     Purview(imports.map { (name: Text) => Purview.Entry(t"/api/$name", name) })
 
 case class Scope
-  ( enclosing: List[Designator],
-    imports:   List[Designator],
-    standard:  List[Designator] = Scope.standard ):
+  ( enclosing: List[Locator],
+    imports:   List[Locator],
+    standard:  List[Locator] = Scope.standard ):
 
-  def all: List[Designator] = enclosing + imports + standard
+  def all: List[Locator] = enclosing + imports + standard
 
   // Whether a designator's members may be named by their leaf in this scope, which is what
   // decides how a signature elides a qualifier. The imports resolve a reference but do not
   // elide: a page is rendered once and read under each reader's purview (Pyrocosm's), which
   // begins as these imports and is what elides them, so a signature writes them in full.
-  def has(designator: Designator): Boolean = (enclosing + standard).has(designator)
+  def has(designator: Locator): Boolean = (enclosing + standard).has(designator)
 
   // The same, of an entity's key.
   def names(key: Text): Boolean = (enclosing + standard).exists(Api.key(_) == key)
@@ -149,9 +149,7 @@ extends Linker:
   // term, or a member of a term. A type and its companion, one entity, answer to either; a
   // member of a package is not a member of a term, so a trait in a package is no term.
   private def suits(entity: Api.Entity, kind: Linker.Kind): Boolean =
-    val ofType: Boolean = entity.parent match
-      case Designator.Type(_, _) => true
-      case _                     => false
+    val ofType: Boolean = entity.parent.let(_.isType).or(false)
 
     kind match
       case Linker.Kind.Type =>
@@ -159,7 +157,7 @@ extends Linker:
 
       case Linker.Kind.Term =>
         val ofTerm: Boolean =
-          entity.parent.lay(false): (p: Designator) => api(Api.key(p)).let(!_.isPackage).or(false)
+          entity.parent.lay(false): (p: Locator) => api(Api.key(p)).let(!_.isPackage).or(false)
 
         !ofType && (entity.definition.present || ofTerm)
 
@@ -172,7 +170,7 @@ extends Linker:
   // `import a.b.*`, `import a.b.C` and `import a.b.{C, D as E}`: the package or object itself
   // for a wildcard, else the named members' parent (which is enough to resolve their leaves).
   def learn(imports: List[Text]): Unit =
-    val learned: List[Designator] = imports.bind: (line: Text) =>
+    val learned: List[Locator] = imports.bind: (line: Text) =>
       val body: Text = line.trim.skip(t"import ".length).trim
       val cleaned: Text = Text(body.s.replace("{", "").nn.replace("}", "").nn)
 
@@ -180,14 +178,14 @@ extends Linker:
         val path: Text = clause.trim.cut(t" ").head
         val segments: List[Text] = path.cut(t".").filter(_ != t"")
         val prefix: List[Text] = segments.keep(segments.size - 1)
-        if prefix.nil then Nil else List(Designator(prefix.join(t".")))
+        if prefix.nil then Nil else List(Locator(prefix.join(t".")))
 
     scope = scope.copy(imports = (scope.imports + learned).distinct)
 
   // The entity a designator written in prose names, through what its prefix forwards to and
   // what a type inherits, then through an exported alias to its target.
-  private def entity(designator: Designator): Optional[Api.Entity] =
-    api.resolve(designator).let: (found: Api.Entity) => found.alias.let(api.find).or(found)
+  private def entity(designator: Locator): Optional[Api.Entity] =
+    api.resolve(designator).let: (found: Api.Entity) => found.alias.let(Locator.of).let(api.find).or(found)
 
   // The keys of the packages and objects whose members are in scope, which an extension
   // declared in one of them is reached through.
@@ -201,7 +199,7 @@ extends Linker:
 
     def exported: Boolean =
       api.exporters.get(applicable.key).exists: (forwarders: List[Api.Entity]) =>
-        forwarders.exists(_.parent.lay(false) { (p: Designator) => keys.contains(Api.key(p)) })
+        forwarders.exists(_.parent.lay(false) { (p: Locator) => keys.contains(Api.key(p)) })
 
     api.implicitly(applicable) || applicable.importFrom.lay(false)(keys.contains(_)) || exported
 
@@ -224,23 +222,21 @@ extends Linker:
 
   // An extension named by its leaf alone (`.stdlib`): every one of the name which reaches some
   // receiver without an import, or which is declared in what is in scope.
-  private def bare(designator: Designator): List[Api.Entity] = designator match
-    case Designator.Top(name) =>
+  private def bare(designator: Locator): List[Api.Entity] =
+    if designator.parent.present then Nil else
       val keys: sci.Set[Text] = reachable
 
-      api.byName.getOrElse(name, Nil).filter: (entity: Api.Entity) =>
+      api.byName.getOrElse(designator.name, Nil).filter: (entity: Api.Entity) =>
         val extension: Boolean = entity.declarations.exists(_.kind == Api.Kind.Extension)
-        val inScope: Boolean = entity.parent.lay(false) { (p: Designator) => keys.contains(Api.key(p)) }
+
+        val inScope: Boolean =
+          entity.parent.lay(false) { (p: Locator) => keys.contains(Api.key(p)) }
+
         extension && (api.unimported.contains(entity.key) || inScope)
 
-    case _ =>
-      Nil
-
-  // A designator rebased under a prefix: its first segment becomes a child of the prefix.
-  private def under(prefix: Designator, designator: Designator): Designator = designator match
-    case Designator.Top(name)          => Designator.Term(prefix, name)
-    case Designator.Term(parent, name) => Designator.Term(under(prefix, parent), name)
-    case Designator.Type(parent, name) => Designator.Type(under(prefix, parent), name)
+  // A locator rebased under a prefix: its first segment becomes a child of the prefix.
+  private def under(prefix: Locator, designator: Locator): Locator =
+    designator.copy(parent = designator.parent.lay(prefix)(under(prefix, _)))
 
   // As written first, then under the enclosing entities (innermost first), then under the
   // imports, then the standard scope: the first tier which names anything decides, as a name
@@ -251,7 +247,7 @@ extends Linker:
   // A member of a type which no entity answers (`Angle#principal`) is sought among the
   // extensions which apply to the type; and last, a bare name is sought among the extensions
   // in reach (`.stdlib`), several of them on different receivers being an ambiguity.
-  private def candidates(designator: Designator, kind: Optional[Linker.Kind]): List[Api.Entity] =
+  private def candidates(designator: Locator, kind: Optional[Linker.Kind]): List[Api.Entity] =
     def fit(entities: List[Api.Entity]): List[Api.Entity] =
       kind.lay(entities): (kind: Linker.Kind) => entities.filter(suits(_, kind))
 
@@ -259,24 +255,24 @@ extends Linker:
     // a reference to it is written: so a `.` sigil, which says a term, admits none.
     val typeMember: Boolean = kind.lay(true)(_ == Linker.Kind.Type)
 
-    def lookup(designator: Designator): List[Api.Entity] =
+    def lookup(designator: Locator): List[Api.Entity] =
       val found: List[Api.Entity] = fit(entity(designator).let(List(_)).or(Nil))
 
       // A name after `#` is a member of the type before it.
       if !found.nil then found else designator.parent match
-        case parent@Designator.Type(_, _) if typeMember =>
+        case parent: Locator if parent.isType && typeMember =>
           entity(parent).lay(Nil: List[Api.Entity])(extensions(_, designator.name))
 
         case _ =>
           Nil
 
-    def tier(prefixes: List[Designator]): List[Api.Entity] =
-      prefixes.bind { (prefix: Designator) => lookup(under(prefix, designator)) }.distinct
+    def tier(prefixes: List[Locator]): List[Api.Entity] =
+      prefixes.bind { (prefix: Locator) => lookup(under(prefix, designator)) }.distinct
 
     // The standard imports shadow one another, a later one the earlier — `scala.Double`
     // shadows `java.lang.Double` — so each is a tier of its own, the last first.
     val standard: List[List[Api.Entity]] =
-      scope.standard.reverse.map { (prefix: Designator) => tier(List(prefix)) }
+      scope.standard.reverse.map { (prefix: Locator) => tier(List(prefix)) }
 
     // An extension is named by its leaf alone only where a sigil says the name is a term.
     val extension: List[Api.Entity] =
@@ -362,8 +358,8 @@ extends Linker:
     def foreign(other: Api): Resolver =
       val lead: Text = t"${other.format.id}/"
 
-      val imports: List[Designator] = scope.imports.map(_.qualified).filter(_.starts(lead)).map:
-        (name: Text) => Designator(name.skip(lead.length))
+      val imports: List[Locator] = scope.imports.map(_.qualified).filter(_.starts(lead)).map:
+        (name: Text) => Locator(name.skip(lead.length))
 
       Resolver(other, Scope(Nil, imports, other.format.standard(Nil)))
 
@@ -383,7 +379,7 @@ extends Linker:
 
     def here: Optional[Inline.Destination] =
       if !plausible then elsewhere else fenced(name, kind).or:
-        candidates(Designator(name), kind) match
+        candidates(Locator(name), kind) match
           case one :: Nil => destination(one)
           case Nil        => elsewhere
           case many =>

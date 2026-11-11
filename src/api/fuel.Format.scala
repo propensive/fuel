@@ -35,7 +35,6 @@ package fuel
 import soundness.{Format as _, Language as _, Token as _, *}
 
 import pyrocosm.{Block, Inline, Language, Token}
-import stenography.Designator
 
 // What an API is declared in — Scala, a TEL schema, a tool's commands — as far as documenting
 // it differs: entities of every format are documented by overlays and shown on pages of one
@@ -107,7 +106,11 @@ trait Format:
 
   def documentable(entity: Api.Entity): Boolean = !entity.isParameter
 
+  // Whether a top-level name has a type form as well as a term's, so that `a#b` and `a.b` are
+  // two members; where it has not, both name the one.
+  def typedRoots: Boolean = true
+
   // What an entity's references resolve through without an import, of what the project's
   // options say every Scala source sees: nothing, but for Scala.
-  def standard(configured: List[Designator]): List[Designator] = Nil
+  def standard(configured: List[Locator]): List[Locator] = Nil
   def decorate(api: Api): Api = api

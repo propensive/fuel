@@ -91,7 +91,7 @@ object Help:
       val entries: List[Entry] = apis.all.bind: (api: Api) =>
         api.entities.values.to(List).bind: (entity: Api.Entity) =>
           entity.doc.let(_.info).lay(Nil: List[Entry]): (info: Text) =>
-            val standard: List[Designator] = api.format.standard(Server.standard)
+            val standard: List[Locator] = api.format.standard(Server.standard)
             val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Nil), standard)
             val resolver: Resolver = Resolver(api, scope, Unset, apis)
             List(Entry(entity.address, Blocks.plain(Blocks.inline(info, resolver))))

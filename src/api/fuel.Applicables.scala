@@ -96,7 +96,7 @@ object Applicables:
     def importFrom: Optional[Text] =
       within.lay(entity.parent.let(Api.key(_))): (w: Provider) => w.entity.parent.let(Api.key(_))
 
-  private def keyOf(designator: Optional[Designator]): Optional[Text] = designator.let(Api.key(_))
+  private def keyOf(locator: Optional[Locator]): Optional[Text] = locator.let(Api.key(_))
 
   def decorate(api: Api): Api =
     val entities: scala.List[Api.Entity] = api.entities.values.toList

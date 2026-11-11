@@ -81,7 +81,7 @@ object Dashboard:
   private def render(entity: Api.Entity): List[Block] =
     Checking.exclusive:
       val api: Api = Server.apis.of(entity)
-      val standard: List[Designator] = api.format.standard(Server.standard)
+      val standard: List[Locator] = api.format.standard(Server.standard)
       val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Nil), standard)
       val resolver: Resolver = Resolver(api, scope, Unset, Server.apis)
 

@@ -38,7 +38,6 @@ import codepages.utf8Codepage
 import dysasymptotics.{linearAccess, linearSize}
 import pyrocosm.Tels
 import pyrocosm.{Block, Tone}
-import stenography.Designator
 
 // The documentation of an API, in Amok's `Flux` format: a TEL file per package (`base`), with
 // an `entry` per member — `.name` for a member of the term, `#Name` for a member of the type,
@@ -319,7 +318,7 @@ object Overlay:
       problems = Block.Diagnostic(tone, location, List(Block.paragraph(message))) :: problems
 
     def place(overlay: Overlay, parent: Api.Entity, entry: Entry): Unit =
-      val designator: Designator = if entry.isType then parent.tpe else parent.term
+      val designator: Locator = current.normal(if entry.isType then parent.tpe else parent.term)
       val key: Text = Api.key(designator, entry.name)
       val written: Text = t"${if entry.isType then t"#" else t"."}${entry.name}"
 
@@ -358,7 +357,7 @@ object Overlay:
 
     overlays.each: (overlay: Overlay) =>
       overlay.problems.each: (problem: Block) => problems = problem :: problems
-      val base: Designator = Designator(overlay.base)
+      val base: Locator = current.normal(Locator(overlay.base))
 
       current(Api.key(base)) match
         case entity: Api.Entity =>
@@ -402,9 +401,8 @@ object Overlay:
         val where: Text = entity.location.let(_.path).or(overlay.let(_.file).or(t""))
         val line: Int = entity.location.let(_.line).or(1)
 
-        val written: Text = entity.parent.lay(entity.name):
-          case Designator.Type(_, _) => t"#${entity.name}"
-          case _                     => t".${entity.name}"
+        val written: Text = entity.parent.lay(entity.name): (parent: Locator) =>
+          t"${parent.separator}${entity.name}"
 
         val parentKey: Text = entity.parent.let(Api.key(_)).or(t"")
         val file: Text = overlay.let(_.file).or(t"an overlay")
