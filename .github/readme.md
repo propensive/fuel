@@ -466,6 +466,10 @@ output dist/doc
 # Serve the documents from the daemon's start, behind the machine's Pyrocosm hub at
 # http://localhost:8090/fuel/; `port` would serve them on a port of their own as well.
 serve
+
+# Offer the API's documentation to other tools on this machine — Flame shows an entity's
+# `info` beside its completion — on `help-port` (8094 by default).
+help
 ```
 
 Each setting is also reachable as a flag (`--document doc`), a `fuel.`-prefixed system property
