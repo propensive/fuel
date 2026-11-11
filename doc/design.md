@@ -448,8 +448,9 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   (`Aligner`): MFA exists only as conda-forge packages, so fuel fetches micromamba (a static
   executable) into `~/.cache/fuel/mfa`, makes an environment with MFA 3.4 there and downloads
   the English models, once; alignments are cached by a digest of recording and transcript. The
-  format has a TEL schema,
-  `presentation` (`Presentation.schemaText`): a slide's `syntax <language>` holds its code (the
+  format has a TEL schema, `presentation`
+  (`src/core/resources/fuel/presentation.schema.tel`): a slide's `syntax <language>` holds its
+  code (the
   keyword `code` being its code beneath a preamble, as a frame's), and its `transcript` what
   is said while it is shown, from which `fuel transcript` makes the presentation's.
 
