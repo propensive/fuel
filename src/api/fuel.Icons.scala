@@ -152,7 +152,7 @@ object Icons:
   private val dot: Text = disc(1)
 
   // The keyword's drawing, before any modifier.
-  private def base(kind: Api.Kind): Drawing = kind match
+  private def base(kind: Api.Kind.Scala): Drawing = kind match
     case Api.Kind.Package =>
       // A cube, isometrically: a regular hexagon, with three edges meeting at its centre.
       val r: Double = 5.2
@@ -194,7 +194,7 @@ object Icons:
   // small gap from its lower right.
   private case class Fit(left: Double, right: Double, stopX: Double, stopY: Double)
 
-  private def fit(kind: Api.Kind): Fit = kind match
+  private def fit(kind: Api.Kind.Scala): Fit = kind match
     case Api.Kind.Package                          => Fit(2, 12, 10.35, 12.75)
     case Api.Kind.Object | Api.Kind.Class          => Fit(2, 12, 11.74, 11.74)
     case Api.Kind.CaseClass                        => Fit(2, 12, 11.74, 11.74)
@@ -210,7 +210,7 @@ object Icons:
 
   // The drawing with its modifiers: the shapes of their own first, then the transformations of
   // the whole, then what stands beside it, placed for the shape.
-  private def drawing(kind: Api.Kind, modifiers: List[Text]): Drawing =
+  private def drawing(kind: Api.Kind.Scala, modifiers: List[Text]): Drawing =
     def has(modifier: Text): Boolean = modifiers.has(modifier)
 
     val shaped: Drawing =
@@ -307,24 +307,9 @@ object Icons:
 
   // The glyph for a declaration, as an icon described by its keywords, its tooltip on the web.
   def of(declaration: Api.Declaration, exported: Boolean = false): Inline =
-    val drawn: Text = drawing(declaration.kind, declaration.modifiers).markup
-    Inline.Icon(drawn, keywords(declaration, exported))
+    Inline.Icon(markup(declaration.kind, declaration.modifiers), keywords(declaration, exported))
 
-  // The glyphs of a name: its type's and its term's, where it is both, or that of the one it is;
-  // apart, so that a terminal, which says each one's keywords, keeps them apart too.
-  def all(entity: Api.Entity, exported: Boolean = false): List[Inline] =
-    (entity.template, entity.definition) match
-      case (template: Api.Declaration, definition: Api.Declaration) =>
-        List(of(template, exported), Inline.Textual(t" "), of(definition, exported))
-
-      case (template: Api.Declaration, _) =>
-        List(of(template, exported))
-
-      case (_, definition: Api.Declaration) =>
-        List(of(definition, exported))
-
-      case _ =>
-        Nil
-
-  // The markup alone, for inspection.
-  def markup(kind: Api.Kind, modifiers: List[Text]): Text = drawing(kind, modifiers).markup
+  // The markup alone: of a Scala kind, these being Scala's glyphs; any other kind has none here.
+  def markup(kind: Api.Kind, modifiers: List[Text]): Text = kind match
+    case kind: Api.Kind.Scala => drawing(kind, modifiers).markup
+    case _                    => t""
