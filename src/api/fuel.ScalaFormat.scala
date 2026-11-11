@@ -50,13 +50,15 @@ object ScalaFormat extends Format:
   def language: Language = Language.Scala
   def noun: Text = t"package"
 
-  def glyph(declaration: Api.Declaration, exported: Boolean = false): Inline =
+  override def glyph(declaration: Api.Declaration, exported: Boolean = false): Inline =
     Icons.of(declaration, exported)
 
-  def signature(name: Text, declaration: Api.Declaration, api: Api, scope: Scope): Block =
+  override def signature(name: Text, declaration: Api.Declaration, api: Api, scope: Scope)
+  :   Block =
+
     Signatures.block(name, declaration, api, scope)
 
-  def cell(declaration: Api.Declaration, api: Api, scope: Scope): Inline =
+  override def cell(declaration: Api.Declaration, api: Api, scope: Scope): Inline =
     Signatures.cell(declaration, api, scope)
 
   // The packages, the types and the objects, not every method and value, which a page lists.
@@ -70,6 +72,7 @@ object ScalaFormat extends Format:
   override def documentable(entity: Api.Entity): Boolean =
     !entity.isPackage && !entity.isParameter && !entity.derived
 
+  override def standard(configured: List[Designator]): List[Designator] = configured
   override def decorate(api: Api): Api = Applicables.decorate(api)
 
   override def sections(page: ApiPages.Context): List[Block] =

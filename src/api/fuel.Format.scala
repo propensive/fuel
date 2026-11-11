@@ -32,9 +32,10 @@
                                                                                                   */
 package fuel
 
-import soundness.{Format as _, Language as _, *}
+import soundness.{Format as _, Language as _, Token as _, *}
 
-import pyrocosm.{Block, Inline, Language}
+import pyrocosm.{Block, Inline, Language, Token}
+import stenography.Designator
 
 // What an API is declared in — Scala, a TEL schema, a tool's commands — as far as documenting
 // it differs: entities of every format are documented by overlays and shown on pages of one
@@ -42,19 +43,45 @@ import pyrocosm.{Block, Inline, Language}
 // an address; its `title` heads its entities in the navigation; its `language` is what its
 // names and signatures are set as; its `noun` is what an overlay's `base` names, in a message.
 // It draws the glyph of a declaration, and writes its signature, whole (for the page) and
-// without its keyword and name (for a row's cell); it may give an entity's page sections of its
-// own, and others for what applies to the entity beyond what it declares; and it says which
-// entities are nodes of the navigation, which are cautioned when nothing documents them, and
-// what a whole model gains once it is assembled.
+// without its keyword and name (for a row's cell) — from the words the declaration keeps as
+// its `signature`, unless the format writes them its own way; it may give an entity's page
+// sections of its own, and others for what applies to the entity beyond what it declares; and
+// it says which entities are nodes of the navigation, which are cautioned when nothing
+// documents them, what resolves in it without an import, and what a whole model gains once it
+// is assembled.
 trait Format:
   def id: Text
   def title: Text
   def language: Language
   def noun: Text
 
-  def glyph(declaration: Api.Declaration, exported: Boolean = false): Inline
-  def signature(name: Text, declaration: Api.Declaration, api: Api, scope: Scope): Block
-  def cell(declaration: Api.Declaration, api: Api, scope: Scope): Inline
+  // A format without drawings of its own has an empty holder, described by the keyword.
+  def glyph(declaration: Api.Declaration, exported: Boolean = false): Inline =
+    Inline.Icon(t"", declaration.kind.keyword)
+
+  def signature(name: Text, declaration: Api.Declaration, api: Api, scope: Scope): Block =
+    val accent: Token.Accent =
+      if declaration.kind.isType then Token.Accent.Typal else Token.Accent.Term
+
+    val space: Token = Token.plain(t" ")
+    val words: Optional[Api.Signature] = declaration.signature
+    val tail: List[Token] = ApiPages.phrases(api, words.let(_.tail).or(Nil))
+
+    val head: List[Token] =
+      List
+        ( Token(declaration.kind.keyword, Token.Accent.Keyword),
+          space,
+          Token(name, accent, Token.Role.Binding) )
+
+    val first: List[Token] = if tail.nil then head else head + List(space) + tail
+
+    val body: List[Block.Line] = words.let(_.body).or(Nil).map: (line: List[Api.Phrase]) =>
+      Block.Line(Token.plain(t"  ") :: ApiPages.phrases(api, line))
+
+    Block.Code(language, Block.Line(first) :: body)
+
+  def cell(declaration: Api.Declaration, api: Api, scope: Scope): Inline =
+    Inline.Snippet(language, ApiPages.phrases(api, declaration.signature.let(_.tail).or(Nil)))
 
   // The glyphs of a name: its type's and its term's, where it is both, or that of the one it is;
   // apart, so that a terminal, which says each one's keywords, keeps them apart too.
@@ -79,4 +106,8 @@ trait Format:
   def branch(entity: Api.Entity): Boolean = !entity.isParameter && !entity.members.nil
 
   def documentable(entity: Api.Entity): Boolean = !entity.isParameter
+
+  // What an entity's references resolve through without an import, of what the project's
+  // options say every Scala source sees: nothing, but for Scala.
+  def standard(configured: List[Designator]): List[Designator] = Nil
   def decorate(api: Api): Api = api

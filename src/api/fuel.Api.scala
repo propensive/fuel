@@ -124,9 +124,25 @@ object Api:
       accepts:     List[Shape]      = Nil,
       parentShapes: List[Shape]     = Nil,
       derives:     List[Syntax]     = Nil,
-      uses:        List[Syntax]     = Nil ):
+      uses:        List[Syntax]     = Nil,
+      // What follows the keyword and the name, for a format whose signatures are words.
+      signature:   Optional[Signature] = Unset ):
 
     def written: List[Text] = modifiers.filter { m => m != t"java" && m != t"annotation" }
+
+  // A word of a signature, for a format which writes one as words rather than as Scala's
+  // syntax: its text, what it is (which is how it is coloured), and the key of the entity, in
+  // the same API, which it names, where it names one.
+  case class Phrase
+    ( text: Text, role: Phrase.Role = Phrase.Role.Plain, target: Optional[Text] = Unset )
+
+  object Phrase:
+    enum Role:
+      case Keyword, Modifier, Type, Term, Literal, Symbol, Plain
+
+  // A declaration's signature as words: the `tail` which follows its keyword and its name on
+  // their line (`String optional`, after `field title`), and the lines of its `body` beneath.
+  case class Signature(tail: List[Phrase] = Nil, body: List[List[Phrase]] = Nil)
 
   // An extension method applicable to an entity, as `Applicables` finds it: the `key` of the
   // extension and the `index` of the declaration among the entity's (an overloaded name's
@@ -185,11 +201,17 @@ object Api:
       alias:      Optional[Designator]  = Unset,
       bases:      List[Text]            = Nil,
       extensions: List[Applicable]      = Nil,
-      givens:     List[Text]            = Nil ):
+      givens:     List[Text]            = Nil,
+      // The `id` of the format it is declared in.
+      format:     Text                  = t"scala" ):
 
     def key: Text = Api.key(parent, name)
     def path: Text = Api.path(parent, name)
-    def url: Text = t"/api/$path"
+
+    // The entity among those of every format: its key, after its format's `id` and a `/` unless
+    // it is Scala's — as its page's URL is its path after them.
+    def address: Text = t"${Api.prefix(format)}$key"
+    def url: Text = t"/api/${Api.prefix(format)}$path"
 
     // The designator of this entity as a term, and as a type: a member's parent is one or the
     // other.
@@ -217,6 +239,11 @@ object Api:
 
     // A parameter, which its parent's page lists apart from its members.
     def isParameter: Boolean = !declarations.nil && declarations.all(_.kind.isParameter)
+
+  // What precedes an entity's key in its address, and its path in its URL: nothing for Scala's,
+  // whose addresses are their keys, and for any other format its `id` and a `/`, which no path
+  // holds (a name's `/` is encoded) and no package's key begins with.
+  def prefix(format: Text): Text = if format == t"scala" then t"" else t"$format/"
 
   // The key of an entity: its parent's qualified name, the separator its parent's kind gives
   // (`#` after a type, `.` after a term or a package), and its name.

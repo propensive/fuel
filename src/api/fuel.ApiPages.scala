@@ -58,6 +58,26 @@ object ApiPages:
   def code(api: Api, tokens: List[Token]): Inline.Snippet =
     Inline.Snippet(api.format.language, tokens)
 
+  // A signature's words as tokens, a space between each and the next: each in the accent of
+  // what it is, and linked to the page of the entity it names, where there is one.
+  def phrases(api: Api, phrases: List[Api.Phrase]): List[Token] =
+    val tokens: List[Token] = phrases.map: (phrase: Api.Phrase) =>
+      val accent: Token.Accent = phrase.role match
+        case Api.Phrase.Role.Keyword  => Token.Accent.Keyword
+        case Api.Phrase.Role.Modifier => Token.Accent.Modifier
+        case Api.Phrase.Role.Type     => Token.Accent.Typal
+        case Api.Phrase.Role.Term     => Token.Accent.Term
+        case Api.Phrase.Role.Literal  => Token.Accent.String
+        case Api.Phrase.Role.Symbol   => Token.Accent.Symbol
+        case Api.Phrase.Role.Plain    => Token.Accent.Unparsed
+
+      val link: Optional[Inline.Destination] =
+        phrase.target.let(api(_)).let: (e: Api.Entity) => Inline.Destination.Local(e.url)
+
+      Token(phrase.text, accent, Unset, link)
+
+    tokens.flatMap(List(Token.plain(t" "), _)).skip(1)
+
   // What a format is given to make an entity's sections from: the entity and its API, how
   // references in it resolve, and its members — those which are parameters, listed apart, and
   // the others.
