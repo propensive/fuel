@@ -174,8 +174,9 @@ object ApiPages:
 
     // An export's signature is what it exports, linked; any other's its clauses and result.
     val signature: List[Inline] =
-      member.alias.lay(List(api.format.cell(d, api, scope))): (target: stenography.Designator) =>
-        List(code(api, Signatures.designator(target, api, scope)))
+      member.alias.lay(List(api.format.cell(d, api, scope))):
+        (target: stenography.Designator) =>
+          List(code(api, Signatures.designator(target, api, scope)))
 
     val info: List[Inline] = member.doc.let(_.info).let(Blocks.inline(_, resolver)).or(Nil)
     val tone: Optional[Tone] = if member.removed then Tone.Muted else Unset
@@ -223,6 +224,12 @@ object ApiPages:
   def search(api: Api, text: Text, outcome: Search.Outcome, resolver: Resolver, scope: Scope)
   :   List[Block] =
 
+    search(Apis.of(api), text, outcome, resolver, scope)
+
+  // The same, of a search of every format's API: each hit's row is its own format's.
+  def search(apis: Apis, text: Text, outcome: Search.Outcome, resolver: Resolver, scope: Scope)
+  :   List[Block] =
+
     val count: Int = outcome.hits.size
     val drawn: List[Search.Hit] = List.from(outcome.hits.stdlib.take(shown))
 
@@ -241,6 +248,7 @@ object ApiPages:
       Block.Notice(Tone.Warning, Unset, List(Block.paragraph(notice)))
 
     val rows: List[Block.Row] = drawn.map: (hit: Search.Hit) =>
+      val api: Api = apis.of(hit.entity)
       row(hit.entity, hit.declaration, false, api, scope, resolver, qualified = true)
 
     // The glossary's terms the query names, before the declarations: each a link to its entry,

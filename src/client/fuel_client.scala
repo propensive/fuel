@@ -38,7 +38,7 @@ import scala.caps
 import scala.collection.immutable as sci
 
 // Excluded from the umbrella: `Compilation`, anthology's, which would outrank fuel's own.
-import soundness.{Compilation as _, Query as _, *}
+import soundness.{Format as _, Compilation as _, Query as _, *}
 
 import dysasymptotics.linearSize
 import interpreters.posixInterpreter
@@ -119,6 +119,9 @@ object ui:
 
   val Overlay =
     Setting[Text](t"overlay", t"a directory of TEL overlays, the API's documentation")
+
+  val Schema =
+    Setting[Text](t"schema", t"a TEL schema, documented as an API is, at `/api/tels/<name>`")
 
   val Imports =
     Setting[Text]
@@ -487,8 +490,11 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
     // version, the classpath, the project's sources, the compiler's options, whether documents
     // are sessions and fragments checked, the imports references resolve through, and which
     // entities the API has, which decides what links.
-    def environment(sources: Text, api: Api): Text =
-      val entities: Text = Digests.of(List.from(api.entities.keys.toList.sortBy(_.s)).join(t"\n"))
+    def environment(sources: Text, apis: Apis): Text =
+      val addresses: scala.List[Text] =
+        apis.all.stdlib.toList.flatMap(_.entities.values.map(_.address)).sortBy(_.s)
+
+      val entities: Text = Digests.of(List.from(addresses).join(t"\n"))
       val mode: Text = if config.session then t"session" else t"single"
       val checking: Text = if checked then t"checked" else t"tokenized"
 
@@ -513,27 +519,28 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
     // The API first, since the documents link to it: the sources compiled and saved, their
     // output and the dependencies walked, the overlays merged, and the pages of the project's
     // own entities rendered with their examples compiled.
-    val outcome: Optional[(Corpus, Api, sci.Map[Text, List[Block]], Text)] =
+    val outcome: Optional[(Corpus, Apis, sci.Map[Text, List[Block]], Text)] =
       if !checked then Unset else
         try Checking.session(config.classpath, config.options): (checker: Checker) =>
-          val (api, sources) = model(config, checker, progress)
-          val key: Text = environment(sources, api)
+          val (apis, sources) = model(config, checker, progress)
+          val api: Api = apis.primary
+          val key: Text = environment(sources, apis)
           val standard: List[Locator] = Scope.standardOf(config.options)
 
           val pages: sci.Map[Text, List[Block]] =
-            rendered(api, checker, store, key, progress, standard)
+            rendered(apis, checker, store, key, progress, standard)
 
           val scope: Scope = Scope.document(config.imports, standard)
 
           val linker: (Text, Text) -> Linker =
-            (section: Text, path: Text) => Resolver(api, scope, Doc.url(section, path))
+            (section: Text, path: Text) => Resolver(api, scope, Doc.url(section, path), apis)
 
-          (Compilation.corpus(config.documents, checker, regime(key, linker)), api, pages, key)
+          (Compilation.corpus(config.documents, checker, regime(key, linker)), apis, pages, key)
         catch case error: Throwable =>
           progress.report(failed(t"The fragments could not be compiled", error))
           Unset
 
-    val unchecked: Text = environment(t"", Api.empty)
+    val unchecked: Text = environment(t"", Apis.empty)
 
     val unlinked: (Text, Text) -> Linker = (_: Text, _: Text) => Linker.none
 
@@ -544,10 +551,11 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
           progress.report(failed(t"The documents could not be highlighted", error))
           Corpus(Nil)
 
-    val api: Api = outcome.let(_(1)).or(Api.empty)
+    val apis: Apis = outcome.let(_(1)).or(Apis.of(Api.empty))
+    val api: Api = apis.primary
 
     // Every link, now that every target is known.
-    val links: List[Block] = Links.check(corpus, api, glossary, config.checkLinks)
+    val links: List[Block] = Links.check(corpus, apis, glossary, config.checkLinks)
     progress.reports(links)
     progress.finish(Phase.Links)
 
@@ -555,11 +563,11 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
       if glossary.terms.nil then Nil
       else
         val scope: Scope = Scope.document(config.imports, Scope.standardOf(config.options))
-        glossary.page(Resolver(api, scope, t"/glossary"))
+        glossary.page(Resolver(api, scope, t"/glossary", apis))
 
     Server.publish
       ( corpus, api, outcome.let(_(2)).or(sci.Map()), config.imports, glossaryPage,
-        Scope.standardOf(config.options), glossary )
+        Scope.standardOf(config.options), glossary, apis.others )
 
     fuel.Help.announce()
 
@@ -627,7 +635,7 @@ private def glossaries(config: Workspace.Config): (Glossary, List[Block]) =
 // compiled as a document's are — with every problem found on the way.
 private def model(config: Workspace.Config, checker: Checker, progress: Progress)
   ( using Stdio, Environment )
-:   (Api, Text) =
+:   (Apis, Text) =
 
   import Progress.Phase
 
@@ -763,28 +771,66 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
               report(diagnostic)
               Nil
 
-  val (merged, merging) =
-    if overlays.nil then (inspected, Nil: List[Block]) else Overlay.merge(inspected, overlays)
+  // Each overlay documents the API of its format: Scala's, unless it says.
+  def overlaysOf(format: Format): List[Overlay] = overlays.filter(_.format == format.id)
+  val formats: List[Format] = List(ScalaFormat, TelsFormat)
 
-  merging.each(report)
+  overlays.filter { (overlay: Overlay) => !formats.exists(_.id == overlay.format) }.each:
+    (overlay: Overlay) =>
+      val known: Text = formats.map { (format: Format) => t"`${format.id}`" }.join(t", ", t" or ")
+      val text: Text = t"`${overlay.format}` is not a format an overlay documents: $known."
+      val location: Block.Location = Block.Location(overlay.file, 1)
+      report(Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(text))))
+
+  def documented(api: Api): Api =
+    val these: List[Overlay] = overlaysOf(api.format)
+
+    if these.nil then api else
+      val (merged, merging) = Overlay.merge(api, these)
+      merging.each(report)
+      merged
 
   // What applies to each type beyond its members, over the whole model.
-  val api: Api = Applicables.decorate(merged)
+  val api: Api = ScalaFormat.decorate(documented(inspected))
+
+  // The schemas: each read from its file, those which are sound together one API.
+  val schemaTexts: List[(Text, Text)] = config.schemas.bind: (file: Text) =>
+    def unreadable: List[(Text, Text)] =
+      report(Compilation.unreadable(file))
+      Nil
+
+    readText(file).lay(unreadable): (text: Text) => List((file, text))
+
+  val read: List[Api] = schemaTexts.bind: (file: Text, text: Text) =>
+    val (schema, problems) = TelsFormat.read(file, text)
+    problems.each(report)
+    schema.let(List(_)).or(Nil)
+
+  val (combined, clashes) = TelsFormat.combine(read)
+
+  clashes.each: (name: Text) =>
+    val text: Text = t"The schema `$name` is declared by more than one of the configured files."
+    report(Block.Diagnostic(Tone.Failure, Unset, List(Block.paragraph(text))))
+
+  val schemas: Api = TelsFormat.decorate(documented(combined))
   progress.finish(Phase.Overlays)
 
   if !overlays.nil then Out.println(t"fuel: ${overlays.size.show} overlays")
+  if !read.nil then Out.println(t"fuel: ${read.size.show} schemas")
 
-  // The sources, as one hash: their paths and their texts.
-  val hashed: Text = Digests.of(sources.bind { (path: Text, text: Text) => List(path, text) }*)
+  // The sources and the schemas, as one hash: their paths and their texts.
+  val hashed: Text =
+    Digests.of((sources + schemaTexts).bind { (path: Text, text: Text) => List(path, text) }*)
 
-  (api, hashed)
+  val others: List[Api] = if schemas.entities.isEmpty then Nil else List(schemas)
+  (Apis(api :: others), hashed)
 
 // The pages of the project's own entities, each rendered — its examples compiled as a
 // document's are, its references resolved in its own scope — unless the output keeps it under
 // the key of its inputs: everything the compile depends on (`environment`), the entity, and the
 // members its page lists. Their problems are kept with them.
 private def rendered
-  ( api:         Api,
+  ( apis:        Apis,
     checker:     Checker,
     store:       Optional[Store],
     environment: Text,
@@ -793,8 +839,10 @@ private def rendered
 :   sci.Map[Text, List[Block]] =
 
   def render(entity: Api.Entity): (List[Block], List[Block]) =
-    val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Nil), standard)
-    val resolver: Resolver = Resolver(api, scope)
+    val api: Api = apis.of(entity)
+    val imports: List[Text] = entity.doc.let(_.imports).or(Nil)
+    val scope: Scope = Scope.of(entity, imports, api.format.standard(standard))
+    val resolver: Resolver = Resolver(api, scope, Unset, apis)
     val place: Text = entity.doc.let(_.file).or(entity.key)
     val scala: Embedding.ScalaCode = Embedding.ScalaCode(checker, place, false, Unset, resolver)
     val tables: Tables = Tables(place, resolver)
@@ -808,19 +856,23 @@ private def rendered
 
     (blocks, scala.problems + tables.problems + ambiguous)
 
-  val own: scala.List[Api.Entity] = api.entities.values.filter(_.own).toList.sortBy(_.key.s)
+  // Every format's own entities, Scala's first, each kept by its address.
+  val own: scala.List[Api.Entity] = apis.all.stdlib.toList.flatMap: (api: Api) =>
+    api.entities.values.filter(_.own).toList.sortBy(_.key.s)
+
   progress.plan(Progress.Phase.Pages, own.size)
 
   val pages: scala.List[(Text, List[Block])] = own.map: (entity: Api.Entity) =>
     val (blocks, raised) = store.lay(render(entity)): (store: Store) =>
-      val members: Text = api.children(entity).map(_.toString.tt).join(t"\n")
+      val members: Text = apis.of(entity).children(entity).map(_.toString.tt).join(t"\n")
       val key: Text = Digests.of(environment, t"page", entity.toString.tt, members)
-      val page: Output.Page = store.page(key, entity.key, entity.path)(render(entity))
+      val path: Text = t"${Api.prefix(entity.format)}${entity.path}"
+      val page: Output.Page = store.page(key, entity.address, path)(render(entity))
       (page.blocks, page.problems)
 
     progress.reports(raised)
     progress.step(Progress.Phase.Pages)
-    (entity.key, blocks)
+    (entity.address, blocks)
 
   sci.Map.from(pages)
 
@@ -903,19 +955,19 @@ private def searchApi(text: Text)(using Stdio): Exit | Tool.UsageError.type =
     Out.println(t"fuel: usage: fuel search <query>")
     Tool.UsageError
   else
-    Query.read(text) match
+    val apis: Apis = Server.apis
+
+    Query.read(text, apis.vocabulary) match
       case error: Query.Error =>
         Out.println(t"fuel: ${error.message.text} (at ${error.offset.toString.tt})")
         Tool.UsageError
 
       case query: Query =>
-        val api: Api = Server.api
-
-        if api.entities.isEmpty then
+        if apis.isEmpty then
           Out.println(t"fuel: no API has been compiled; run fuel compile in a project")
           Exit.Ok
         else
-          val outcome: Search.Outcome = api.search(query, Server.terms)
+          val outcome: Search.Outcome = apis.search(query, Server.terms)
           val scope: Scope = Scope.document(Server.imports, Server.standard)
           outcome.notices.each: (notice: Text) => Out.println(t"fuel: $notice")
 
@@ -923,9 +975,20 @@ private def searchApi(text: Text)(using Stdio): Exit | Tool.UsageError.type =
             Out.println(t"${term.name}  /glossary#${term.slug}")
 
           outcome.hits.each: (hit: Search.Hit) =>
-            Out.println(t"${hit.entity.key}  ${hit.entity.url}")
-            val tokens = Signatures.declaration(hit.entity.name, hit.declaration, api, scope)
-            Out.println(t"    ${tokens.map(_.text).join}")
+            val api: Api = apis.of(hit.entity)
+            Out.println(t"${hit.entity.address}  ${hit.entity.url}")
+
+            // Scala's declaration on one line; another format's as its signature's first line.
+            val written: Text =
+              if api.format == ScalaFormat then
+                Signatures.declaration(hit.entity.name, hit.declaration, api, scope)
+                . map(_.text)
+                . join
+              else api.format.signature(hit.entity.name, hit.declaration, api, scope) match
+                case Block.Code(_, line :: _, _, _, _, _, _, _) => line.tokens.map(_.text).join
+                case _                                         => hit.entity.name
+
+            Out.println(t"    $written")
 
           Out.println(t"fuel: ${outcome.hits.size.toString.tt} results")
           Exit.Ok

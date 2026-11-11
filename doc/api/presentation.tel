@@ -1,0 +1,86 @@
+tel 1.0
+
+format tels
+base presentation
+
+info   the format of a presentation, which `fuel present` shows
+detail
+    A presentation is a TEL document: a `#title`, and a `#slide` for each of its slides, which
+    holds Markdown or a block of code (`.Part`) and perhaps a transcript of what is said while
+    it is shown. A slide's code (`.Code`) says what a fence's preamble says: its marks, how far
+    it is compiled, and the frames of its animation.
+
+entry #title   the presentation's title
+entry #slide   one slide, in the order they are shown
+
+entry .Slide
+  entry #transcript   what is said while the slide is shown, from which `fuel transcript` makes the presentation's
+
+entry .Part
+  entry #markdown   Markdown, set as a document's is
+  entry #syntax     a block of code, in the language it names
+
+entry .Code
+  entry #language     the language the code is highlighted as, on the line of `syntax`
+  entry #code         the code itself, where the block says more than its code
+  entry #label        Markdown phrasing which names the block as a frame of an animation
+  entry #hold         the seconds the frame rests when the animation is played
+  entry #at           the frame's time on the page's clock, in seconds
+  entry #context      how the fragment is wrapped to compile: `top`, `term` or `type`
+  entry #id           a name another fragment may follow
+  entry #follows      a fragment whose text precedes this one when it compiles
+  entry #errors       what an error means: `fail`, `show` or `ignore`
+  entry #parse        the compiler goes no further than parsing the code
+  entry #typecheck    the compiler typechecks the code, which is what it does unless told
+  entry #compile      the compiler takes the code through every phase
+  entry #autoplay     the animation plays when it is shown
+  entry #loop         the animation starts again at its end
+  entry #restart      a fresh session begins at this code
+  entry #run          the code is compiled and run, and what it prints is shown beneath it
+  entry #feature      a language import, from this code on
+  entry #path         the file the code is the content of, named above it
+  entry #highlight    a range of the code to mark, and its caption
+  entry #error        a range marked as an error
+  entry #caution      a range marked as a caution
+  entry #param        a range marked as a parameter
+  entry #focus        a range which fades everything else in the block
+  entry #substitute   a range shown as other text, once the code has compiled
+  entry #frame        a frame of an animation
+  entry #alternative  a version of the code, shown under a tab
+
+entry .Mark
+  entry #selection    the range, by its first and last characters (`Mi..es`) or literally
+  entry #caption      what is said of the range, after it on the line or beneath it
+  entry #line         the line of the code to look on, when the range occurs more than once
+  entry #occurrence   which occurrence on that line is meant
+
+entry .Substitution
+  entry #selection    the range, by its first and last characters or literally
+  entry #text         what is shown in place of the range, in italics
+  entry #line         the line of the code to look on, when the range occurs more than once
+  entry #occurrence   which occurrence on that line is meant
+
+entry .Frame
+  entry #code         the frame's code, which may be on its line
+  entry #label        Markdown phrasing which names the frame
+  entry #hold         the seconds the frame rests when the animation is played
+  entry #at           the frame's time on the page's clock, in seconds
+  entry #language     the frame's own language, where it is not the block's
+  entry #highlight    a range of the code to mark, and its caption
+  entry #error        a range marked as an error
+  entry #caution      a range marked as a caution
+  entry #param        a range marked as a parameter
+  entry #focus        a range which fades everything else in the block
+  entry #substitute   a range shown as other text, once the code has compiled
+
+entry .Alternative
+  entry #label        the name on the version's tab
+  entry #code         the version's code
+  entry #language     the version's own language, where it is not the block's
+  entry #highlight    a range of the code to mark, and its caption
+  entry #error        a range marked as an error
+  entry #caution      a range marked as a caution
+  entry #param        a range marked as a parameter
+  entry #focus        a range which fades everything else in the block
+  entry #substitute   a range shown as other text, once the code has compiled
+  entry #frame        a frame of the version's animation

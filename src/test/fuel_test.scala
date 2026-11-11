@@ -3344,8 +3344,8 @@ entry .nowhere   nothing of the sort
 
       val formatFailures: List[Text] =
         List
-          ( t"2: `domain` is not part of an overlay: An overlay may hold `base`, `import`, " +
-            t"`info`, `detail`, `refer`, `hidden`, `until`, `entry`, `keyword`.",
+          ( t"2: `domain` is not part of an overlay: An overlay may hold `format`, `base`, " +
+            t"`import`, `info`, `detail`, `refer`, `hidden`, `until`, `entry`, `keyword`.",
             t"4: `info` is given more than once here.",
             t"6: This entry's info is already given on its line.",
             t"7: `detial` is not part of an overlay: An entry may hold `import`, `info`, " +
@@ -4412,6 +4412,221 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
       . assert: result =>
           val info: Text = t"compiles the documents, as fuel.compile.force insists"
           result == List((t"toy/fuel.compile", info))
+
+    // A TEL schema, documented as an API is.
+    suite(m"Schemas"):
+      val text: Text = t"""tel 1.0
+
+name contact
+
+scalar Email
+  description  An address, as it is written.
+  pattern .+@.+
+
+select Channel
+  variant phone String
+  variant email Email
+    description
+        Where mail is sent. It is checked.
+
+record Person
+  description
+      Someone to write to. They have a name, and the ways
+      they are reached.
+  field name String key
+  field nickname String optional
+  select Channel optional repeatable
+
+document
+  field title String optional
+  field person Person optional repeatable
+"""
+
+      val (read, problems) = TelsFormat.read(t"contact.tel", text)
+      val api: Api = read.or(Api.empty)
+      val apis: Apis = Apis(List(Api.empty, api))
+
+      def path(destination: Optional[Inline.Destination]): Optional[Text] = destination.let:
+        case Inline.Destination.Local(path, _) => path
+        case _                                 => Unset
+
+      def lines(blocks: List[Block]): List[Optional[Int]] = blocks.map:
+        case Block.Diagnostic(_, location, _, _, _) => location.let(_.line)
+        case _                                      => Unset
+
+      test(m"a schema's definitions, their members and its document's fields are its entities"):
+        (problems.size, List.from(api.entities.keys.toList.sortBy(_.s)))
+
+      . assert: result =>
+          result ==
+            ( 0,
+              List
+                ( t"contact", t"contact#person", t"contact#title", t"contact.Channel",
+                  t"contact.Channel#email", t"contact.Channel#phone", t"contact.Email",
+                  t"contact.Person", t"contact.Person#name", t"contact.Person#nickname" ) )
+
+      test(m"members keep the order the schema declares them in, records first"):
+        ( api(t"contact").let(_.members).or(Nil), api(t"contact.Person").let(_.members).or(Nil) )
+
+      . assert: result =>
+          result ==
+            ( List
+                ( t"contact.Person", t"contact.Channel", t"contact.Email", t"contact#title",
+                  t"contact#person" ),
+              List(t"contact.Person#name", t"contact.Person#nickname") )
+
+      test(m"an entity's page is beneath its format, a document's field after `~`"):
+        ( api(t"contact.Person#name").let(_.url), api(t"contact#title").let(_.url),
+          apis.locate(t"tels/contact~title").let(_.address),
+          api(t"contact.Person").let(_.location).let(_.line),
+          api(t"contact.Channel#email").let(_.location).let(_.line) )
+
+      . assert: result =>
+          result ==
+            ( t"/api/tels/contact.Person~name", t"/api/tels/contact~title",
+              t"tels/contact#title", 15, 11 )
+
+      test(m"a description is its first sentence, and the whole where it says more"):
+        def said(key: Text): (Optional[Text], Boolean) =
+          (api(key).let(_.doc).let(_.info), api(key).let(_.doc).let(_.detail).present)
+
+        (said(t"contact.Person"), said(t"contact.Email"), said(t"contact.Channel#email"),
+          said(t"contact.Person#name"))
+
+      . assert: result =>
+          result ==
+            ( (t"Someone to write to.", true), (t"An address, as it is written.", false),
+              (t"Where mail is sent.", true), (Unset, false) )
+
+      val overlayText: Text = t"""format tels
+base contact
+info the people to write to
+
+entry .Person  who to write to
+  entry #name
+      Their *whole* name.
+entry .Channel
+"""
+
+      val (merged, merging) = Overlay.read(t"contact-api.tel", overlayText) match
+        case overlay: Overlay => Overlay.merge(api, List(overlay))
+        case _                => (api, List(Block.paragraph(t"the overlay was not read")))
+
+      test(m"an overlay says its format, and what it says is over the description"):
+        val format: Optional[Text] = Overlay.read(t"contact-api.tel", overlayText) match
+          case overlay: Overlay => overlay.format
+          case _                => Unset
+
+        val person: Optional[Api.Entry] = merged(t"contact.Person").let(_.doc)
+
+        ( format, merged(t"contact").let(_.doc).let(_.info), person.let(_.info),
+          person.let(_.detail).let(_.starts(t"Someone to write to.")),
+          merged(t"contact.Person#name").let(_.doc).let(_.detail) )
+
+      . assert: result =>
+          result ==
+            ( t"tels", t"the people to write to", t"who to write to", true,
+              t"Their *whole* name." )
+
+      test(m"a member is cautioned only when neither an overlay nor a description documents it"):
+        val cautioned: List[Text] = merging.bind:
+          case Block.Diagnostic(Tone.Warning, _, message, _, _) =>
+            List(Blocks.plain(message.bind { case Block.Paragraph(content) => content; case _ => Nil }))
+
+          case _ =>
+            Nil
+
+        val names: List[Text] =
+          List(t"contact#person", t"contact#title", t"contact.Channel#phone", t"contact.Person#nickname")
+
+        (merging.size, names.map { (name: Text) => cautioned.exists(_.contains(name)) })
+
+      . assert(_ == (4, List(true, true, true, true)))
+
+      test(m"a record says its select's variants, and a sigil names a member on its page"):
+        val person: Api.Entity = api(t"contact.Person").or(Api.Entity(Unset, t"none"))
+        val resolver: Resolver = Resolver(api, Scope.of(person, Nil, Nil))
+
+        ( path(resolver.link(t"contact.Person#phone")), path(resolver.link(t"#name")),
+          path(resolver.link(t"Channel")) )
+
+      . assert: result =>
+          result ==
+            ( t"/api/tels/contact.Channel~phone", t"/api/tels/contact.Person~name",
+              t"/api/tels/contact.Channel" )
+
+      test(m"a Markdown document names a schema's entity by its address, or through an import"):
+        val scala: Api = Api.empty
+        val both: Apis = Apis(List(scala, api))
+
+        ( path(Resolver(scala, Scope.document(Nil), Unset, both).link(t"tels/contact.Person#name")),
+          path(Resolver(scala, Scope.document(List(t"tels/contact")), Unset, both).link(t"Person")) )
+
+      . assert(_ == (t"/api/tels/contact.Person~name", t"/api/tels/contact.Person"))
+
+      test(m"a keyword the schema of schemas does not have is a fault at its line"):
+        val (none, faults) = TelsFormat.read(t"bad.tel", text.sub(t"select Channel", t"choose Channel"))
+        (none.absent, lines(faults).head)
+
+      . assert(_ == (true, 9))
+
+      test(m"a schema which breaks the rules of every schema contributes nothing"):
+        val twice: Text = text.sub(t"select Channel", t"select Person")
+        val (none, faults) = TelsFormat.read(t"bad.tel", twice)
+        (none.absent, faults.size)
+
+      . assert(_ == (true, 1))
+
+      test(m"a search knows a schema's words: a kind, a modifier, and what a field holds"):
+        def keys(text: Text): List[Text] = Query.read(text, TelsFormat.vocabulary) match
+          case query: Query =>
+            List.from(api.search(query).hits.map(_.entity.key).stdlib.toList.sortBy(_.s))
+
+          case _            => Nil
+
+        (keys(t"record"), keys(t"optional field"), keys(t"+Person"), keys(t"nickname"))
+
+      . assert: result =>
+          result ==
+            ( List(t"contact.Person"),
+              List(t"contact#person", t"contact#title", t"contact.Person#nickname"),
+              List(t"contact#person"),
+              List(t"contact.Person#nickname") )
+
+      test(m"a record's page is its signature, with its selects, and a row for each field"):
+        val person: Api.Entity = api(t"contact.Person").or(Api.Entity(Unset, t"none"))
+        val scope: Scope = Scope.of(person, Nil, Nil)
+        val page: List[Block] = ApiPages.page(api, person, Resolver(api, scope), scope, Nil)
+
+        val code: List[Text] = page.bind:
+          case Block.Code(_, lines, _, _, _, _, _, _) => lines.map(_.tokens.map(_.text).join)
+          case _                                      => Nil
+
+        val rows: List[(Optional[Text], Text)] = page.bind:
+          case Block.Table(_, rows, _) =>
+            rows.map: (row: Block.Row) =>
+              (row.id, Blocks.plain(row.cells.stdlib.last.content))
+
+          case _ =>
+            Nil
+
+        (code, rows)
+
+      . assert: result =>
+          result ==
+            ( List(t"record Person", t"  select Channel optional repeatable"),
+              List((t"name", t"String key"), (t"nickname", t"String optional")) )
+
+      test(m"fuel's own presentation schema is read, with what it says of its definitions"):
+        val (own, faults) = TelsFormat.read(Presentation.schemaResource, Presentation.schemaSource)
+        val schema: Api = own.or(Api.empty)
+
+        ( faults.size, schema(t"presentation.Slide#transcript").present,
+          schema(t"presentation.Slide").let(_.bases),
+          schema(t"presentation.Code").let(_.doc).let(_.info).let(_.starts(t"A slide's code")),
+          schema(t"presentation.Slide#syntax").absent )
+
+      . assert(_ == (0, true, List(t"presentation.Part"), true, true))
 
     suite(m"Help"):
       val documented: Api.Entity =
