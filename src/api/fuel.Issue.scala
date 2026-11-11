@@ -116,11 +116,15 @@ object Issue:
   // imports, an export followed to its target), and those nothing resolves, or which name
   // more than one entity.
   def resolve(names: List[Text], api: Api, scope: Scope): (List[Text], List[Text]) =
-    val resolver: Resolver = Resolver(api, scope)
+    resolve(names, Apis.of(api), scope)
+
+  // The same, among the entities of every format, each by its address.
+  def resolve(names: List[Text], apis: Apis, scope: Scope): (List[Text], List[Text]) =
+    val resolver: Resolver = Resolver(apis.primary, scope, Unset, apis)
 
     val each: List[(Text, Optional[Text])] = names.map: (name: Text) =>
       val key: Optional[Text] = resolver.link(name) match
-        case Inline.Destination.Local(path, _) => api.locate(path.skip(5)).let(_.key)
+        case Inline.Destination.Local(path, _) => apis.locate(path.skip(5)).let(_.address)
         case _                                 => Unset
 
       (name, key)
@@ -134,10 +138,15 @@ object Issue:
   def index(issues: List[Issue], api: Api, scope: Scope)
   :   (sci.Map[Text, List[Issue]], List[(Int, Text)]) =
 
+    index(issues, Apis.of(api), scope)
+
+  def index(issues: List[Issue], apis: Apis, scope: Scope)
+  :   (sci.Map[Text, List[Issue]], List[(Int, Text)]) =
+
     val open: List[Issue] = issues.filter(_.open)
 
     val resolved: List[(Issue, List[Text], List[Text])] = open.map: (issue: Issue) =>
-      val (keys, unresolved) = resolve(issue.affects, api, scope)
+      val (keys, unresolved) = resolve(issue.affects, apis, scope)
       (issue, keys, unresolved)
 
     val pairs: scala.List[(Text, Issue)] =

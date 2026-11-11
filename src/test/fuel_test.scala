@@ -35,7 +35,7 @@ package fuel
 import scala.collection.immutable as sci
 
 // Excluded from the umbrella: `Compilation`, anthology's, which would outrank fuel's own.
-import soundness.{Compilation as _, Language as _, Token as _, Query as _, *}
+import soundness.{Compilation as _, Format as _, Language as _, Token as _, Query as _, *}
 
 import dysasymptotics.{linearAccess, linearSize}
 import pyrocosm.{Block, Inline, Language, Purview, TerminalRenderer, Token, Tone}
@@ -4265,6 +4265,144 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
         Compilation.name(t"/home/me/project/doc/modules/")
 
       . assert(_ == t"modules")
+
+    // A format other than Scala's, as a tool's commands would be one: two kinds of its own,
+    // signatures in words, and none of what a format need not say.
+    suite(m"Formats"):
+      import stenography.Designator
+
+      object Command extends Api.Kind:
+        def keyword: Text = t"command"
+        def isType: Boolean = false
+
+      object Flag extends Api.Kind:
+        def keyword: Text = t"flag"
+        def isType: Boolean = false
+
+      object Commands extends Format:
+        def id: Text = t"toy"
+        def title: Text = t"Commands"
+        def language: Language = Language.Plain
+        def noun: Text = t"tool"
+
+      val tool: Api.Entity =
+        Api.Entity(Unset, t"fuel", true, Api.Declaration(Command), format = t"toy")
+
+      val words: Api.Signature =
+        Api.Signature
+          ( List
+              ( Api.Phrase(t"[--force]", Api.Phrase.Role.Modifier, t"fuel.compile.force"),
+                Api.Phrase(t"<directory>") ) )
+
+      val compile: Api.Entity =
+        Api.Entity
+          ( Designator.Top(t"fuel"),
+            t"compile",
+            true,
+            Api.Declaration(Command, signature = words),
+            doc = Api.Entry(info = t"compiles the documents, as `fuel.compile.force` insists"),
+            format = t"toy" )
+
+      val force: Api.Entity =
+        Api.Entity
+          ( Designator.Term(Designator.Top(t"fuel"), t"compile"),
+            t"force",
+            true,
+            Api.Declaration(Flag),
+            format = t"toy" )
+
+      val commands: Api =
+        Api(sci.Map(tool.key -> tool, compile.key -> compile, force.key -> force), Commands)
+        . relinked
+
+      // Scala's own: a package named as the format is, and a method named `/` in it.
+      val pack: Api.Entity = Api.Entity(Unset, t"toy", true, Api.Declaration(Api.Kind.Package))
+
+      val slash: Api.Entity =
+        Api.Entity(Designator.Top(t"toy"), t"/", true, Api.Declaration(Api.Kind.Def))
+
+      val scala: Api = Api(sci.Map(pack.key -> pack, slash.key -> slash)).relinked
+      val apis: Apis = Apis(List(scala, commands))
+
+      def path(destination: Optional[Inline.Destination]): Optional[Text] = destination.let:
+        case Inline.Destination.Local(path, _) => path
+        case _                                 => Unset
+
+      test(m"an entity of another format is addressed, and its page found, after its format"):
+        (compile.address, compile.url, apis.locate(t"toy/fuel.compile").let(_.address))
+
+      . assert(_ == (t"toy/fuel.compile", t"/api/toy/fuel.compile", t"toy/fuel.compile"))
+
+      test(m"a Scala package named as a format is, and a method named `/`, are still Scala's"):
+        ( apis.locate(t"toy").let(_.format), apis.locate(t"toy.%2F").let(_.address),
+          apis.entity(t"toy./").let(_.url) )
+
+      . assert(_ == (t"scala", t"toy./", t"/api/toy.%2F"))
+
+      test(m"every entity is found again by its address"):
+        val every: List[Api.Entity] = List(tool, compile, force, pack, slash)
+        every.map { (entity: Api.Entity) => apis.entity(entity.address).let(_.address) }
+
+      . assert(_ == List(t"toy/fuel", t"toy/fuel.compile", t"toy/fuel.compile.force", t"toy",
+          t"toy./"))
+
+      test(m"a reference names another format's entity by its address, or as nothing else is"):
+        val resolver: Resolver = Resolver(scala, Scope.document(Nil), Unset, apis)
+
+        ( path(resolver.link(t"toy/fuel.compile")), path(resolver.link(t"fuel.compile.force")),
+          path(resolver.link(t"toy")), path(resolver.link(t"toy/fuel.nothing")) )
+
+      . assert: result =>
+          result == (t"/api/toy/fuel.compile", t"/api/toy/fuel.compile.force", t"/api/toy", Unset)
+
+      test(m"an import which names a format is that format's scope"):
+        val scope: Scope = Scope.document(List(t"toy/fuel"))
+        path(Resolver(scala, scope, Unset, apis).link(t"compile"))
+
+      . assert(_ == t"/api/toy/fuel.compile")
+
+      test(m"a signature in words is its keyword, its name and its words, each linked"):
+        val scope: Scope = Scope.of(compile, Nil, Nil)
+        val resolver: Resolver = Resolver(commands, scope)
+        val page: List[Block] = ApiPages.page(commands, compile, resolver, scope, Nil)
+
+        page.bind:
+          case Block.Code(_, lines, _, _, _, _, _, _) =>
+            lines.map: (line: Block.Line) =>
+              val links: List[Text] =
+                line.tokens.bind { token => path(token.link).let(List(_)).or(Nil) }
+
+              (line.tokens.map(_.text).join, links)
+
+          case _ =>
+            Nil
+
+      . assert: result =>
+          val links: List[Text] = List(t"/api/toy/fuel.compile.force")
+          result == List((t"command compile [--force] <directory>", links))
+
+      test(m"a format's page lists its members, and its navigation those which have members"):
+        // The entity as the API has it, with its members.
+        val root: Api.Entity = commands(tool.key).or(tool)
+        val scope: Scope = Scope.of(root, Nil, Nil)
+        val resolver: Resolver = Resolver(commands, scope)
+        val page: List[Block] = ApiPages.page(commands, root, resolver, scope, Nil)
+
+        val rows: List[Optional[Text]] = page.bind:
+          case Block.Table(_, rows, _) => rows.map(_.id)
+          case _                       => Nil
+
+        (rows, ApiPages.tree(commands, Unset).roots.map(_.children.size))
+
+      . assert(_ == (List(t"compile"), List(1)))
+
+      test(m"the help index names each entity by its address"):
+        Server.publish(Corpus(Nil), scala, formats = List(commands))
+        fuel.Help.index().entries.map { entry => (entry.key, entry.info) }
+
+      . assert: result =>
+          val info: Text = t"compiles the documents, as fuel.compile.force insists"
+          result == List((t"toy/fuel.compile", info))
 
     suite(m"Help"):
       val documented: Api.Entity =

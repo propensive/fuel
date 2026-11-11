@@ -58,6 +58,10 @@ object Server:
 
   @scala.caps.unsafe.untrackedCaptures
   @volatile
+  private var formats0: List[Api] = Nil
+
+  @scala.caps.unsafe.untrackedCaptures
+  @volatile
   private var pages0: sci.Map[Text, List[Block]] = sci.Map()
 
   @scala.caps.unsafe.untrackedCaptures
@@ -113,12 +117,14 @@ object Server:
       imports:  List[Text]                 = Nil,
       glossary: List[Block]                = Nil,
       standard: List[Designator]           = Scope.standard,
-      terms:    Glossary                   = Glossary.none )
+      terms:    Glossary                   = Glossary.none,
+      formats:  List[Api]                  = Nil )
   :   Unit =
 
     terms0 = terms
     corpus0 = corpus
     api0 = api
+    formats0 = formats
     pages0 = pages
     imports0 = imports
     glossary0 = glossary
@@ -133,6 +139,10 @@ object Server:
 
   def corpus: Optional[Corpus] = corpus0
   def api: Api = api0
+
+  // The APIs of every format, Scala's first: a page and an entity's issues are kept by the
+  // entity's address among them.
+  def apis: Apis = Apis(api0 :: formats0)
   def imports: List[Text] = imports0
   def standard: List[Designator] = standard0
   def glossary: List[Block] = glossary0

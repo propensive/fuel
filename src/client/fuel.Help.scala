@@ -85,16 +85,16 @@ object Help:
       cached.let { index => if index.edition == edition then index else Unset }
 
     current.or:
-      val api: Api = Server.api
+      val apis: Apis = Server.apis
 
-      val entries: List[Entry] =
+      // Every format's entities, each by its address.
+      val entries: List[Entry] = apis.all.bind: (api: Api) =>
         api.entities.values.to(List).bind: (entity: Api.Entity) =>
           entity.doc.let(_.info).lay(Nil: List[Entry]): (info: Text) =>
-            val scope: Scope =
-              Scope.of(entity, entity.doc.let(_.imports).or(Nil), Server.standard)
-
-            val plain: Text = Blocks.plain(Blocks.inline(info, Resolver(api, scope)))
-            List(Entry(entity.key, plain))
+            val standard: List[Designator] = api.format.standard(Server.standard)
+            val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Nil), standard)
+            val resolver: Resolver = Resolver(api, scope, Unset, apis)
+            List(Entry(entity.address, Blocks.plain(Blocks.inline(info, resolver))))
 
       val made: Message.Index = Message.Index(edition, entries)
       cached = made

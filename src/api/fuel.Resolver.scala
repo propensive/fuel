@@ -108,7 +108,13 @@ case class Scope
 
 // `page` is the URL of the page the references are on, which a name the page's own fragments
 // define leads to.
-class Resolver(api: Api, scope0: Scope, page: Optional[Text] = Unset) extends Linker:
+// A reference which begins with another format's `id` and a `/` (`tels/presentation.Slide`) is
+// resolved in that format's API, which the `apis` has; one nothing in this API answers is
+// tried in each of the others, as written and through those of the scope's imports which name
+// that format, and is the entity one of them has, or an ambiguity when several have one.
+class Resolver
+  ( api: Api, scope0: Scope, page: Optional[Text] = Unset, apis: Optional[Apis] = Unset )
+extends Linker:
   @scala.caps.unsafe.untrackedCaptures
   @volatile
   private var scope: Scope = scope0
@@ -345,20 +351,53 @@ class Resolver(api: Api, scope0: Scope, page: Optional[Text] = Unset) extends Li
     val kind: Optional[Linker.Kind] = Linker.kind(text)
     val name: Text = if kind.present then text.skip(1) else text
 
+    val sigil: Text = if kind.present then text.keep(1) else t""
+
     // Every character a name may hold; a space, a bracket or a quote is none of them.
     def legal(char: Char): Boolean = char.isLetterOrDigit || ".#_$`".indexOf(char) >= 0
 
     def plausible: Boolean = !name.s.isEmpty && name.s.forall(legal)
 
-    if !plausible then Unset else fenced(name, kind).or:
-      candidates(Designator(name), kind) match
-        case one :: Nil => destination(one)
+    // Another format's resolver: its API, and the imports which name it, without its `id`.
+    def foreign(other: Api): Resolver =
+      val lead: Text = t"${other.format.id}/"
+
+      val imports: List[Designator] = scope.imports.map(_.qualified).filter(_.starts(lead)).map:
+        (name: Text) => Designator(name.skip(lead.length))
+
+      Resolver(other, Scope(Nil, imports, other.format.standard(Nil)))
+
+    // What the other formats make of the reference, where this one makes nothing of it.
+    def elsewhere: Optional[Inline.Destination] =
+      val others: List[Api] = apis.lay(Nil: List[Api])(_.all.filter(_.format != api.format))
+
+      val found: List[Inline.Destination] = others.bind: (other: Api) =>
+        foreign(other).link(text).let(List(_)).or(Nil)
+
+      found match
+        case one :: Nil => one
         case Nil        => Unset
         case many =>
-          // The same page reached by several routes is no ambiguity.
-          if many.map(_.key).distinct.size == 1 then many.head.let(destination) else
-            if record then ambiguous.add(text)
-            Unset
+          if record then ambiguous.add(text)
+          Unset
+
+    def here: Optional[Inline.Destination] =
+      if !plausible then elsewhere else fenced(name, kind).or:
+        candidates(Designator(name), kind) match
+          case one :: Nil => destination(one)
+          case Nil        => elsewhere
+          case many =>
+            // The same page reached by several routes is no ambiguity.
+            if many.map(_.key).distinct.size == 1 then many.head.let(destination) else
+              if record then ambiguous.add(text)
+              Unset
+
+    apis.let(_.split(name)) match
+      case (other: Api, rest: Text) =>
+        if other.format == api.format then here else foreign(other).link(t"$sigil$rest")
+
+      case _ =>
+        here
 
   // A token whose type is exactly what it names: a type's token, a stable value's, or the
   // head of an applied type.

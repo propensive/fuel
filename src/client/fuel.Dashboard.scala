@@ -61,7 +61,7 @@ object Dashboard:
 
       case query: Query =>
         val outcome: Search.Outcome = api.search(query, Server.terms)
-        ApiPages.search(api, text, outcome, Resolver(api, scope), scope)
+        ApiPages.search(api, text, outcome, Resolver(api, scope, Unset, Server.apis), scope)
 
   // Where the documents on `port` are found.
   def address(port: Int): Text = Fuel.address(port)
@@ -80,9 +80,10 @@ object Dashboard:
   // its examples highlighted alone, on the compiler's thread.
   private def render(entity: Api.Entity): List[Block] =
     Checking.exclusive:
-      val api: Api = Server.api
-      val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Nil), Server.standard)
-      val resolver: Resolver = Resolver(api, scope)
+      val api: Api = Server.apis.of(entity)
+      val standard: List[Designator] = api.format.standard(Server.standard)
+      val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Nil), standard)
+      val resolver: Resolver = Resolver(api, scope, Unset, Server.apis)
 
       val scala: Embedding.ScalaCode =
         Embedding.ScalaCode(Checker.tokenized, entity.key, false, Unset, resolver)
@@ -93,7 +94,8 @@ object Dashboard:
 // One tab's dashboard: the navigation of every section's documents and of the API, and the
 // page its URL names.
 final class Dashboard():
-  // What a tab is looking at: a document, by its section and path, or an entity, by its key.
+  // What a tab is looking at: a document, by its section and path, or an entity, by its
+  // address.
   private enum Target:
     case Document(section: Text, path: Text)
     case Entity(key: Text)
@@ -176,8 +178,8 @@ final class Dashboard():
       val within: Text = rest.skip(1).map(decode).join(t"/")
       rest.head.let: (section: Text) => Target.Document(decode(section), within)
     else if path.starts(t"/api/") then
-      Server.api.locate(path.skip(5)).lay(Target.Missing(path)): (entity: Api.Entity) =>
-        Target.Entity(entity.key)
+      Server.apis.locate(path.skip(5)).lay(Target.Missing(path)): (entity: Api.Entity) =>
+        Target.Entity(entity.address)
     else if path == t"/glossary" then
       Target.Glossary()
     else
@@ -229,7 +231,7 @@ final class Dashboard():
       // as it is, saying so.
       val current: Boolean = selected match
         case Target.Document(section, path) => Server.corpus.let(_.doc(section, path)).present
-        case Target.Entity(key)             => Server.api(key).present
+        case Target.Entity(key)             => Server.apis.entity(key).present
         case Target.Glossary()              => true
         case Target.Missing(_)              => true
         case Target.Search(_)               => true
@@ -254,7 +256,9 @@ final class Dashboard():
           content() = doc.blocks + doc.problems
 
       case Target.Entity(key) =>
-        val page: List[Block] = Server.page(key).or(Server.api(key).let(Dashboard.render).or(Nil))
+        val page: List[Block] =
+          Server.page(key).or(Server.apis.entity(key).let(Dashboard.render).or(Nil))
+
         content() = ApiPages.withIssues(page, Server.issues(key))
 
       case Target.Glossary() =>
@@ -293,14 +297,16 @@ final class Dashboard():
           val destination: Inline.Destination = Inline.Destination.Local(t"/glossary")
           List(Block.TreeNode(Inline.text(t"Glossary"), Nil, tone, Unset, Unset, destination))
 
-      val api: Api = Server.api
+      val current: Optional[Api.Entity] = selected match
+        case Target.Entity(address) => Server.apis.entity(address)
+        case _                      => Unset
 
-      val current: Optional[Text] = selected match
-        case Target.Entity(key) => key
-        case _                  => Unset
+      // Each format's entities under its own heading, the current page marked in its own.
+      val apiTrees: List[Block] = Server.apis.all.bind: (api: Api) =>
+        val here: Optional[Text] = current.let: (entity: Api.Entity) =>
+          if entity.format == api.format.id then entity.key else Unset
 
-      val apiTree: List[Block] =
         if api.entities.isEmpty then Nil
-        else List(Block.Heading(3, Inline.text(t"API")), ApiPages.tree(api, current))
+        else List(Block.Heading(3, Inline.text(api.format.title)), ApiPages.tree(api, here))
 
-      List(Block.Tree(documents + glossary)) + apiTree
+      List(Block.Tree(documents + glossary)) + apiTrees

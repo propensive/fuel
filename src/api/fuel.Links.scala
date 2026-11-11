@@ -44,14 +44,19 @@ import pyrocosm.{Block, Tone}
 // line the link is on.
 object Links:
   def check(corpus: Corpus, api: Api, glossary: Glossary, external: Boolean = false): List[Block] =
+    check(corpus, Apis.of(api), glossary, external)
+
+  def check(corpus: Corpus, apis: Apis, glossary: Glossary, external: Boolean)
+  :   List[Block] =
+
     corpus.sections.bind: (section: Corpus.Section) =>
       section.docs.bind: (doc: Doc) =>
         doc.references.bind: (reference: Linkage) =>
-          problem(corpus, api, glossary, external, doc, reference).let(List(_)).or(Nil)
+          problem(corpus, apis, glossary, external, doc, reference).let(List(_)).or(Nil)
 
   private def problem
     ( corpus:    Corpus,
-      api:       Api,
+      apis:      Apis,
       glossary:  Glossary,
       external:  Boolean,
       doc:       Doc,
@@ -104,11 +109,11 @@ object Links:
           val rest: List[Text] = path.skip(5).cut(t"/").map(decode)
           document(rest.head.or(t""), rest.skip(1).join(t"/"), fragment)
         else if path.starts(t"/api/") then
-          api.locate(path.skip(5)) match
+          apis.locate(path.skip(5)) match
             case entity: Api.Entity =>
               fragment.let: (fragment: Text) =>
-                if api.children(entity).exists(_.name == fragment) then Unset
-                else failure(t"`${entity.key}` has no member `$fragment`.")
+                if apis.of(entity).children(entity).exists(_.name == fragment) then Unset
+                else failure(t"`${entity.address}` has no member `$fragment`.")
 
             case _ =>
               failure(t"There is no API page at `$path`.")
@@ -127,7 +132,7 @@ object Links:
       case Linkage.Target.Sigil(reference) =>
         val what: Text = if reference.starts(t"#") then t"type" else t"term"
         val message: Text = t"`$reference` names no $what in scope."
-        if api.entities.isEmpty then report(Tone.Warning, message) else failure(message)
+        if apis.isEmpty then report(Tone.Warning, message) else failure(message)
 
   // A URL fetched, with a short patience: what is wrong with it, or nothing. Only HTTP is
   // fetched; a `mailto:` or another scheme is taken as it is.
