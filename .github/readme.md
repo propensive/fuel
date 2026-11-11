@@ -383,7 +383,9 @@ type, and whether it is `optional`, `repeatable` or the `key` — and a record's
 `select`s it holds, whose variants a reference finds through it (`Slide#markdown`). There is no
 hierarchy to draw, and nothing extends a record. The glyphs are, for now, those of the Scala
 keywords most like each kind: a schema's is a package's, a record's a class's, a select's an
-enum's, a variant's a case's, a scalar's a type's and a field's a value's.
+enum's, a variant's a case's, a scalar's a type's and a field's a value's; beside a member's,
+a small `?` says it is optional, a `+` that it is said once or more, a `*` that it is both, and
+a small key that it is the key.
 
 An overlay says the format it documents, with `format` before its `base`; without one, it
 documents Scala:

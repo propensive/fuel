@@ -444,8 +444,9 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
     faults have no place and are reported at the file. A `description` documents what no
     overlay does. Found on the way: the presentation schema's records were not contiguous (a
     `select` stood between them), which reading a schema as `Tels` alone does not notice.
-    Not yet: glyphs of a schema's own, and the transformations for `optional`, `repeatable`
-    and `key` (undecided); layers; the built-in types as entities; a "used by" table; a sigil
+    A member's glyph says how often it may be said, as a grammar does — a small `?`
+    (optional), `+` (repeatable) or `*` (both) at its top right — and a small key at its top
+    left that it is the key. Not yet: glyphs of a schema's own; layers; the built-in types as entities; a "used by" table; a sigil
     before a kebab-case name (`` `.some-field` ``), which `Linker.kind` does not read;
     schemas derived from Scala types; a schema for the overlay format itself; and a project
     with no classpath, whose schemas are not read, since the API is built with the session.

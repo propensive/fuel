@@ -4617,6 +4617,29 @@ entry .Channel
             ( List(t"record Person", t"  select Channel optional repeatable"),
               List((t"name", t"String key"), (t"nickname", t"String optional")) )
 
+      test(m"a member's glyph says how often it may be said, and whether it is the key"):
+        def field(modifiers: Text*): Text = Icons.markup(Api.Kind.Val, List(modifiers*))
+
+        // The strokes a member's modifiers add to the plain glyph, and whether they change it.
+        def marks(modifiers: Text*): (Int, Boolean) =
+          val markup: Text = field(modifiers*)
+          (markup.cut(t"<path").size - field().cut(t"<path").size, markup != field())
+
+        val glyph: Optional[Text] =
+          api(t"contact.Person#name").let(_.definition).let(TelsFormat.glyph(_)).let:
+            case Inline.Icon(markup, alt) => alt
+            case _                        => Unset
+
+        ( marks(), marks(t"optional"), marks(t"repeatable"), marks(t"optional", t"repeatable"),
+          marks(t"key"), marks(t"required"), glyph,
+          field(t"optional") == field(t"repeatable"),
+          field(t"optional", t"repeatable") == field(t"repeatable") )
+
+      . assert: result =>
+          result ==
+            ( (0, false), (1, true), (1, true), (1, true), (1, true), (0, false), t"key field",
+              false, false )
+
       test(m"fuel's own presentation schema is read, with what it says of its definitions"):
         val (own, faults) = TelsFormat.read(Presentation.schemaResource, Presentation.schemaSource)
         val schema: Api = own.or(Api.empty)

@@ -91,8 +91,9 @@ object TelsFormat extends Format:
 
   // The glyph of the Scala keyword a kind is most like, until it has a drawing of its own: a
   // schema's is a package's, a record's a class's, a select's an enum's, a variant's a case's,
-  // a scalar's a type's and a field's a value's. A modifier transforms none of them yet, and a
-  // document has none: the schema's glyph stands for both of its forms.
+  // a scalar's a type's and a field's a value's. A member which is `optional` has a small `?`
+  // beside its glyph, one which is `repeatable` a `+`, one which is both a `*`, and the `key` a
+  // small key (`Icons`). A document has none: the schema's glyph stands for both of its forms.
   override def glyph(declaration: Api.Declaration, exported: Boolean = false): Inline =
     val analogue: Optional[Api.Kind] = declaration.kind match
       case Kind.Schema  => Api.Kind.Package
@@ -104,7 +105,7 @@ object TelsFormat extends Format:
       case _            => Unset
 
     val words: Text = (declaration.modifiers + List(declaration.kind.keyword)).join(t" ")
-    Inline.Icon(analogue.let(Icons.markup(_, Nil)).or(t""), words)
+    Inline.Icon(analogue.let(Icons.markup(_, declaration.modifiers)).or(t""), words)
 
   override def glyphs(entity: Api.Entity, exported: Boolean = false): List[Inline] =
     entity.definition.or(entity.template).let(glyph(_, exported)).let(List(_)).or(Nil)
