@@ -40,7 +40,7 @@ import errorDiagnostics.emptyDiagnostics
 import pyrocosm.{Block, Inline, Tone}
 
 // A presentation: a TEL document of `slide`s, each holding Markdown or a block of code, shown in
-// a browser one slide at a time, to the schema `presentation` (`Presentation.schemaText`).
+// a browser one slide at a time, to the schema `presentation` (`fuel/presentation.schema.tel`).
 //
 //   title  Effects, gently        # what the page is called; the file's name otherwise
 //   slide
@@ -71,115 +71,21 @@ import pyrocosm.{Block, Inline, Tone}
 // fence's frames do; the deck steps through the frames before moving on. What else the block
 // says is the first slide's.
 object Presentation:
-  // The schema a presentation is checked against, as a TEL schema document: what a slide may
-  // hold, and what a slide's code may say, which is what a fence's preamble may say. The
-  // schema is the formal account of the format; `Reading` reads what it admits. A member
-  // which may be written as an atom on the keyword's line, or as a child beneath it, is listed
-  // before those which may not, since atoms are assigned to members in order.
-  val schemaText: Text = t"""tel 1.0
+  // The schema a presentation is checked against, a TEL schema document among the resources:
+  // what a slide may hold, and what a slide's code may say, which is what a fence's preamble
+  // may say. The schema is the formal account of the format; `Reading` reads what it admits.
+  val schemaResource: Text = t"fuel/presentation.schema.tel"
 
-name presentation
+  // The schema's document, as it was written: read through the thread-context classloader,
+  // since under Burdock the system one sees only the launcher's own jar.
+  def schemaSource: Text =
+    Classloader.threadContext.resource(schemaResource).let(_.utf8).or:
+      panic(m"the resource $schemaResource is missing")
 
-# A slide's code: `syntax <language>` holds the code itself as its indented text, or says what
-# a fence's preamble says beneath it, with the code in a `code` child. `language` names the
-# language the code is compiled as, where that is not the one it is highlighted as.
-
-record Code
-  field language String
-  field code String optional
-  field label String optional
-  field hold String optional
-  field at String optional
-  field context String optional
-  field id String optional
-  field follows String optional repeatable
-  field errors String optional
-  field parse Flag optional
-  field typecheck Flag optional
-  field compile Flag optional
-  field autoplay Flag optional
-  field loop Flag optional
-  field restart Flag optional
-  field run Flag optional
-  field feature String optional repeatable
-  field path String optional
-  field highlight Mark optional repeatable
-  field error Mark optional repeatable
-  field caution Mark optional repeatable
-  field param Mark optional repeatable
-  field focus Mark optional repeatable
-  field substitute Substitution optional repeatable
-  field frame Frame optional repeatable
-  field alternative Alternative optional repeatable
-
-# A mark on a selection of the code: the text it starts at, and the text it ends at, with its
-# caption after them on the line or beneath; `line` and `occurrence` say which match is meant.
-
-record Mark
-  field selection String
-  field caption String optional
-  field line String optional
-  field occurrence String optional
-
-# A substitution: the text shown over a selection of the code, in place of it.
-
-record Substitution
-  field selection String
-  field text String optional
-  field line String optional
-  field occurrence String optional
-
-# A frame of an animated block: its code, and what is said of it.
-
-record Frame
-  field code String optional
-  field label String optional
-  field hold String optional
-  field at String optional
-  field language String optional
-  field highlight Mark optional repeatable
-  field error Mark optional repeatable
-  field caution Mark optional repeatable
-  field param Mark optional repeatable
-  field focus Mark optional repeatable
-  field substitute Substitution optional repeatable
-
-# An alternative version of the code, shown as a tab: its label on the line, and its code,
-# frames and the rest beneath.
-
-record Alternative
-  field label String
-  field code String optional
-  field language String optional
-  field highlight Mark optional repeatable
-  field error Mark optional repeatable
-  field caution Mark optional repeatable
-  field param Mark optional repeatable
-  field focus Mark optional repeatable
-  field substitute Substitution optional repeatable
-  field frame Frame optional repeatable
-
-# A slide's parts, in any order: Markdown, or code in a language.
-
-select Part
-  variant markdown String
-  variant syntax Code
-
-# A slide: its parts, and what is said while it is shown.
-
-record Slide
-  select Part optional repeatable
-  field transcript String optional
-
-document
-  field title String optional
-  field slide Slide optional repeatable
-"""
-
-  // The schema, read from its document.
+  // The schema, read from its document and held to the rules every schema is.
   lazy val schema: stratiform.Tels =
     import strategies.throwUnsafely
-    schemaText.read[Tel].as[stratiform.Tels]
+    stratiform.Tels.Validation.validate(schemaSource.read[Tel].as[stratiform.Tels])
 
   enum Part:
     case Prose(markdown: Text)

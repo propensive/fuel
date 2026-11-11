@@ -1,0 +1,103 @@
+tel 1.0
+
+name presentation
+
+# The format of a presentation, which `fuel present` shows: `Presentation.schema` reads this
+# file. A member which may be written as an atom on the keyword's line, or as a child beneath
+# it, is listed before those which may not, since atoms are assigned to members in order.
+
+record Code
+  description
+      A slide's code: `syntax <language>` holds the code itself as its indented text, or says
+      what a fence's preamble says beneath it, with the code in a `code` child. `language` names
+      the language the code is compiled as, where that is not the one it is highlighted as.
+  field language String
+  field code String optional
+  field label String optional
+  field hold String optional
+  field at String optional
+  field context String optional
+  field id String optional
+  field follows String optional repeatable
+  field errors String optional
+  field parse Flag optional
+  field typecheck Flag optional
+  field compile Flag optional
+  field autoplay Flag optional
+  field loop Flag optional
+  field restart Flag optional
+  field run Flag optional
+  field feature String optional repeatable
+  field path String optional
+  field highlight Mark optional repeatable
+  field error Mark optional repeatable
+  field caution Mark optional repeatable
+  field param Mark optional repeatable
+  field focus Mark optional repeatable
+  field substitute Substitution optional repeatable
+  field frame Frame optional repeatable
+  field alternative Alternative optional repeatable
+
+record Mark
+  description
+      A mark on a selection of the code: the text it starts at, and the text it ends at, with
+      its caption after them on the line or beneath; `line` and `occurrence` say which match is
+      meant.
+  field selection String
+  field caption String optional
+  field line String optional
+  field occurrence String optional
+
+record Substitution
+  description
+      A substitution: the text shown over a selection of the code, in place of it.
+  field selection String
+  field text String optional
+  field line String optional
+  field occurrence String optional
+
+record Frame
+  description
+      A frame of an animated block: its code, and what is said of it.
+  field code String optional
+  field label String optional
+  field hold String optional
+  field at String optional
+  field language String optional
+  field highlight Mark optional repeatable
+  field error Mark optional repeatable
+  field caution Mark optional repeatable
+  field param Mark optional repeatable
+  field focus Mark optional repeatable
+  field substitute Substitution optional repeatable
+
+record Alternative
+  description
+      An alternative version of the code, shown as a tab: its label on the line, and its code,
+      frames and the rest beneath.
+  field label String
+  field code String optional
+  field language String optional
+  field highlight Mark optional repeatable
+  field error Mark optional repeatable
+  field caution Mark optional repeatable
+  field param Mark optional repeatable
+  field focus Mark optional repeatable
+  field substitute Substitution optional repeatable
+  field frame Frame optional repeatable
+
+select Part
+  description
+      A slide's parts, in any order: Markdown, or code in a language.
+  variant markdown String
+  variant syntax Code
+
+record Slide
+  description
+      A slide: its parts, and what is said while it is shown.
+  select Part optional repeatable
+  field transcript String optional
+
+document
+  field title String optional
+  field slide Slide optional repeatable

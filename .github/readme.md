@@ -172,8 +172,9 @@ slide
 A slide's `syntax` names the language its code is highlighted as, and is either the code alone,
 or what a fence's preamble says — marks, `context`, `errors`, `parse`/`typecheck`/`compile`,
 `frame`s, `autoplay`, `loop` and the rest — with the code itself beneath `code`, as a `frame`'s
-is. A presentation is checked against its TEL schema, `presentation` (`Presentation.schemaText`),
-and each fault is reported at its line. Consecutive slides which each hold one block of code
+is. A presentation is checked against its TEL schema, `presentation`
+(`src/core/resources/fuel/presentation.schema.tel`), and each fault is reported at its line.
+Consecutive slides which each hold one block of code
 without frames of its own, in the same language, are one animated block, its frames those
 slides, each with the slide's marks and its `label`, `hold` and `at`: stepping from one to the
 next moves what stays and fades what arrives and departs, as a fence's `frame`s do. A slide

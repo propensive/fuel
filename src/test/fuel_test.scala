@@ -937,6 +937,16 @@ slide
 
       . assert(_ == (t"presentation", 0))
 
+      test(m"the schema is a resource, and keeps what it says of each of its definitions"):
+        val described: List[Text] =
+          Presentation.schema.records.to[List].filter(_.description.present).map(_.name)
+            + Presentation.schema.selects.to[List].filter(_.description.present).map(_.name)
+
+        (Presentation.schemaSource.starts(t"tel 1.0"), described)
+
+      . assert(_ == (true, List(t"Code", t"Mark", t"Substitution", t"Frame", t"Alternative",
+          t"Slide", t"Part")))
+
       test(m"a slide's `code` is reported as now being `syntax`, at its line"):
         read(t"slide\n  code scala\n      val x = 1\n").lay(Nil)(_(1)).map:
           case Block.Diagnostic(_, location, content, _, _) =>
