@@ -518,7 +518,7 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
         try Checking.session(config.classpath, config.options): (checker: Checker) =>
           val (api, sources) = model(config, checker, progress)
           val key: Text = environment(sources, api)
-          val standard: List[Designator] = Scope.standardOf(config.options)
+          val standard: List[Locator] = Scope.standardOf(config.options)
 
           val pages: sci.Map[Text, List[Block]] =
             rendered(api, checker, store, key, progress, standard)
@@ -789,7 +789,7 @@ private def rendered
     store:       Optional[Store],
     environment: Text,
     progress:    Progress,
-    standard:    List[Designator] )
+    standard:    List[Locator] )
 :   sci.Map[Text, List[Block]] =
 
   def render(entity: Api.Entity): (List[Block], List[Block]) =

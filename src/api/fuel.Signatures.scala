@@ -78,7 +78,7 @@ object Signatures:
 
     def linked(designator: Designator, accent: Token.Accent): Token =
       val entity: Optional[Api.Entity] =
-        api.find(designator).let: (e: Api.Entity) => e.alias.let(api.find).or(e)
+        api.find(designator).let: (e: Api.Entity) => e.alias.let(Locator.of).let(api.find).or(e)
 
       val destination: Optional[Inline.Destination] =
         entity.let: (e: Api.Entity) => Inline.Destination.Local(e.url)
@@ -95,11 +95,11 @@ object Signatures:
     def exported0(designator: Designator): Optional[Designator] =
       val forwarders: List[Api.Entity] = api.exporters.get(Api.key(designator)).getOrElse(Nil)
 
-      def via(parents: List[Designator]): Optional[Api.Entity] =
+      def via(parents: List[Locator]): Optional[Api.Entity] =
         forwarders.seek: (e: Api.Entity) => e.parent.let(parents.has(_)).or(false)
 
       via(scope.enclosing + scope.standard).or(via(scope.imports)).let: (e: Api.Entity) =>
-        if isType then e.tpe else e.term
+        (if isType then e.tpe else e.term).designator
 
     designator.parent match
       case parent: Designator =>

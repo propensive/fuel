@@ -3503,8 +3503,8 @@ entry .Doc   a document
       . assert: result =>
           result ==
             ( Scope.standard,
-              List(Designator(t"java.lang"), Designator(t"scala")),
-              List(Designator(t"java.lang"), Designator(t"proscenium"), Designator(t"soundness")),
+              List(Locator(t"java.lang"), Locator(t"scala")),
+              List(Locator(t"java.lang"), Locator(t"proscenium"), Locator(t"soundness")),
               Nil )
 
       val qualifiedSample: List[(Text, Optional[Text], Boolean)] =
@@ -4338,6 +4338,15 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
           apis.entity(t"toy./").let(_.url) )
 
       . assert(_ == (t"scala", t"toy./", t"/api/toy.%2F"))
+
+      test(m"a locator's top-level name has a type form, which Scala's has not"):
+        val field: Locator = Locator(t"schema#field")
+        val keys: (Text, Text) = (Api.key(field), Api.key(Locator(t"schema.Record#field")))
+        val paths: (Text, Text) = (Api.path(field.parent, field.name), Api.key(Api.unpath(t"a~b.c")))
+        (keys, paths, scala.normal(field).qualified, commands.normal(field).qualified)
+
+      . assert(_ == ((t"schema#field", t"schema.Record#field"), (t"schema~field", t"a#b.c"),
+          t"schema.field", t"schema#field"))
 
       test(m"every entity is found again by its address"):
         val every: List[Api.Entity] = List(tool, compile, force, pack, slash)

@@ -36,7 +36,6 @@ import soundness.{Format as _, Language as _, Token as _, *}
 
 import dysasymptotics.linearSize
 import pyrocosm.{Block, Figure, Inline, Language, Token, Tone}
-import stenography.Designator
 
 // An entity's page, and the navigation of the whole API, as blocks: Amok's `JvmFolio` layout.
 // The page is its place (each parent a link), its name, its one-line info, then for each of
@@ -94,11 +93,7 @@ object ApiPages:
 
     // The members of the entity's type form, or of its term form.
     def members(ofType: Boolean): List[Api.Entity] = others.filter: (child: Api.Entity) =>
-      val onType: Boolean = child.parent.lay(false):
-        case Designator.Type(_, _) => true
-        case _                     => false
-
-      onType == ofType
+      child.parent.let(_.isType).or(false) == ofType
 
     // A link to an entity by its name, where it has a page.
     def link(key: Text): List[Inline] = api(key).lay(Inline.text(key)): (e: Api.Entity) =>
@@ -179,7 +174,7 @@ object ApiPages:
 
     // An export's signature is what it exports, linked; any other's its clauses and result.
     val signature: List[Inline] =
-      member.alias.lay(List(api.format.cell(d, api, scope))): (target: Designator) =>
+      member.alias.lay(List(api.format.cell(d, api, scope))): (target: stenography.Designator) =>
         List(code(api, Signatures.designator(target, api, scope)))
 
     val info: List[Inline] = member.doc.let(_.info).let(Blocks.inline(_, resolver)).or(Nil)
@@ -297,14 +292,12 @@ object ApiPages:
     // Where the entity is, in code, as a qualified name is: each segment linked, and the name up
     // to it one thing, so that pointing at a segment underlines the path before it.
     val place: List[Block] =
-      def crumbs(designator: Optional[Designator]): List[Token] =
-        designator.lay(Nil: List[Token]): (d: Designator) =>
+      def crumbs(designator: Optional[Locator]): List[Token] =
+        designator.lay(Nil: List[Token]): (d: Locator) =>
           val destination: Optional[Inline.Destination] =
             api(Api.key(d)).lay(Unset): (e: Api.Entity) => Inline.Destination.Local(e.url)
 
-          val separator: Text = d match
-            case Designator.Type(_, _) => t"#"
-            case _                     => t"."
+          val separator: Text = d.separator
 
           val parent: List[Token] = crumbs(d.parent)
           val chained: Boolean = !parent.nil
@@ -342,7 +335,7 @@ object ApiPages:
       val replacement: List[Inline] = until.replacement.lay(Nil: List[Inline]): (name: Text) =>
         val named: Inline = code(api, List(Token(name, Token.Accent.Term)))
 
-        val link: Inline = api.find(Designator(name)).lay(named): (e: Api.Entity) =>
+        val link: Inline = api.find(Locator(name)).lay(named): (e: Api.Entity) =>
           Inline.Link(Inline.Destination.Local(e.url), Inline.text(name))
 
         List(Inline.Textual(t"; use "), link, Inline.Textual(t" instead"))
@@ -366,7 +359,7 @@ object ApiPages:
         val items: List[Block.Item] = names.map: (name: Text) =>
           val plain: Block.Item = Block.Item(List(Block.paragraph(name)))
 
-          api.find(Designator(name)).lay(plain): (e: Api.Entity) =>
+          api.find(Locator(name)).lay(plain): (e: Api.Entity) =>
             val target: Inline.Destination = Inline.Destination.Local(e.url)
             Block.Item(List(Block.Paragraph(Inline.text(name))), Unset, target)
 
@@ -379,8 +372,8 @@ object ApiPages:
   // beneath it (not every method and value, which its page lists).
   def tree(api: Api, current: Optional[Text]): Block.Tree =
     val path: List[Text] = current.lay(Nil: List[Text]): (key: Text) =>
-      def up(designator: Optional[Designator]): List[Text] =
-        designator.lay(Nil: List[Text]): (d: Designator) => List(Api.key(d)) + up(d.parent)
+      def up(designator: Optional[Locator]): List[Text] =
+        designator.lay(Nil: List[Text]): (d: Locator) => List(Api.key(d)) + up(d.parent)
 
       api(key).lay(Nil: List[Text]): (e: Api.Entity) => List(e.key) + up(e.parent)
 

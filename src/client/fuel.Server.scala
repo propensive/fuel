@@ -39,7 +39,6 @@ import scala.collection.immutable as sci
 import soundness.*
 
 import pyrocosm.{Block, Digests}
-import stenography.Designator
 
 // The daemon's state: the corpus and the API model the latest `fuel compile` produced, from
 // whichever shell, the pages it rendered for the project's own documented entities (whose
@@ -70,7 +69,7 @@ object Server:
 
   @scala.caps.unsafe.untrackedCaptures
   @volatile
-  private var standard0: List[Designator] = Scope.standard
+  private var standard0: List[Locator] = Scope.standard
 
   @scala.caps.unsafe.untrackedCaptures
   @volatile
@@ -116,7 +115,7 @@ object Server:
       pages:    sci.Map[Text, List[Block]] = sci.Map(),
       imports:  List[Text]                 = Nil,
       glossary: List[Block]                = Nil,
-      standard: List[Designator]           = Scope.standard,
+      standard: List[Locator]           = Scope.standard,
       terms:    Glossary                   = Glossary.none,
       formats:  List[Api]                  = Nil )
   :   Unit =
@@ -144,7 +143,7 @@ object Server:
   // entity's address among them.
   def apis: Apis = Apis(api0 :: formats0)
   def imports: List[Text] = imports0
-  def standard: List[Designator] = standard0
+  def standard: List[Locator] = standard0
   def glossary: List[Block] = glossary0
   def terms: Glossary = terms0
   def edition: Long = edition0.get

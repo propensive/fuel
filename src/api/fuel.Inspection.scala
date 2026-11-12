@@ -316,7 +316,7 @@ object Inspection:
     private def forward(parent: Optional[Designator], name: Text, symbol: Symbol): Unit =
       if symbol.flags.is(Flags.Exported) then forwarded(symbol).let: (target: Designator) =>
         collected.computeIfPresent
-          ( Api.key(parent, name),
+          ( Api.key(parent.let(Locator.of), name),
             (_, e) => if e.nn.alias.present then e.nn else e.nn.copy(alias = target) )
 
     // `into` is a flag the compiler keeps, which reflection does not offer.
@@ -741,7 +741,7 @@ object Inspection:
         bases:       List[Text]               = Nil )
     :   Unit =
 
-      val key: Text = Api.key(parent, name)
+      val key: Text = Api.key(parent.let(Locator.of), name)
 
       collected.compute(key, (_, existing) => Optional(existing) match
         case entity: Api.Entity =>
@@ -791,8 +791,8 @@ object Inspection:
 
         case _ =>
           if isType
-          then Api.Entity(parent, name, own, Unset, declaration, location = where, bases = bases)
-          else Api.Entity(parent, name, own, declaration, Unset, location = where))
+          then Api.Entity(parent.let(Locator.of), name, own, Unset, declaration, location = where, bases = bases)
+          else Api.Entity(parent.let(Locator.of), name, own, declaration, Unset, location = where))
 
     // The parameters of a method, a constructor or a type alias, each a member of the type form
     // of what it parameterises (`parent`), from every clause: type parameters with their bounds,
@@ -901,7 +901,7 @@ object Inspection:
           // An exported type is a page elsewhere: a reference through the export leads there.
           if flags.is(Flags.Exported) then rhs match
             case Syntax.Simple(target) =>
-              collected.computeIfPresent(Api.key(parent, name), (_, e) => e.nn.copy(alias = target))
+              collected.computeIfPresent(Api.key(parent.let(Locator.of), name), (_, e) => e.nn.copy(alias = target))
 
             case _ =>
               ()

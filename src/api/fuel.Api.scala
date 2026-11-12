@@ -187,7 +187,7 @@ object Api:
   // compiled declares it. A type's `bases` are the keys of every class it extends, nearest
   // first; its `extensions` and `givens` are what `Applicables` finds applies to it.
   case class Entity
-    ( parent:     Optional[Designator],
+    ( parent:     Optional[Locator],
       name:       Text,
       own:        Boolean               = false,
       definition: Optional[Declaration] = Unset,
@@ -213,13 +213,10 @@ object Api:
     def address: Text = t"${Api.prefix(format)}$key"
     def url: Text = t"/api/${Api.prefix(format)}$path"
 
-    // The designator of this entity as a term, and as a type: a member's parent is one or the
+    // The locator of this entity as a term, and as a type: a member's parent is one or the
     // other.
-    def term: Designator =
-      parent.lay(Designator.Top(name)): (parent: Designator) => Designator.Term(parent, name)
-
-    def tpe: Designator =
-      parent.lay(Designator.Top(name)): (parent: Designator) => Designator.Type(parent, name)
+    def term: Locator = Locator(parent, name, false)
+    def tpe: Locator = Locator(parent, name, true)
 
     def isPackage: Boolean = definition.let(_.kind == Kind.Package).or(false)
 
@@ -247,32 +244,26 @@ object Api:
 
   // The key of an entity: its parent's qualified name, the separator its parent's kind gives
   // (`#` after a type, `.` after a term or a package), and its name.
-  def key(parent: Optional[Designator], name: Text): Text =
-    parent.lay(name): (parent: Designator) => t"${parent.qualified}${separator(parent)}$name"
+  def key(parent: Optional[Locator], name: Text): Text =
+    parent.lay(name): (parent: Locator) => t"${parent.qualified}${parent.separator}$name"
 
-  def key(designator: Designator): Text = key(designator.parent, designator.name)
-
-  private def separator(parent: Designator): Text = parent match
-    case Designator.Type(_, _) => t"#"
-    case _                     => t"."
+  def key(locator: Locator): Text = key(locator.parent, locator.name)
 
   // The path of an entity's page, beneath `/api/`: as its key, with `~` for `#` and every name
   // URL-encoded, so that a symbolic name travels.
-  def path(parent: Optional[Designator], name: Text): Text =
-    parent.lay(encode(name)): (parent: Designator) =>
-      val mark: Text = if separator(parent) == t"#" then t"~" else t"."
+  def path(parent: Optional[Locator], name: Text): Text =
+    parent.lay(encode(name)): (parent: Locator) =>
+      val mark: Text = if parent.isType then t"~" else t"."
       t"${path(parent.parent, parent.name)}$mark${encode(name)}"
 
   private def encode(name: Text): Text = Text(java.net.URLEncoder.encode(name.s, "UTF-8").nn)
   private def decode(name: Text): Text = Text(java.net.URLDecoder.decode(name.s, "UTF-8").nn)
 
-  // The key a path names, back from its separators; the designator's kinds are the separators'.
-  def unpath(path: Text): Designator =
-    def recur(index: Int, start: Int, designator: Optional[Designator]): Designator =
+  // The key a path names, back from its separators; each name's form is its separator's.
+  def unpath(path: Text): Locator =
+    def recur(index: Int, start: Int, designator: Optional[Locator]): Locator =
       def next: Text = decode(path.s.substring(start, index).nn.tt)
-
-      def extend(isType: Boolean): Designator =
-        designator.lay(Designator.Top(next)): (parent: Designator) => parent.child(next, isType)
+      def extend(isType: Boolean): Locator = Locator(designator, next, isType)
 
       if index >= path.s.length then extend(false)
       else path.s.charAt(index) match
@@ -292,8 +283,11 @@ case class Api(entities: sci.Map[Text, Api.Entity], format: Format = ScalaFormat
     case Some(entity) => entity
     case _            => Unset
 
-  def has(designator: Designator): Boolean = entities.contains(Api.key(designator))
-  def locate(path: Text): Optional[Api.Entity] = apply(Api.key(Api.unpath(path)))
+  // A locator as this format has it: one whose top-level names have one form names the term.
+  def normal(locator: Locator): Locator = if format.typedRoots then locator else locator.rooted
+
+  def has(designator: Locator): Boolean = entities.contains(Api.key(normal(designator)))
+  def locate(path: Text): Optional[Api.Entity] = apply(Api.key(normal(Api.unpath(path))))
 
   def children(entity: Api.Entity): List[Api.Entity] =
     entity.members.bind: (key: Text) => apply(key).let(List(_)).or(Nil)
@@ -303,34 +297,31 @@ case class Api(entities: sci.Map[Text, Api.Entity], format: Format = ScalaFormat
 
   // The entity a designator names, if it exists as a term or a type member of its parent: a
   // designator written with `.` may name a type (`gossamer.Text`), so both are tried.
-  def find(designator: Designator): Optional[Api.Entity] =
+  def find(designator0: Locator): Optional[Api.Entity] =
+    val designator: Locator = normal(designator0)
+
     apply(Api.key(designator)).or:
-      designator.parent.let: (parent: Designator) =>
-        apply(Api.key(parent.companionType, designator.name))
+      designator.parent.let: (parent: Locator) =>
+        apply(Api.key(normal(parent.tpe), designator.name))
 
   // The entity a designator names, as `find` finds it, else through what its prefix forwards
   // to — an export or an exported type's alias, so that `soundness.Text.s` is the member `s`
   // of `anticipation.internal.Text`, which `soundness.Text` exports — and, for a member of a
   // type, among the members it inherits, from the nearest base which declares one.
-  def resolve(designator: Designator): Optional[Api.Entity] =
-    def recur(designator: Designator, depth: Int): Optional[Api.Entity] =
+  def resolve(designator: Locator): Optional[Api.Entity] =
+    def recur(designator: Locator, depth: Int): Optional[Api.Entity] =
       find(designator).or:
-        if depth <= 0 then Unset else designator.parent.let: (parent: Designator) =>
+        if depth <= 0 then Unset else designator.parent.let: (parent: Locator) =>
           recur(parent, depth - 1).let: (owner: Api.Entity) =>
             val target: Api.Entity = through(owner)
 
-            // A designator's parent is a type where `#` follows it, and a term where `.` does.
-            val ofType: Boolean = parent match
-              case Designator.Type(_, _) => true
-              case _                     => false
-
-            val rebased: Designator = if ofType then target.tpe else target.term
+            // A locator's parent is a type where `#` follows it, and a term where `.` does.
+            val ofType: Boolean = parent.isType
+            val rebased: Locator = if ofType then target.tpe else target.term
 
             val forwarded: Optional[Api.Entity] =
-              if target.key == owner.key then Unset else designator match
-                case Designator.Term(_, name) => find(Designator.Term(rebased, name))
-                case Designator.Type(_, name) => find(Designator.Type(rebased, name))
-                case _                        => Unset
+              if target.key == owner.key then Unset
+              else find(designator.copy(parent = rebased))
 
             forwarded.or(if ofType then inherited(target, designator.name) else Unset)
 
@@ -463,7 +454,7 @@ case class Api(entities: sci.Map[Text, Api.Entity], format: Format = ScalaFormat
   // Every entity's `members`, from the parents its children name, sorted by name.
   def relinked: Api =
     def parented(entity: Api.Entity): scala.List[(Text, Api.Entity)] =
-      entity.parent.let { (p: Designator) => scala.List((Api.key(p), entity)) }.or(scala.Nil)
+      entity.parent.let { (p: Locator) => scala.List((Api.key(p), entity)) }.or(scala.Nil)
 
     val children: sci.Map[Text, scala.List[Api.Entity]] =
       entities.values.toList.flatMap(parented).groupMap(_(0))(_(1))

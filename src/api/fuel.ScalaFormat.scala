@@ -36,7 +36,6 @@ import soundness.{Format as _, Language as _, Token as _, *}
 
 import dysasymptotics.linearSize
 import pyrocosm.{Block, Figure, Inline, Language, Token, Tone}
-import stenography.Designator
 
 // Scala, and Java as Scala sees it: the format of what `Inspection` reads from compiled code.
 // Its glyphs are `Icons`' and its signatures `Signatures`'; a type's section has its place in
@@ -72,7 +71,8 @@ object ScalaFormat extends Format:
   override def documentable(entity: Api.Entity): Boolean =
     !entity.isPackage && !entity.isParameter && !entity.derived
 
-  override def standard(configured: List[Designator]): List[Designator] = configured
+  override def typedRoots: Boolean = false
+  override def standard(configured: List[Locator]): List[Locator] = configured
   override def decorate(api: Api): Api = Applicables.decorate(api)
 
   override def sections(page: ApiPages.Context): List[Block] =
