@@ -15,6 +15,9 @@ overlay doc/api
 imports soundness
 imports fuel
 
+# The schema of a presentation, documented as the API is, by doc/api/presentation.tel.
+schema src/core/resources/fuel/presentation.schema.tel
+
 # The glossary whose terms the documents name in brackets.
 glossary doc/glossary.tel
 

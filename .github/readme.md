@@ -366,6 +366,57 @@ a signature, in inline code, or in a fence — is a link for each segment, and p
 underlines the name up to it, as on Amok's pages: `com`, then `com.example`, then
 `com.example.Foo`.
 
+### Other formats
+
+An API need not be Scala's. A `schema` setting names a [TEL](https://soundness.dev/tel/) schema
+(repeated, for several), which is documented as the code is: by overlays, on pages of the same
+layout, found by the same search. Each *format* has an `id` — `scala`, which need not be said,
+and `tels` — which begins the address of its entities and the path of their pages, so that a
+schema's are apart from a package of the same name: the record `Slide` of the schema
+`presentation` is `tels/presentation.Slide`, at `/api/tels/presentation.Slide`. A schema is the
+top-level name; its records, selects and scalars are the members of its term form
+(`presentation.Slide`), and the fields of its `document` those of its type form
+(`presentation#title`, at `/api/tels/presentation~title`); a record's fields and a select's
+variants are members of the type form of theirs (`presentation.Slide#transcript`,
+`presentation.Part#markdown`). A member's signature is the words which declare it — a field's
+type, and whether it is `optional`, `repeatable` or the `key` — and a record's page says the
+`select`s it holds, whose variants a reference finds through it (`Slide#markdown`). There is no
+hierarchy to draw, and nothing extends a record. The glyphs are, for now, those of the Scala
+keywords most like each kind: a schema's is a package's, a record's a class's, a select's an
+enum's, a variant's a case's, a scalar's a type's and a field's a value's; beside a member's,
+a small `?` says it is optional, a `+` that it is said once or more, a `*` that it is both, and
+a small key that it is the key.
+
+An overlay says the format it documents, with `format` before its `base`; without one, it
+documents Scala:
+
+```
+tel 1.0
+
+format tels
+base presentation                    # the schema this file documents
+info the format of a presentation
+
+entry #title   the presentation's title        # a field of the document
+entry .Slide                                   # a record
+  entry #transcript   what is said while the slide is shown
+```
+
+What a schema says of a definition, a field or a variant in its `description` documents it
+where no overlay does — its first sentence as the `info`, and the whole as the `detail` when
+there is more — so a member is cautioned as undocumented only when it has neither. A schema is
+held to the schema of schemas, each fault at its line, and to the rules every schema is; one
+which fails contributes nothing. In prose, a reference names another format's entity by its
+address (`` `tels/presentation.Slide` ``), or as written where nothing of its own format
+answers to the name; an `imports` of `tels/presentation` puts the schema's members in scope.
+A search knows a schema's words — `record`, `select`, `scalar`, `field`, `variant`, `optional`,
+`repeatable`, `key` — beside Scala's, and `+Slide` finds the fields which hold a `Slide`.
+
+A format is a `Format` (`fuel-api`): its glyphs, its signatures, the sections of a page which
+are its own, and its words in a search. An entity is named by a `Locator`, which is no
+format's own: Scala's `Designator` converts to one, and unlike it a locator's top-level name
+has a type form as well as a term's.
+
 ## Glossary
 
 A `glossary` is a TEL file of terms (several may be configured, and are combined), each with a
@@ -456,6 +507,9 @@ imports soundness
 # The tracker whose open issues the API's pages show: read whole, as `serve` and `port` are.
 sync github propensive/fuel
 
+# A TEL schema, documented as the API is, by the overlays which say `format tels`.
+schema etc/project.schema.tel
+
 # The glossary's terms, which a document names in brackets; and whether a link to the web is
 # fetched when the documents compile (a link within the site is always checked).
 glossary doc/glossary.tel
@@ -481,9 +535,9 @@ and a `FUEL_`-prefixed environment variable, in that order of priority ahead of 
 - `fuel-core` (`src/core`): `Doc`, `Corpus`, the `Blocks` conversion of Markdown to Pyrocosm
   blocks (recording every `Linkage` it makes), the `Glossary`, and the `Embedding` of fenced
   code, for another tool to embed.
-- `fuel-api` (`src/api`): the `Api` model, read from compiled code by `Inspection`, documented
-  by `Overlay`s, with the `Resolver` of references, `Signatures` as tokens, `ApiPages`, and the
-  `Links` check.
+- `fuel-api` (`src/api`): the `Api` model of each `Format` (`Apis`), Scala's read from
+  compiled code by `Inspection` and a TEL schema's by `TelsFormat`, documented by `Overlay`s,
+  with the `Resolver` of references, `Signatures` as tokens, `ApiPages`, and the `Links` check.
 - `fuel-client` (`src/client`): the `Tool`, its subcommands and settings, the daemon's corpus
   and model, and the dashboard.
 - `launcher` (`src/launcher`): the entry point alone, built into the executable.

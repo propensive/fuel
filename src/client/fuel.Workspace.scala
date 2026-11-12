@@ -58,7 +58,8 @@ object Workspace:
       glossaries: List[Text]    = Nil,
       checkLinks: Boolean       = false,
       sync:       List[Sync.Target] = Nil,
-      badSync:    List[Text]        = Nil )
+      badSync:    List[Text]        = Nil,
+      schemas:    List[Text]        = Nil )
 
   def load(directory: Text)(using Cli, Interpreter, Configurator): Config =
     // The project the directory is in, as `Tool` finds it: its root is what every path in the
@@ -101,4 +102,5 @@ object Workspace:
         entries(ui.Glossary()),
         ui.CheckLinks().or(false),
         sync,
-        badSync )
+        badSync,
+        entries(ui.Schema()) )

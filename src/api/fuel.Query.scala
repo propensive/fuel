@@ -103,6 +103,10 @@ object Query:
 
   case class Name(text: Text, exact: Boolean)
 
+  // A bare word of a format other than Scala, which its `vocabulary` has: the kinds it says,
+  // or the modifier.
+  case class Word(kinds: sci.Set[Api.Kind] = sci.Set(), modifier: Optional[Text] = Unset)
+
   // A type as written in a `+` or `-` term, unresolved: its name and its arguments. A tuple is
   // `scala.TupleN`, a function `scala.FunctionN` and a context function `scala.ContextFunctionN`,
   // as the model shapes them.
@@ -126,11 +130,12 @@ object Query:
   extends soundness.Error(reason.message)
 
   // A query, or what is wrong with it.
-  def read(text: Text): Query | Error = try parse(text) catch case error: Error => error
+  def read(text: Text, vocabulary: sci.Map[Text, Word] = sci.Map()): Query | Error =
+    try parse(text, vocabulary) catch case error: Error => error
 
   // The text as tokens, for a field to show it coloured as it is typed: sigils as symbols,
   // keywords as keywords, types as types, names as terms.
-  def tokens(text: Text): List[Token] =
+  def tokens(text: Text, vocabulary: sci.Map[Text, Word] = sci.Map()): List[Token] =
     val s: String = text.s
     val length: Int = s.length
     val tokens: scm.ListBuffer[Token] = scm.ListBuffer()
@@ -200,7 +205,7 @@ object Query:
           case char if char.isLetterOrDigit || char == '_' =>
             val end: Int = word(index, false)
             val text: Text = s.substring(index, end).nn.tt
-            val keyword: Boolean = Keyword.parse(text).present
+            val keyword: Boolean = Keyword.parse(text).present || vocabulary.contains(text)
             add(index, end, if keyword then Token.Accent.Keyword else Token.Accent.Term)
             recur(end)
 
@@ -212,7 +217,7 @@ object Query:
     recur(0)
     List.from(tokens)
 
-  private def parse(text: Text)(using CanThrow[Error]): Query =
+  private def parse(text: Text, vocabulary: sci.Map[Text, Word])(using CanThrow[Error]): Query =
     import errorDiagnostics.emptyDiagnostics
     val s: String = text.s
     val length: Int = s.length
@@ -379,7 +384,18 @@ object Query:
             else
               val named: Query = query.copy(names = query.names + List(Name(text, false)))
 
-              Keyword.parse(text).lay(recur(end, named)): keyword =>
+              // A word of another format's, where it is none of Scala's.
+              def foreign: Query = vocabulary.get(text) match
+                case Some(word) =>
+                  val modifiers: sci.Set[Text] =
+                    word.modifier.lay(query.modifiers)(query.modifiers + _)
+
+                  recur(end, query.copy(kinds = query.kinds ++ word.kinds, modifiers = modifiers))
+
+                case None =>
+                  recur(end, named)
+
+              Keyword.parse(text).lay(foreign): keyword =>
                 val modifiers: sci.Set[Text] =
                   keyword.modifier.lay(query.modifiers)(query.modifiers + _)
 

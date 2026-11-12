@@ -429,6 +429,27 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   and Java: TEL schemas as a hierarchy (records, fields, scalars — the first non-JVM API),
   Java through harlequin as now, other fences highlighted by a pluggable tokenizer or shown
   plain. Pyrocosm's `Language` is open, so nothing in the model changes.
+  - **Formats** (done, first cut; TEL schemas). What is Scala's own about the API is behind a
+    `Format` (`ScalaFormat`: `Icons`, `Signatures`, the hierarchy, extensions and givens), and
+    `Api.Kind` is open. There is an `Api` for each format (`Apis`), so that each keeps its own
+    keys, lattice and search, and an entity has an *address* among them all — its key after
+    its format's `id` and a `/`, Scala's being its key alone — as its page is at
+    `/api/<id>/<path>`: no Scala path holds a `/`, so only `<id>/…` is another format's, and
+    `/api/tels` is still a package. An entity is named by a `Locator`, not by stenography's
+    `Designator`, which names what the JVM has and whose top-level name has one form: a
+    locator's has two, so a schema's definitions are `schema.Record` and its document's fields
+    `schema#field`. A format whose signatures are words keeps them as `Api.Signature`.
+    `TelsFormat` reads a schema named by a `schema` setting, held first to the schema of
+    schemas (`Tels.Axiom.tels`, each fault at its place) and then to `Tels.Validation`, whose
+    faults have no place and are reported at the file. A `description` documents what no
+    overlay does. Found on the way: the presentation schema's records were not contiguous (a
+    `select` stood between them), which reading a schema as `Tels` alone does not notice.
+    A member's glyph says how often it may be said, as a grammar does — a small `?`
+    (optional), `+` (repeatable) or `*` (both) at its top right — and a small key at its top
+    left that it is the key. Not yet: glyphs of a schema's own; layers; the built-in types as entities; a "used by" table; a sigil
+    before a kebab-case name (`` `.some-field` ``), which `Linker.kind` does not read;
+    schemas derived from Scala types; a schema for the overlay format itself; and a project
+    with no classpath, whose schemas are not read, since the API is built with the session.
 - **M7 Presentations** (first cut). `fuel present <file>` shows a TEL document of `slide`s, each
   holding Markdown or a block of code, as a Pyrocosm `Block.Deck` (propensive/pyrocosm#80) in a
   browser: one slide at a time, stepped by the keys. Consecutive slides of code in one language

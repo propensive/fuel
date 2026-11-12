@@ -51,17 +51,18 @@ object Dashboard:
 
   // The results of a search, as a page; or what is wrong with the query.
   def searchPage(text: Text): List[Block] =
-    val api: Api = Server.api
+    val apis: Apis = Server.apis
+    val api: Api = apis.primary
     val scope: Scope = Scope.document(Server.imports, Server.standard)
 
-    Query.read(text) match
+    Query.read(text, apis.vocabulary) match
       case error: Query.Error =>
         val message: List[Block] = List(Block.paragraph(error.message.text))
         List(Block.Notice(Tone.Warning, Inline.text(t"Query"), message))
 
       case query: Query =>
-        val outcome: Search.Outcome = api.search(query, Server.terms)
-        ApiPages.search(api, text, outcome, Resolver(api, scope, Unset, Server.apis), scope)
+        val outcome: Search.Outcome = apis.search(query, Server.terms)
+        ApiPages.search(apis, text, outcome, Resolver(api, scope, Unset, apis), scope)
 
   // Where the documents on `port` are found.
   def address(port: Int): Text = Fuel.address(port)
@@ -202,7 +203,8 @@ final class Dashboard():
       val completions = Server.api.search.completions(text, caret)
 
       search.decoration() =
-        Control.Field.Decoration(Query.tokens(text), completions, false, version = version)
+        val tokens = Query.tokens(text, Server.apis.vocabulary)
+        Control.Field.Decoration(tokens, completions, false, version = version)
 
       selected = if text.trim == t"" then first else Target.Search(text)
       show()

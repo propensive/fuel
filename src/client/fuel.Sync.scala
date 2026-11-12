@@ -154,7 +154,7 @@ object Sync:
   // pages.
   def publish(states: List[State]): List[(Int, Text)] =
     val scope: Scope = Scope.document(Server.imports, Server.standard)
-    val (index, unresolved) = Issue.index(states.bind(_.issues), Server.api, scope)
+    val (index, unresolved) = Issue.index(states.bind(_.issues), Server.apis, scope)
     Server.publishIssues(states, index)
     unresolved
 

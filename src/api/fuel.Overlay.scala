@@ -39,7 +39,8 @@ import dysasymptotics.{linearAccess, linearSize}
 import pyrocosm.Tels
 import pyrocosm.{Block, Tone}
 
-// The documentation of an API, in Amok's `Flux` format: a TEL file per package (`base`), with
+// The documentation of an API, in Amok's `Flux` format: a TEL file per package (`base`) — or
+// per top-level name of another `format`, a schema say, which the file names by its `id` — with
 // an `entry` per member — `.name` for a member of the term, `#Name` for a member of the type,
 // nested as the members are — each holding a one-line `info` (its inline atoms), a Markdown
 // `detail` (its source atom), whether it is `hidden`, the version it was removed `until` and
@@ -64,11 +65,14 @@ object Overlay:
   // rest hold atoms alone.
   private val fileKeywords: List[Text] =
     List
-      ( t"base", t"import", t"info", t"detail", t"refer", t"hidden", t"until", t"entry",
-        t"keyword" )
+      ( t"format", t"base", t"import", t"info", t"detail", t"refer", t"hidden", t"until",
+        t"entry", t"keyword" )
 
-  private val entryKeywords: List[Text] = fileKeywords.filter(_ != t"base")
-  private val once: List[Text] = List(t"base", t"info", t"detail", t"hidden", t"until")
+  private val entryKeywords: List[Text] =
+    fileKeywords.filter { (keyword: Text) => keyword != t"base" && keyword != t"format" }
+
+  private val once: List[Text] =
+    List(t"format", t"base", t"info", t"detail", t"hidden", t"until")
 
   // The lines `headed` adds before the file's own.
   private def headed(text: Text): Text = Tels.headed(text)(0)
@@ -94,7 +98,11 @@ object Overlay:
         val problems: List[Block] =
           check(path, lines, Unset, tel.childCompounds.to[List], fileKeywords)
 
-        Overlay(path, base, doc(tel, 1, Nil), entries(tel, lines), problems)
+        // The format of what it documents, by its `id`: Scala's, unless it says.
+        val format: Text =
+          tel.fields(t"format").to[List].head.let(_.primaryAtom).let(_.puncture(t"")).or(t"scala")
+
+        Overlay(path, base, doc(tel, 1, Nil), entries(tel, lines), problems, format)
 
     catch case error: Tel.Error =>
       val shift: Int = -added(text)
@@ -317,6 +325,12 @@ object Overlay:
       val location: Block.Location = Block.Location(path, line)
       problems = Block.Diagnostic(tone, location, List(Block.paragraph(message))) :: problems
 
+    // What an overlay says of an entity, over what the entity says of itself (a schema's
+    // `description`): the overlay's `info` and `detail`, each where it has one.
+    def over(said: Api.Entry, own: Optional[Api.Entry]): Api.Entry =
+      own.lay(said): (own: Api.Entry) =>
+        said.copy(info = said.info.or(own.info), detail = said.detail.or(own.detail))
+
     def place(overlay: Overlay, parent: Api.Entity, entry: Entry): Unit =
       val designator: Locator = current.normal(if entry.isType then parent.tpe else parent.term)
       val key: Text = Api.key(designator, entry.name)
@@ -330,7 +344,7 @@ object Overlay:
 
             report(Tone.Warning, overlay.file, entry.line, message)
 
-          val doc: Api.Entry = entry.doc.copy(file = overlay.file)
+          val doc: Api.Entry = over(entry.doc.copy(file = overlay.file), existing.doc)
           current = current.add(existing.copy(doc = doc))
           entry.entries.each: (child: Entry) => place(overlay, existing.copy(doc = doc), child)
 
@@ -361,7 +375,8 @@ object Overlay:
 
       current(Api.key(base)) match
         case entity: Api.Entity =>
-          val documented: Api.Entity = entity.copy(doc = overlay.doc.copy(file = overlay.file))
+          val documented: Api.Entity =
+            entity.copy(doc = over(overlay.doc.copy(file = overlay.file), entity.doc))
           current = current.add(documented)
           overlay.entries.each: (entry: Entry) => place(overlay, documented, entry)
 
@@ -421,4 +436,5 @@ case class Overlay
     base:     Text,
     doc:      Api.Entry,
     entries:  List[Overlay.Entry],
-    problems: List[Block]         = Nil )
+    problems: List[Block]         = Nil,
+    format:   Text                = t"scala" )

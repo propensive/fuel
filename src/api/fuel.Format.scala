@@ -32,7 +32,9 @@
                                                                                                   */
 package fuel
 
-import soundness.{Format as _, Language as _, Token as _, *}
+import scala.collection.immutable as sci
+
+import soundness.{Format as _, Language as _, Query as _, Token as _, *}
 
 import pyrocosm.{Block, Inline, Language, Token}
 
@@ -46,8 +48,8 @@ import pyrocosm.{Block, Inline, Language, Token}
 // its `signature`, unless the format writes them its own way; it may give an entity's page
 // sections of its own, and others for what applies to the entity beyond what it declares; and
 // it says which entities are nodes of the navigation, which are cautioned when nothing
-// documents them, what resolves in it without an import, and what a whole model gains once it
-// is assembled.
+// documents them, what resolves in it without an import, what a whole model gains once it is
+// assembled, and the words of its own a search may say.
 trait Format:
   def id: Text
   def title: Text
@@ -114,3 +116,7 @@ trait Format:
   // options say every Scala source sees: nothing, but for Scala.
   def standard(configured: List[Locator]): List[Locator] = Nil
   def decorate(api: Api): Api = api
+
+  // The bare words of a search which say a kind or a modifier of this format's, besides
+  // Scala's, which every search knows.
+  def vocabulary: sci.Map[Text, Query.Word] = sci.Map()

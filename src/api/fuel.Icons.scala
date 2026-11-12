@@ -65,6 +65,10 @@ import pyrocosm.Inline
 //   java          a `J` in the top left corner, on what was compiled from Java
 //   implicit      nothing: it is deprecated
 //   open          undecided (nothing drawn for it)
+//   optional      a small `?` in the top right corner (a TEL schema's member); with
+//                 `repeatable`, a small `*` there instead
+//   repeatable    a small `+` in the top right corner: one or more; with `optional`, the `*`
+//   key           a small key in the top left corner
 //   extension     a def with a small plus at the top right (e-def)
 //   enum case     a dot (c-case); on a class or object, a dot at the centre (c-class, c-object)
 object Icons:
@@ -285,9 +289,45 @@ object Icons:
         val at: Text = t"$eye V ${num(y + 0.4)} A 0.5 0.5 0 0 0 ${num(x + 2)} ${num(y)} $outer"
         converting.add(stroked(at, 0.6)).reach(0, x + 2.4)
 
-    val marked: Drawing =
+    val java: Drawing =
       if !has(t"java") || kind == Api.Kind.Package || kind == Api.Kind.Param then annotated
       else annotated.add(stroked(t"M 2.6 0.4 V 3 A 1.05 1.05 0 0 1 0.5 3", 0.8))
+
+    // How many times a member of a TEL schema may be said, in the top right corner, as a
+    // grammar writes it: `?` for one which may be left out, `+` for one said once or more, and
+    // `*` for one which is both.
+    val counted: Drawing =
+      val x: Double = 13.3
+      val y: Double = 2.5
+      val r: Double = 1.4
+
+      def spoke(degrees: Double): Text =
+        val radians: Double = degrees*scala.math.Pi/180
+        val dx: Double = r*scala.math.cos(radians)
+        val dy: Double = r*scala.math.sin(radians)
+        t"M ${num(x - dx)} ${num(y - dy)} L ${num(x + dx)} ${num(y + dy)}"
+
+      def spokes(angles: Double*): Text = stroked(angles.map(spoke).join(t" "), 0.6)
+
+      if has(t"optional") && has(t"repeatable") then
+        java.add(spokes(90, 30, 150)).reach(0, x + r + 0.4)
+      else if has(t"repeatable") then
+        java.add(spokes(0, 90)).reach(0, x + r + 0.4)
+      else if has(t"optional") then
+        val hook: Text =
+          t"M ${num(x - 0.95)} ${num(y - 0.75)} A 0.95 0.95 0 1 1 ${num(x)} ${num(y + 0.2)} " +
+            t"V ${num(y + 0.7)}"
+
+        java.add(stroked(hook, 0.6), disc(0.4, x, y + 1.5)).reach(0, x + r + 0.4)
+      else
+        java
+
+    // A key, in the top left corner: its bow, its shaft and two teeth.
+    val marked: Drawing =
+      if !has(t"key") then counted else
+        val bow: Text = t"M 1.4 2.2 A 1 1 0 1 0 -0.6 2.2 A 1 1 0 1 0 1.4 2.2"
+        val shaft: Text = t"M 1.4 2.2 H 4.4 V 3.3 M 3.3 2.2 V 3.1"
+        counted.add(stroked(t"$bow $shaft", 0.6)).reach(-1, grid)
 
     if !has(t"final") then marked else
       // Below the right infix square, where there is one and the stop would otherwise touch it.

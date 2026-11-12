@@ -185,7 +185,8 @@ extends Linker:
   // The entity a designator written in prose names, through what its prefix forwards to and
   // what a type inherits, then through an exported alias to its target.
   private def entity(designator: Locator): Optional[Api.Entity] =
-    api.resolve(designator).let: (found: Api.Entity) => found.alias.let(Locator.of).let(api.find).or(found)
+    api.resolve(designator).let: (found: Api.Entity) =>
+      found.alias.let(Locator.of).let(api.find).or(found)
 
   // The keys of the packages and objects whose members are in scope, which an extension
   // declared in one of them is reached through.
