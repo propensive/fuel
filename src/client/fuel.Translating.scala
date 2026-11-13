@@ -48,7 +48,7 @@ extends Status(10, t"a translation is not consistent with the text it translates
 
 // `fuel translate`: the translations of a project's documents, overlays and glossaries,
 // without compiling anything. A translation is where the configuration puts it: the file of
-// the same relative path in the directory a `translation` line, beneath a `document`, gives
+// the same relative path in the directory a `translation` line, beneath a `section`, gives
 // its language. The command writes each translation nobody has started — of every document,
 // overlay and glossary, or of the files named, into every language configured, or the one
 // given with `--language` — and says how far each translation is done and everything wrong
@@ -56,7 +56,7 @@ extends Status(10, t"a translation is not consistent with the text it translates
 // leaving the translator the `!` lines to work from.
 object Translating:
   enum Kind:
-    case Document, Overlay, Glossary
+    case Document, Overlay, Glossary, Details
 
   // A file which is translated from: its path, what it is, its text, and its translations, a
   // language and a path each.
@@ -94,13 +94,17 @@ object Translating:
     val overlays: List[Source] = config.overlays.bind: (root: Text) =>
       telFiles(root).filter(!Translations.held(_, config.translations))
       . filter(!config.glossaries.has(_))
+      . filter { (file: Text) => !config.details.exists(_(1) == file) }
       . bind(source(config, Kind.Overlay, _))
+
+    val details: List[Source] = config.details.bind: (_, file: Text) =>
+      source(config, Kind.Details, file)
 
     val glossaries: List[Source] =
       config.glossaries.filter(!Translations.held(_, config.translations))
       . bind(source(config, Kind.Glossary, _))
 
-    documents + overlays + glossaries
+    documents + overlays + glossaries + details
 
   // The names of every term the glossaries define, which a translated term may be mistaken
   // for.
@@ -128,6 +132,9 @@ object Translating:
         GlossaryTranslations.verify
           ( source.path, source.text, source.translations, reader, partial, names )
 
+      case Kind.Details =>
+        Details.verify(source.path, source.text, source.translations, read, partial)
+
   // The files in the directories of translations which translate nothing: each a caution.
   private def strays(config: Workspace.Config, targets: List[Translations.Target]): List[Block] =
     val files: List[Text] = targets.map(_.directory).distinct.bind: (directory: Text) =>
@@ -146,6 +153,7 @@ object Translating:
     case Kind.Document => Translation.progress(Translation.parse(text), source.text)
     case Kind.Overlay  => OverlayTranslations.progress(text, source.text)
     case Kind.Glossary => GlossaryTranslations.progress(text, source.text)
+    case Kind.Details  => Details.progress(text, source.text)
 
   private def shown(config: Workspace.Config, path: Text): Text =
     if path.starts(t"${config.root}/") then path.skip(config.root.length + 1) else path
@@ -164,6 +172,7 @@ object Translating:
   private def kind(config: Workspace.Config, path: Text): Optional[Kind] =
     if path.ends(t".md") then Kind.Document
     else if config.glossaries.has(path) then Kind.Glossary
+    else if config.details.exists(_(1) == path) then Kind.Details
     else if path.ends(t".tel") then Kind.Overlay
     else Unset
 
@@ -181,7 +190,9 @@ object Translating:
       val reasons: List[Text] = found.filter(_(1).absent).map: (path: Text, _) =>
         if Translations.held(path, config.translations) then
           t"${shown(config, path)} is a translation: name the file it translates"
-        else t"${shown(config, path)} could not be read as a document, an overlay or a glossary"
+        else
+          t"${shown(config, path)} could not be read as a document, an overlay, a glossary or " +
+            t"a section's details"
 
       (found.bind { (_, source) => source.let(List(_)).or(List[Source]()) }, reasons)
 
@@ -193,6 +204,7 @@ object Translating:
         case Kind.Document => Translation.skeleton(source.text).serialize
         case Kind.Overlay  => OverlayTranslations.generate(source.text)
         case Kind.Glossary => GlossaryTranslations.generate(source.text)
+        case Kind.Details  => Details.generate(source.text)
 
       content.let: (content: Text) =>
         if write(target, content) then Out.println(t"fuel: wrote ${shown(config, target)}")
@@ -225,7 +237,7 @@ object Translating:
 
       Out.println
         ( t"fuel: the configuration has no directory of translations$into: it names one as " +
-            t"`translation $example guide doc/$example`, beneath the `document` it translates" )
+            t"`translation $example $example-directory`, beneath the `section` it translates" )
 
     targets.nil
 
@@ -253,7 +265,7 @@ object Translating:
 
         if source.translations.nil && !files.nil then
           Out.println
-            ( t"fuel: ${shown(config, source.path)} is beneath no `document` the configuration " +
+            ( t"fuel: ${shown(config, source.path)} is in no `section` the configuration " +
                 t"gives a translation" )
 
       val rows: List[Text] = all.bind: (source: Source) =>
@@ -299,6 +311,9 @@ object Translating:
 
               case Kind.Glossary =>
                 GlossaryTranslations.generate(source.text, old)
+
+              case Kind.Details =>
+                Details.generate(source.text, old)
 
             current.lay(List[Boolean]()): (current: Text) =>
               if current == old then List(false) else

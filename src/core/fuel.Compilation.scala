@@ -244,12 +244,7 @@ object Compilation:
 
           anchored(parsed, doc)
 
-      // What the language calls the section, as its `translation` says.
-      val title: Optional[Text] =
-        complete.translations.filter { target => target.tongue == tongue && target.base == section.root }
-        . head.let(_.name)
-
-      section.copy(docs = docs, skipped = Nil, title = title)
+      section.copy(docs = docs, skipped = Nil)
 
     Corpus(sections)
 

@@ -60,13 +60,15 @@ object Workspace:
       sync:       List[Sync.Target] = Nil,
       badSync:    List[Text]        = Nil,
       schemas:    List[Text]        = Nil,
-      // The translations of each `document` directory; what is wrong with how they are
-      // configured; and each such directory with the language it is written in.
+      // The translations of each section's definitive directory; what is wrong with how the
+      // sections are configured; and each such directory with the language it is written in.
       translations:    List[Translations.Target] = Nil,
       badTranslations: List[Text]                = Nil,
       languages:       List[(Text, Text)]        = Nil,
-      // Each section, a name and its `document` directory, as the configuration names it.
-      sections:        List[(Text, Text)]        = Nil )
+      // Each section, a name and the directory of its definitive text.
+      sections:        List[(Text, Text)]        = Nil,
+      // Each section's `details` file, by the directory of its definitive text.
+      details:         List[(Text, Text)]        = Nil )
 
   def load(directory: Text)(using Cli, Interpreter, Configurator): Config =
     // The project the directory is in, as `Tool` finds it: its root is what every path in the
@@ -95,139 +97,193 @@ object Workspace:
     val sync: List[Sync.Target] = syncLines.bind { words => Sync.Target.parse(words).let(List(_)).or(Nil) }
     val badSync: List[Text] = syncLines.filter(Sync.Target.parse(_).absent).map(_.join(t" "))
 
-    // A `document` may hold more than its directory, which a `Setting` does not read: the
-    // `language` it is written in, each `overlay` directory and each `glossary` inside it
-    // (which its translations then translate, as they do its documents), and a `translation`
-    // for each language it is translated into — a language and the directory which mirrors
-    // the document's, perhaps with a `fallback` language. So each is read from the
-    // configuration whole, as a `sync` line is; what is wrong with one is kept, to be reported.
-    // A `translation` is written as the `document` is, after its language: what the language
-    // calls the section, then its directory.
+    // A `section` is read from the configuration whole, as a `sync` line is, since it holds
+    // more than a `Setting` reads: its name and its directory, and beneath it the `definitive`
+    // text — the language it is written in and its directory — and a `translation` for each
+    // language it is translated into, a language and a directory too, perhaps with a
+    // `fallback` language. Beneath the `definitive` are what is found in its directory, and in
+    // each translation's at the same path: the section's `details`, each `overlay` directory
+    // and each `glossary`. Every path is within its parent's: a `definitive` and a
+    // `translation` in the section's directory, the others in the definitive's. What is wrong
+    // with a section is kept, to be reported, and a section which cannot be read is left out.
+    //
+    //     section guide doc
+    //       definitive en-US en
+    //         details section.tel
+    //         overlay api
+    //         glossary glossary.tel
+    //       translation fr fr
+    //       translation fr-CA fr-CA
+    //         fallback fr
     def words(tel: Tel): List[Text] = tel.atomTexts.to[List].filter(_ != t"")
 
     def lines(tel: Tel, keyword: Text): List[List[Text]] =
       tel.fields(keyword).to[List].map(words(_))
 
     def within(directory: Text, entry: Text): Text =
-      if entry.starts(t"/") then entry else t"$directory/$entry"
+      if entry.starts(t"/") then entry
+      else if entry == t"." || entry == t"./" then directory
+      else t"$directory/$entry"
 
     case class Group
-      ( name:         Optional[Text],
-        entry:        Text,
+      ( name:         Text,
         directory:    Text,
-        language:     Optional[Text],
+        language:     Text,
+        details:      Optional[Text],
         overlays:     List[Text],
         glossaries:   List[Text],
-        translations: List[Translations.Target],
-        faults:       List[Text] )
+        translations: List[Translations.Target] )
 
     // Whether a name can be a section's: it is one segment of a page's address.
     def nameable(name: Text): Boolean =
       name != t"" && !name.s.contains("/") && !name.s.contains("#")
 
-    // A `document` line is a section's name and its directory, `document guide doc/en`. One
-    // which is anything else is reported, and where it gives a directory alone, its section
-    // is named after that, so that what else is wrong with the project can still be said.
-    def group(tel: Tel): List[Group] = words(tel).reverse.head.lay(List[Group]()): (entry: Text) =>
-      val directory: Text = project.resolve(entry).encode
+    val form: Text = t"`section guide doc`, with `definitive en-US en` beneath it"
+
+    // A section, if it can be read, and what is wrong with it.
+    def group(tel: Tel): (Optional[Group], List[Text]) =
+      val atoms: scala.collection.immutable.Vector[Text] = words(tel).stdlib.toVector
       val written: Text = words(tel).join(t" ")
-      val title: Optional[Text] = if words(tel).stdlib.size == 2 then words(tel).head else Unset
 
       val misnamed: List[Text] =
-        if words(tel).stdlib.size != 2 then
+        if atoms.length != 2 then
           List
-            ( t"`document $written` is not a section's name and its directory, as " +
-                t"`document guide doc/en`" )
-        else if !title.lay(false)(nameable(_)) then
+            ( t"`section $written` is not a section's name and its directory, as " +
+                t"`section guide doc`" )
+        else if !nameable(atoms(0)) then
           List
-            ( t"`document $written` names its section `${title.or(t"")}`, and a name is one " +
-                t"segment of a page's address, so it cannot hold `/` or `#`" )
+            ( t"`section $written` names the section `${atoms(0)}`, and a name is one segment " +
+                t"of a page's address, so it cannot hold `/` or `#`" )
         else Nil
 
-      val languages: List[List[Text]] = lines(tel, t"language")
+      // What belongs beneath the `definitive`, or is no longer said.
+      val misplaced: List[Text] =
+        List(t"details", t"overlay", t"glossary").bind: (keyword: Text) =>
+          lines(tel, keyword).map: (atoms: List[Text]) =>
+            t"`$keyword ${atoms.join(t" ")}`, of `section $written`, belongs beneath the " +
+              t"section's `definitive`, whose directory it is in"
 
-      val language: Optional[Text] =
-        languages.head.let(_.head).let: (tongue: Text) =>
-          if Tongue.valid(tongue) then tongue else Unset
+      val outdated: List[Text] = lines(tel, t"language").map: (atoms: List[Text]) =>
+        t"`language ${atoms.join(t" ")}`, of `section $written`, is said by the section's " +
+          t"`definitive`, as `definitive ${atoms.join(t" ")} en`"
 
-      val spoken: List[Text] =
-        if languages.nil || (languages.stdlib.size == 1 && language.present) then Nil else
+      val originals: List[Tel] = tel.fields(t"definitive").to[List]
+
+      val original: Optional[(Text, Text, Tel)] =
+        if originals.stdlib.size != 1 then Unset else originals.head.let: (node: Tel) =>
+          val atoms: scala.collection.immutable.Vector[Text] = words(node).stdlib.toVector
+          if atoms.length != 2 || !Tongue.valid(atoms(0)) then Unset else (atoms(0), atoms(1), node)
+
+      val baseless: List[Text] =
+        if original.present then Nil
+        else if originals.nil then
           List
-            ( t"`document $written` has a `language` which is not one language, as `en` or " +
-                t"`en-US`" )
-
-      val nested: List[Text] = lines(tel, t"overlay").bind(_.head.let(List(_)).or(Nil))
-      val defined: List[Text] = lines(tel, t"glossary").bind(_.head.let(List(_)).or(Nil))
-
-      val read: List[(List[Text], List[List[Text]])] =
-        tel.fields(t"translation").to[List].map { line => (words(line), lines(line, t"fallback")) }
-
-      def target(atoms: List[Text], fallbacks: List[List[Text]]): Optional[Translations.Target] =
-        val all: scala.collection.immutable.Vector[Text] = atoms.stdlib.toVector
-        val fallback: Optional[Text] = fallbacks.head.let(_.head)
-
-        val sound: Boolean =
-          fallbacks.stdlib.size <= 1 && fallbacks.all(_.stdlib.size == 1) &&
-            fallback.lay(true)(Tongue.valid(_))
-
-        if all.length != 3 || !Tongue.valid(all(0)) || !nameable(all(1)) || !sound then Unset
+            ( t"`section $written` does not say where its definitive text is, and in which " +
+                t"language, as `definitive en-US en` beneath it" )
+        else if originals.stdlib.size > 1 then
+          List(t"`section $written` has more than one `definitive`")
         else
-          Translations.Target
-            ( all(0), directory, project.resolve(all(2)).encode, fallback, all(1) )
-
-      val targets: List[Translations.Target] =
-        read.bind { (atoms, fallbacks) => target(atoms, fallbacks).let(List(_)).or(Nil) }
-
-      // A fallback is the document's own language, or another it is translated into.
-      def grounded(target: Translations.Target): Boolean =
-        target.fallback.lay(true): (fallback: Text) =>
-          fallback != target.tongue &&
-            (language.lay(false)(_ == fallback) || targets.exists(_.tongue == fallback))
-
-      val malformed: List[Text] =
-        read.filter { (atoms, fallbacks) => target(atoms, fallbacks).absent }.map: (atoms, _) =>
-          t"`translation ${atoms.join(t" ")}`, of `document $entry`, is not a language, what it " +
-            t"calls the section, and the directory of its translations, perhaps with a " +
-            t"`fallback` language, as `translation fr guide doc/fr`"
-
-      val groundless: List[Text] = targets.filter(!grounded(_)).map: target =>
-        t"`translation ${target.tongue}`, of `document $entry`, falls back to " +
-          t"`${target.fallback.or(t"")}`, which is neither the document's `language` nor another " +
-          t"it is translated into"
-
-      val own: List[Text] =
-        targets.filter { target => language.lay(false)(_ == target.tongue) }.map: target =>
-          t"`translation ${target.tongue}`, of `document $entry`, is into the language the " +
-            t"document is written in"
-
-      val unspoken: List[Text] =
-        if read.nil || !languages.nil then Nil else
           List
-            ( t"`document $entry` is translated, and does not say its own `language`, as " +
-                t"`language en`" )
+            ( t"`definitive ${originals.head.let(words(_).join(t" ")).or(t"")}`, of `section " +
+                t"$written`, is not a language and the directory of the text written in it, " +
+                t"as `definitive en-US en`" )
 
-      val kept: List[Translations.Target] =
-        targets.filter { target => !language.lay(false)(_ == target.tongue) }.map:
-          (target: Translations.Target) =>
-            if grounded(target) then target else target.copy(fallback = Unset)
+      if atoms.length != 2 || !nameable(atoms(0)) then (Unset, misnamed + misplaced + outdated)
+      else original.lay((Unset: Optional[Group], baseless + misplaced + outdated)):
+        (language: Text, entry: Text, node: Tel) =>
+          val home: Text = project.resolve(atoms(1)).encode
+          val directory: Text = within(home, entry)
+          val described: List[List[Text]] = lines(node, t"details")
+          val nested: List[Text] = lines(node, t"overlay").bind(_.head.let(List(_)).or(Nil))
+          val defined: List[Text] = lines(node, t"glossary").bind(_.head.let(List(_)).or(Nil))
 
-      List
-        ( Group
-            ( if misnamed.nil then title else Unset, entry, directory, language,
-              nested.map(within(directory, _)), defined.map(within(directory, _)), kept,
-              misnamed + spoken + malformed + groundless + own + unspoken ) )
+          val overdescribed: List[Text] =
+            if described.stdlib.size <= 1 && described.all(_.stdlib.size == 1) then Nil
+            else
+              List
+                ( t"`section $written` has `details` which are not one file, as " +
+                    t"`details section.tel`" )
 
-    val groups: List[Group] =
-      project.config.lay(List[Group]()): (tel: Tel) =>
-        tel.fields(t"document").to[List].bind(group(_))
+          val read: List[(List[Text], List[List[Text]])] =
+            tel.fields(t"translation").to[List].map: line =>
+              (words(line), lines(line, t"fallback"))
 
-    // A `translation` is of a `document`: one at the top level is of nothing.
+          def target(atoms: List[Text], fallbacks: List[List[Text]])
+          :   Optional[Translations.Target] =
+
+            val all: scala.collection.immutable.Vector[Text] = atoms.stdlib.toVector
+            val fallback: Optional[Text] = fallbacks.head.let(_.head)
+
+            val sound: Boolean =
+              fallbacks.stdlib.size <= 1 && fallbacks.all(_.stdlib.size == 1) &&
+                fallback.lay(true)(Tongue.valid(_))
+
+            if all.length != 2 || !Tongue.valid(all(0)) || !sound then Unset
+            else Translations.Target(all(0), directory, within(home, all(1)), fallback)
+
+          val targets: List[Translations.Target] =
+            read.bind { (atoms, fallbacks) => target(atoms, fallbacks).let(List(_)).or(Nil) }
+
+          // A fallback is the section's own language, or another it is translated into.
+          def grounded(target: Translations.Target): Boolean =
+            target.fallback.lay(true): (fallback: Text) =>
+              fallback != target.tongue &&
+                (language == fallback || targets.exists(_.tongue == fallback))
+
+          val malformed: List[Text] =
+            read.filter { (atoms, fallbacks) => target(atoms, fallbacks).absent }.map: (atoms, _) =>
+              t"`translation ${atoms.join(t" ")}`, of `section $written`, is not a language and " +
+                t"the directory of its translations, within the section's, perhaps with a " +
+                t"`fallback` language, as `translation fr fr`"
+
+          val groundless: List[Text] = targets.filter(!grounded(_)).map: target =>
+            t"`translation ${target.tongue}`, of `section $written`, falls back to " +
+              t"`${target.fallback.or(t"")}`, which is neither the section's definitive " +
+              t"language nor another it is translated into"
+
+          val own: List[Text] = targets.filter(_.tongue == language).map: target =>
+            t"`translation ${target.tongue}`, of `section $written`, is into the language the " +
+              t"section is written in"
+
+          val same: List[Text] = targets.filter(_.directory == directory).map: target =>
+            t"`translation ${target.tongue}`, of `section $written`, is in the directory of " +
+              t"the text it translates"
+
+          val kept: List[Translations.Target] =
+            targets.filter { target => target.tongue != language && target.directory != directory }
+            . map { target => if grounded(target) then target else target.copy(fallback = Unset) }
+
+          val details: Optional[Text] =
+            if !overdescribed.nil then Unset
+            else described.head.let(_.head).let(within(directory, _))
+
+          ( Group
+              ( atoms(0), directory, language, details, nested.map(within(directory, _)),
+                defined.map(within(directory, _)), kept ),
+            misplaced + outdated + overdescribed + malformed + groundless + own + same )
+
+    val read: List[(Optional[Group], List[Text])] =
+      project.config.lay(List[(Optional[Group], List[Text])]()): (tel: Tel) =>
+        tel.fields(t"section").to[List].map(group(_))
+
+    val groups: List[Group] = read.bind(_(0).let(List(_)).or(Nil))
+
+    // What is of a `section`, at the top level, is of nothing; and a `document` in the
+    // configuration is what a `section` was.
     val loose: List[Text] = project.config.lay(Nil: List[Text]): (tel: Tel) =>
-      lines(tel, t"translation").map: (atoms: List[Text]) =>
-        t"`translation ${atoms.join(t" ")}` is not beneath the `document` it translates"
+      val stray: List[Text] = List(t"translation", t"definitive", t"details").bind: keyword =>
+        lines(tel, keyword).map: (atoms: List[Text]) =>
+          t"`$keyword ${atoms.join(t" ")}` is not beneath the `section` it is of"
 
-    // The sections: each `document` of the configuration under its name. Documents given
-    // another way — a flag, a variable — are directories alone, and are named after them.
+      val former: List[Text] = lines(tel, t"document").map: (atoms: List[Text]) =>
+        t"`document ${atoms.join(t" ")}` is no longer how a directory of documents is " +
+          t"configured: it is a section, as $form"
+
+      stray + former
+
+    // The sections: each `section` of the configuration under its name. A directory given
+    // another way — the `--document` flag, a variable — has nowhere to say more, and is the
+    // section named after it, read in place of the configuration's.
     val stated: List[Text] = entries(ui.Document())
 
     val configured: Boolean =
@@ -237,19 +293,21 @@ object Workspace:
 
     val sections: List[(Text, Text)] =
       if !configured then stated.map(root => (after(root), root))
-      else groups.map(group => (group.name.or(after(group.directory)), group.directory))
+      else groups.map(group => (group.name, group.directory))
 
     // Two sections of one name would have one address.
     val shared: List[Text] =
       sections.map(_(0)).distinct.filter(name => sections.filter(_(0) == name).stdlib.size > 1)
       . map: (name: Text) =>
-          t"more than one `document` is the section `$name`: each has a name of its own"
+          t"more than one `section` is named `$name`: each has a name of its own"
 
     val translations: List[Translations.Target] = groups.bind(_.translations)
-    val badTranslations: List[Text] = groups.bind(_.faults) + loose + shared
+    val badTranslations: List[Text] = read.bind(_(1)) + loose + shared
 
-    val languages: List[(Text, Text)] = groups.bind: (group: Group) =>
-      group.language.lay(List[(Text, Text)]()) { (tongue: Text) => List((group.directory, tongue)) }
+    val languages: List[(Text, Text)] = groups.map(group => (group.directory, group.language))
+
+    val details: List[(Text, Text)] = groups.bind: (group: Group) =>
+      group.details.lay(List[(Text, Text)]()) { (file: Text) => List((group.directory, file)) }
 
     val overlays: List[Text] = (entries(ui.Overlay()) + groups.bind(_.overlays)).distinct
 
@@ -272,4 +330,5 @@ object Workspace:
         translations,
         badTranslations,
         languages,
-        sections )
+        sections,
+        details )

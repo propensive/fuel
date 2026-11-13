@@ -4927,7 +4927,7 @@ entry .Channel
         val targets: List[Translations.Target] =
           List
             ( Translations.Target(t"fr", t"$base/en", t"$base/fr"),
-              Translations.Target(t"fr-CA", t"$base/en", t"$base/ca", t"fr", t"guide-ca") )
+              Translations.Target(t"fr-CA", t"$base/en", t"$base/ca", t"fr") )
 
         val regime: Compilation.Regime = Compilation.Regime(translations = targets)
         val written: Corpus = Compilation.corpus(List(t"$base/en"), Checker.tokenized, regime)
@@ -4941,10 +4941,50 @@ entry .Channel
 
         ( read.doc(t"en", t"intro.md").let(_.title), anchors(read.doc(t"en", t"intro.md")),
           anchors(written.doc(t"en", t"intro.md")),
-          read.doc(t"en", t"other.md").lay(false) { doc => written.doc(t"en", t"other.md").lay(false)(_ eq doc) },
-          read.sections.map(_.shown), read.sections.map(_.name), written.sections.map(_.shown) )
+          read.doc(t"en", t"other.md").lay(false) { doc => written.doc(t"en", t"other.md").lay(false)(_ eq doc) } )
 
-      . assert(_ == (t"Pour commencer", List(t"getting-started"), List(t"getting-started"), true, List(t"guide-ca"), List(t"en"), List(t"en")))
+      . assert(_ == (t"Pour commencer", List(t"getting-started"), List(t"getting-started"), true))
+
+      val described: Text = t"tel 1.0\n\ntitle  User guide\n"
+      val undescribed: Text = t"tel 1.0\n\ntitle\n    - User guide\n"
+      val redescribed: Text = t"tel 1.0\n\ntitle\n    - User guide\n    + Guide de l'utilisateur\n"
+
+      def details(text: Text): Details = Details.read(t"section.tel", text) match
+        case (details, _) => details
+        case _            => Details.none
+
+      test(m"a section's details say its title, which may be several words"):
+        (details(described).title, Details.read(t"section.tel", described) match
+          case (_, faults) => faults.size
+          case _           => -1)
+
+      . assert(_ == (t"User guide", 0))
+
+      test(m"what the schema does not allow in a section's details is a failure at its line"):
+        Details.read(t"section.tel", t"title  User guide\nsubtitle  More\n") match
+          case (_, faults) => places(faults)
+          case _           => Nil
+
+      . assert(_ == List((t"section.tel", 2, Tone.Failure)))
+
+      test(m"the translation of a section's details is its title, to be translated"):
+        Details.generate(described)
+
+      . assert(_ == undescribed)
+
+      test(m"a translated title is the section's in its language, and an untranslated one is not"):
+        ( Details.foreign(redescribed, details(described)).title,
+          Details.foreign(undescribed, details(described)).title,
+          places(Details.check(t"fr/section.tel", redescribed, described)),
+          places(Details.check(t"fr/section.tel", undescribed, described)).map(_(2)),
+          Details.progress(redescribed, described).complete )
+
+      . assert(_ == (t"Guide de l'utilisateur", t"User guide", Nil, List(Tone.Warning), true))
+
+      test(m"a title which changes is kept beside the new one for the translator"):
+        Details.generate(t"tel 1.0\n\ntitle  Handbook\n", redescribed)
+
+      . assert(_ == t"tel 1.0\n\ntitle\n    ! User guide\n    - Handbook\n    + Guide de l'utilisateur\n")
 
       test(m"Fuel's words are said in the language read, a variant as its language, else English"):
         def said(tongue: Optional[Text]): Text =

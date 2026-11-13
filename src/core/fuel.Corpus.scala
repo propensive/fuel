@@ -42,9 +42,9 @@ object Corpus:
   // `skipped` lists the files which could not be read or parsed, which the command reports in
   // a line each; nothing more is said of them (error reporting is Pyrocosm's to improve).
   //
-  // `name` is the section's in the language it is written in, which the address of each of
-  // its documents begins with in every language; `title` is what the language a translation
-  // is read in calls it.
+  // `name` is the section's, which the address of each of its documents begins with in every
+  // language; `title` is what its details call it in the language it is read in, which a
+  // reader is shown in place of the name.
   case class Section
     ( name:    Text,
       root:    Text,

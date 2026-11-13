@@ -160,11 +160,18 @@ object ui:
         List('l'),
         "translate into this language alone, as `fr` or `pt-BR`, whatever the configuration names" )
 
+  val Section =
+    Setting[Text]
+      ( t"section",
+        t"a section of documents, its name and its directory, as `guide doc`; beneath it, a " +
+          t"`definitive` and each `translation`, a language and a directory within it each" )
+
   val Translation =
     Setting[Text]
       ( t"translation",
-        t"beneath a `document`, a language and the directory which holds its translation of " +
-          t"that directory, as `fr doc/fr`; it may hold a `fallback` language" )
+        t"beneath a `section`, a language and the directory, within the section's, which " +
+          t"holds its translation of the definitive text, as `fr fr`; it may hold a `fallback` " +
+          t"language" )
 
   val Autoplay =
     Flag[Unit]
@@ -438,8 +445,14 @@ private def compile(config: Workspace.Config, force: Boolean, tty: Boolean)
 :   Exit | NoDocuments.type | CompileFailed.type =
 
   if config.documents.nil then
-    Out.println(t"fuel: no document directory is configured")
-    Out.println(t"fuel: add `document <dir>` to .pyrocosm/fuel/config.tel")
+    // What is wrong with the sections the configuration has, if that is why there is none.
+    config.badTranslations.each { (reason: Text) => Out.println(t"fuel: $reason") }
+    Out.println(t"fuel: no section of documents is configured")
+
+    Out.println
+      ( t"fuel: add `section <name> <dir>` to .pyrocosm/fuel/config.tel, with `definitive " +
+          t"<language> <dir>` beneath it" )
+
     NoDocuments
   else
     // On a terminal the compile runs behind a board: a gauge of the work, and each problem as
@@ -565,6 +578,19 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
     val (glossary, glossaryProblems, glossed) = glossaries(config)
     progress.reports(glossaryProblems)
 
+    // Each section's details, and what each language reads of them.
+    val (titles, detailProblems, titled) = details(config)
+    progress.reports(detailProblems)
+
+    // A corpus with each section called what its details call it, in a language.
+    def entitled(corpus: Corpus, titles: List[(Text, Text)]): Corpus =
+      Corpus:
+        corpus.sections.map: (section: Corpus.Section) =>
+          section.copy(title = titles.filter(_(0) == section.root).head.let(_(1)))
+
+    def retitled(corpus: Corpus, tongue: Text): Corpus =
+      entitled(corpus, titled.filter(_(0) == tongue).head.let(_(1)).or(titles))
+
     // The glossary a language reads: its own, or the one the terms are defined in.
     def terms(tongue: Text): Glossary =
       glossed.filter(_(0) == tongue).head.let(_(1)).or(glossary)
@@ -639,9 +665,9 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
                   Compilation.translated
                     ( written, tongue, checker, regime(key, linker).copy(glossary = terms(tongue)) )
 
-                tongue -> Server.Reading(read, apis)
+                tongue -> Server.Reading(retitled(read, tongue), apis)
 
-          (written, apis, pages, key, readings)
+          (entitled(written, titles), apis, pages, key, readings)
         catch case error: Throwable =>
           progress.report(failed(t"The fragments could not be compiled", error))
           Unset
@@ -652,7 +678,10 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
 
     val corpus: Corpus =
       outcome.let(_(0)).or:
-        try Compilation.corpus(config.documents, Checker.tokenized, regime(unchecked, unlinked))
+        try
+          entitled
+            ( Compilation.corpus(config.documents, Checker.tokenized, regime(unchecked, unlinked)),
+              titles )
         catch case error: Throwable =>
           progress.report(failed(t"The documents could not be highlighted", error))
           Corpus(Nil)
@@ -670,7 +699,7 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
                   regime(unchecked, unlinked).copy(glossary = terms(tongue)) )
             catch case error: Throwable => corpus
 
-          tongue -> Server.Reading(read, apis)
+          tongue -> Server.Reading(retitled(read, tongue), apis)
 
     // The languages there are to read in: the one the documents are written in, then each
     // they are translated into.
@@ -738,6 +767,53 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
 
     val result: Exit | CompileFailed.type = if progress.problems.nil then Exit.Ok else CompileFailed
     result
+
+// Each section's details, as the title its directory's section has; the problems — a file
+// which cannot be read or is not what the schema allows, and what is wrong with a translation
+// of one; and the titles each language the documents are translated into reads: a section's
+// details as their translation says — the language's own or a fallback's.
+private def details(config: Workspace.Config)
+:   (List[(Text, Text)], List[Block], List[(Text, List[(Text, Text)])]) =
+
+  @scala.caps.unsafe.untrackedCaptures
+  var problems: List[Block] = Nil
+
+  val read: List[(Text, Text, Text, Details)] = config.details.bind: (root: Text, file: Text) =>
+    def unreadable: List[(Text, Text, Text, Details)] =
+      problems = Compilation.unreadable(file) :: problems
+      Nil
+
+    readText(file).lay(unreadable): (text: Text) =>
+      Details.read(file, text) match
+        case diagnostic: Block.Diagnostic =>
+          problems = diagnostic :: problems
+          Nil
+
+        case (details, faults) =>
+          faults.each { (fault: Block) => problems = fault :: problems }
+          List((root, file, text, details))
+
+  def titles(all: List[(Text, Details)]): List[(Text, Text)] =
+    all.bind { (root, details) => details.title.let { title => List((root, title)) }.or(Nil) }
+
+  val translating: List[Block] = read.bind: (_, file: Text, text: Text, _) =>
+    Details.verify
+      ( file, text, Translations.of(file, config.translations), readText(_),
+        Translations.partial(Translations.within(file, config.translations)) )
+
+  val spoken: List[(Text, List[(Text, Text)])] =
+    config.translations.map(_.tongue).distinct.map: (tongue: Text) =>
+      val each: List[(Text, Details)] = read.map: (root: Text, file: Text, _, defined: Details) =>
+        val served: Optional[Text] =
+          Translations.serving
+            ( file, tongue, config.translations, (file: Text) => readText(file).present )
+
+        (root, served.let(readText(_)).lay(defined)(Details.foreign(_, defined)))
+
+      (tongue, titles(each))
+
+  val defined: List[(Text, Details)] = read.map { (root, _, _, details) => (root, details) }
+  (titles(defined), problems.reverse + translating, spoken)
 
 // The glossaries the configuration names, read and combined, with the problems: a file which
 // cannot be read or is not TEL, what `Glossary.merge` finds, and what is wrong with a
@@ -919,6 +995,7 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
       val files: List[Text] =
         filesBeneath(root, t".tel").filter(!Translations.held(_, config.translations))
         . filter(!config.glossaries.has(_))
+        . filter { (file: Text) => !config.details.exists(_(1) == file) }
 
       files.bind: (file: Text) =>
         def unreadable: List[Overlay] =
