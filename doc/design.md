@@ -173,6 +173,8 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   the language's own, and `Glossary.Term.origin` ties one to the other, so that the anchor is
   the definitive term's in every language, a translated document may name a term in either
   language, and the page is sorted by the language's collation (cosmopolite's `Collatable`).
+  A section is named by the configuration (`document guide doc/en`, `Config.sections`), not
+  by its directory, which for a translated project is a language's.
   Left for later: a translation's pages in the output directory and compiled rather than
   rendered when asked for, hyphenation by language, holding a passage to the terms the text
   it translates names, and translating presentations and schema descriptions.

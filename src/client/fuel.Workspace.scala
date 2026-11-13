@@ -64,7 +64,11 @@ object Workspace:
       // configured; and each such directory with the language it is written in.
       translations:    List[Translations.Target] = Nil,
       badTranslations: List[Text]                = Nil,
-      languages:       List[(Text, Text)]        = Nil )
+      languages:       List[(Text, Text)]        = Nil,
+      // Each section, a name and its `document` directory, as the configuration names it;
+      // and the `document` lines which name none, each a caution.
+      sections:        List[(Text, Text)]        = Nil,
+      unnamed:         List[Text]                = Nil )
 
   def load(directory: Text)(using Cli, Interpreter, Configurator): Config =
     // The project the directory is in, as `Tool` finds it: its root is what every path in the
@@ -108,15 +112,32 @@ object Workspace:
       if entry.starts(t"/") then entry else t"$directory/$entry"
 
     case class Group
-      ( directory:    Text,
+      ( name:         Optional[Text],
+        entry:        Text,
+        directory:    Text,
         language:     Optional[Text],
         overlays:     List[Text],
         glossaries:   List[Text],
         translations: List[Translations.Target],
         faults:       List[Text] )
 
-    def group(tel: Tel): List[Group] = words(tel).head.lay(List[Group]()): (entry: Text) =>
+    // A `document` line is a section's name and its directory, `document guide doc/en`; one
+    // which gives the directory alone is a section named after it.
+    def group(tel: Tel): List[Group] = words(tel).reverse.head.lay(List[Group]()): (entry: Text) =>
       val directory: Text = project.resolve(entry).encode
+      val title: Optional[Text] = if words(tel).stdlib.size == 2 then words(tel).head else Unset
+
+      val misnamed: List[Text] =
+        if words(tel).stdlib.size > 2 then
+          List
+            ( t"`document ${words(tel).join(t" ")}` is not a section's name and its directory, " +
+                t"as `document guide doc/en`" )
+        else if title.lay(false) { name => name.s.contains("/") || name.s.contains("#") } then
+          List
+            ( t"`document ${words(tel).join(t" ")}` names its section `${title.or(t"")}`, and a " +
+                t"name is one segment of a page's address, so it cannot hold `/` or `#`" )
+        else Nil
+
       val languages: List[List[Text]] = lines(tel, t"language")
 
       val language: Optional[Text] =
@@ -184,9 +205,9 @@ object Workspace:
 
       List
         ( Group
-            ( directory, language, nested.map(within(directory, _)),
-              defined.map(within(directory, _)), kept,
-              spoken + malformed + groundless + own + unspoken ) )
+            ( if misnamed.nil then title else Unset, entry, directory, language,
+              nested.map(within(directory, _)), defined.map(within(directory, _)), kept,
+              misnamed + spoken + malformed + groundless + own + unspoken ) )
 
     val groups: List[Group] =
       project.config.lay(List[Group]()): (tel: Tel) =>
@@ -197,8 +218,34 @@ object Workspace:
       lines(tel, t"translation").map: (atoms: List[Text]) =>
         t"`translation ${atoms.join(t" ")}` is not beneath the `document` it translates"
 
+    // The sections: each `document` of the configuration under its name. Documents given
+    // another way — a flag, a variable — are directories alone, and are named after them.
+    val stated: List[Text] = entries(ui.Document())
+
+    val configured: Boolean =
+      stated == project.atoms(t"document").map(project.resolve(_).encode)
+
+    def after(root: Text): Text = fuel.Compilation.name(root)
+
+    val sections: List[(Text, Text)] =
+      if !configured then stated.map(root => (after(root), root))
+      else groups.map(group => (group.name.or(after(group.directory)), group.directory))
+
+    val unnamed: List[Text] =
+      if !configured then Nil else groups.filter(_.name.absent).map: (group: Group) =>
+        val name: Text = after(group.directory)
+
+        t"`document ${group.entry}` names no section, which is `$name` after its directory: " +
+          t"name it, as `document $name ${group.entry}`"
+
+    // Two sections of one name would have one address.
+    val shared: List[Text] =
+      sections.map(_(0)).distinct.filter(name => sections.filter(_(0) == name).stdlib.size > 1)
+      . map: (name: Text) =>
+          t"more than one `document` is the section `$name`: each has a name of its own"
+
     val translations: List[Translations.Target] = groups.bind(_.translations)
-    val badTranslations: List[Text] = groups.bind(_.faults) + loose
+    val badTranslations: List[Text] = groups.bind(_.faults) + loose + shared
 
     val languages: List[(Text, Text)] = groups.bind: (group: Group) =>
       group.language.lay(List[(Text, Text)]()) { (tongue: Text) => List((group.directory, tongue)) }
@@ -208,7 +255,7 @@ object Workspace:
     Config
       ( root,
         entries(ui.Classpath()),
-        entries(ui.Document()),
+        sections.map(_(1)),
         options,
         ui.Session().or(false),
         fixtures,
@@ -223,4 +270,6 @@ object Workspace:
         entries(ui.Schema()),
         translations,
         badTranslations,
-        languages )
+        languages,
+        sections,
+        unnamed )

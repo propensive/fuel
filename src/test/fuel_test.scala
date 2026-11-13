@@ -4261,10 +4261,22 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
 
       . assert(_ == (t"val own = 1", t"val shared = 1"))
 
-      test(m"a section is named by its directory's last segment"):
+      test(m"a section nothing names is named by its directory's last segment"):
         Compilation.name(t"/home/me/project/doc/modules/")
 
       . assert(_ == t"modules")
+
+      test(m"a section is named as the regime names its directory, and its documents with it"):
+        val directory = java.nio.file.Files.createTempDirectory("fuel-sections").nn
+        val root: Text = directory.resolve("en").nn.toString.nn.tt
+        java.nio.file.Files.createDirectories(directory.resolve("en"))
+        java.nio.file.Files.writeString(directory.resolve("en/intro.md"), "# Intro\n")
+        val regime = Compilation.Regime(sections = List((t"guide", root)))
+        val corpus: Corpus = Compilation.corpus(List(root), Checker.tokenized, regime)
+
+        (corpus.sections.map(_.name), corpus.doc(t"guide", t"intro.md").present)
+
+      . assert(_ == (List(t"guide"), true))
 
     // A format other than Scala's, as a tool's commands would be one: two kinds of its own,
     // signatures in words, and none of what a format need not say.

@@ -528,6 +528,11 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
       val location: Block.Location = Block.Location(t"${config.root}/.pyrocosm/fuel/config.tel")
       progress.report(Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(text))))
 
+    // Each `document` which names no section: a caution.
+    config.unnamed.each: (reason: Text) =>
+      val location: Block.Location = Block.Location(t"${config.root}/.pyrocosm/fuel/config.tel")
+      progress.report(Block.Diagnostic(Tone.Warning, location, List(Block.paragraph(t"$reason."))))
+
     // The work there is, counted before it starts: the documents of every root, the dependency
     // jars, the sources; the pages are guessed from the sources until the API says.
     val documents: Int =
@@ -605,6 +610,7 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
           kept,
           (path: Text) => Digests.of(environment, path),
           glossary,
+          sections = config.sections,
           translations = config.translations )
 
     // The API first, since the documents link to it: the sources compiled and saved, their
@@ -1200,8 +1206,7 @@ private def compiled(config: Workspace.Config, path: Text): Optional[Doc] =
   val checked: Boolean = !config.classpath.nil && config.classpath.all(exists(_))
   val glossary: Glossary = glossaries(config)(0)
 
-  val sections: List[(Text, Text)] =
-    config.documents.map { (root: Text) => (Compilation.name(root), root) }
+  val sections: List[(Text, Text)] = config.sections
 
   val regime: Compilation.Regime =
     Compilation.Regime

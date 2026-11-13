@@ -52,6 +52,14 @@ shown plain under its own language name. The result is kept in the daemon, and `
 a bare `serve` in the configuration) shows it: every section's documents, by title, beside the
 chosen document. A document's title is its first level-one heading, else its filename.
 
+A `document` line of the configuration is a *section*: its name, then its directory, as
+`document guide doc/en`. The name is what the navigation calls the section and the first part
+of the address of each of its documents, `/doc/guide/intro.md`, whatever the directory is
+called and whichever language is read. It is one segment of an address, so it holds no `/`
+or `#`, and no two sections share one. A line which gives a directory alone still works, as
+the section named by the directory's last segment, and `fuel compile` cautions that it names
+none; so does a directory given by `--document` or in the environment, without the caution.
+
 When a `classpath` is configured, every Scala fence is also *compiled*, in one warm compiler
 session on that classpath with the configured `scalac-option`s, so a fragment that does not
 typecheck fails the compile (exit status 4). A macro the fragments call is run against that
@@ -496,7 +504,7 @@ translation of a file is the file of the same relative path there. An `overlay` 
 `document` is a directory inside the document's, so it is translated with it.
 
 ```
-document doc/en
+document guide doc/en
   language en-US
   overlay api                   # `doc/en/api`
   translation fr     doc/fr     # `doc/en/prose/intro.md` is translated by
@@ -692,9 +700,10 @@ tel 1.0
 classpath out/core/assembly.dest/out.jar
 scalac-option -deprecation
 
-# The directories of Markdown documents, each a section named by its last segment.
-document doc
-document doc/modules
+# The sections of Markdown documents: each a name, which its documents' addresses begin
+# with (`/doc/guide/…`), and its directory.
+document guide    doc
+document modules  doc/modules
 
 # Compile each document's fences as one session, each following the ones before it (as a
 # REPL would), with `doc/fixtures/<section>/<document>.scala` (else
@@ -726,7 +735,7 @@ output dist/doc
 # glossaries inside it, and its translations, each a language and the directory which mirrors
 # this one. A file without its translation there is a caution, and `fuel translate` writes
 # it; a language with a fallback need not translate everything.
-document doc/en
+document guide doc/en
   language en-US
   overlay api
   glossary glossary.tel

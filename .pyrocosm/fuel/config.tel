@@ -4,7 +4,7 @@ tel 1.0
 # shows it. The fragments are compiled against fuel's own launcher assembly (`make assembly`),
 # which carries the fork's standard library and Soundness, with the options Soundness code
 # needs: the fork's repairs, and the proscenium predef with Soundness imported.
-document doc
+document doc doc
 session
 
 # The project's own sources, whose API is documented by the overlays in doc/api, compiled in

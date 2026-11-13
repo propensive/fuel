@@ -60,8 +60,12 @@ object Compilation:
       sections: List[(Text, Text)]       = Nil,
       translations: List[Translations.Target] = Nil )
 
-  // A section's name is its directory's last segment.
+  // A section's name where nothing says it: its directory's last segment.
   def name(root: Text): Text = root.cut(t"/").filter(_ != t"").reverse.head.or(root)
+
+  // A section's name: the one the regime gives its directory, as the configuration names it.
+  def name(root: Text, regime: Regime): Text =
+    regime.sections.filter(_(1) == root).head.let(_(0)).or(name(root))
 
   // The Markdown documents beneath a root, in order: what a section compiles, and so what there
   // is to do, which a compile may count before it starts. A file in a directory of translations
@@ -95,8 +99,10 @@ object Compilation:
     def read(path: Text): Optional[Text] =
       safely(path.as[Path on Linux]).let: (file: Path on Linux) => safely(file.read[Text])
 
+    val named: Text = name(root, regime)
+
     def fixture(path: Text): Optional[(Text, Text)] =
-      Compilation.fixture(regime, name(root), relative(path))
+      Compilation.fixture(regime, named, relative(path))
 
     def recur(rest: List[Text], docs: List[Doc], skipped: List[Text]): Corpus.Section = rest match
       case path :: tail =>
@@ -106,12 +112,12 @@ object Compilation:
         text match
           case text: Text =>
             val within: Text = relative(path)
-            val linker: Linker = regime.linker(name(root), within)
+            val linker: Linker = regime.linker(named, within)
 
             val parsed: Doc =
               Doc.parse
                 ( within, text, checker, regime.session, fixture(path), linker, regime.cache,
-                  regime.base(t"${name(root)}/$within"), name(root), regime.glossary, root,
+                  regime.base(t"$named/$within"), named, regime.glossary, root,
                   regime.sections )
 
             val problems: List[Block] =
@@ -128,7 +134,7 @@ object Compilation:
             recur(tail, docs, skipped + List(path))
 
       case _ =>
-        Corpus.Section(name(root), root, docs, skipped)
+        Corpus.Section(named, root, docs, skipped)
 
     recur(files, Nil, Nil)
 
@@ -142,7 +148,7 @@ object Compilation:
     import textSanitizers.skipSanitizer
 
     val directory: Text = Text(path.s.substring(0, path.s.lastIndexOf('/').max(0)).nn)
-    val section: Text = name(directory)
+    val section: Text = name(directory, regime)
     val leaf: Text = Text(path.s.substring(path.s.lastIndexOf('/') + 1).nn)
     val fixture: Optional[(Text, Text)] = Compilation.fixture(regime, section, leaf)
 
