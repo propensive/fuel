@@ -174,10 +174,11 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   the definitive term's in every language, a translated document may name a term in either
   language, and the page is sorted by the language's collation (cosmopolite's `Collatable`).
   A section is configured whole (`Workspace`): `section guide doc`, with `definitive en-US en`
-  and each `translation fr fr` beneath it, every path within its parent's, and the overlays,
-  glossaries and `details` beneath the `definitive`, whose directory they are in. The name is
+  and each `translation fr fr` beneath it, every path within its parent's, and the overlays and
+  glossaries beneath the `definitive`, whose directory they are in. The name is
   the address's; what a reader is told of the section — its title — is in the tree, in the
-  `details` file (`Details`, to the schema `section`), so that it is translated as the tree is
+  section's file, which the `definitive` line names (`SectionFile`, to the schema `section`),
+  so that it is translated as the tree is
   (`Corpus.Section.title`).
   Left for later: a translation's pages in the output directory and compiled rather than
   rendered when asked for, hyphenation by language, holding a passage to the terms the text

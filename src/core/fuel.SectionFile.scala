@@ -41,9 +41,10 @@ import dysasymptotics.{linearAccess, linearSize}
 import errorDiagnostics.emptyDiagnostics
 import pyrocosm.{Block, Tone}
 
-// A section's details: a TEL file in the section's own directory, named by a `details` line of
-// the configuration, which says what a reader is told of the section — so far its `title`,
-// which the navigation shows in place of the section's name:
+// A section's file: a TEL file in the directory of the section's definitive text, named on the
+// `definitive` line of the configuration after the directory, which says what a reader is
+// told of the section — so far its `title`, which the navigation shows in place of the
+// section's name:
 //
 //     title  User guide
 //
@@ -56,8 +57,8 @@ import pyrocosm.{Block, Tone}
 //
 // made from the definitive file (`generate`) and held to it (`check`). The format is the
 // schema `section` (`fuel/section.schema.tel`).
-object Details:
-  val none: Details = Details(Unset)
+object SectionFile:
+  val none: SectionFile = SectionFile(Unset)
 
   val schemaResource: Text = t"fuel/section.schema.tel"
 
@@ -75,18 +76,18 @@ object Details:
   private def added(text: Text): Int = pyrocosm.Tels.headed(text)(1)
 
   private case class Faults(items: List[(Tel.Error, Text, Span)] = Nil)
-  extends Error(m"the section's details have ${items.size} faults"):
+  extends Error(m"the section's file has ${items.size} faults"):
     def +(error: Tel.Error, pointer: Text, span: Span): Faults =
       Faults(items :+ (error, pointer, span))
 
-  // What a fault the schema finds means in a section's details.
+  // What a fault the schema finds means in a section's file.
   private def explain(error: Tel.Error, pointer: Text): Text =
     import Tel.Error.Reason
     val last: Text = pointer.cut(t"/").filter(_ != t"").reverse.head.or(t"")
 
     error.reason match
       case Reason.UnknownKeyword =>
-        t"A section's details are its `title`, but not `$last`."
+        t"A section's file says its `title`, but not `$last`."
 
       case Reason.TooManyAtoms | Reason.AtomAtNonAssignablePos =>
         t"This has more values than it takes: a value with spaces in it follows two spaces."
@@ -146,15 +147,15 @@ object Details:
         if written == t"" || index < 0 then Unset
         else Prose(written, index + 1, beneath + 1, brief)
 
-  // A section's details read from a file's text, with what the schema finds wrong with them;
+  // A section's file read from its text, with what the schema finds wrong with it;
   // or the diagnostic which says the text is not TEL.
-  def read(path: Text, text: Text): (Details, List[Block]) | Block.Diagnostic =
+  def read(path: Text, text: Text): (SectionFile, List[Block]) | Block.Diagnostic =
     import strategies.throwUnsafely
     import parsing.trackPositions
 
     try
       val tel: Tel = headed(text).read[Tel]
-      (Details(title(text).let(_.text)), checked(path, text, tel))
+      (SectionFile(title(text).let(_.text)), checked(path, text, tel))
     catch case error: Tel.Error =>
       val raw: Block.Diagnostic = Block.Diagnostic.of(error, path, headed(text))
 
@@ -163,15 +164,15 @@ object Details:
 
       raw.copy(location = location)
 
-  // The details a reader of a translation's language has: what the translation reads as, and
-  // the definitive details' where it says nothing.
-  def foreign(text: Text, definitive: Details): Details =
+  // What a reader of a translation's language is told: what the translation reads as, and
+  // what the definitive file says where it says nothing.
+  def foreign(text: Text, definitive: SectionFile): SectionFile =
     val read: Optional[Text] = title(text).let: (prose: Prose) =>
       Translation.parse(prose.text).foreign.text.trim
 
-    Details(read.let { (text: Text) => if text == t"" then Unset else text }.or(definitive.title))
+    SectionFile(read.let { (text: Text) => if text == t"" then Unset else text }.or(definitive.title))
 
-  // The translation of a section's details: the definitive file, its title a `Translation` —
+  // The translation of a section's file: the definitive file, its title a `Translation` —
   // that of the translation `old`, brought up to date, or one nobody has translated. `Unset`
   // if the file is not TEL.
   def generate(definitive: Text, old: Optional[Text] = Unset): Optional[Text] =
@@ -192,8 +193,8 @@ object Details:
 
         Text(written.mkString("\n"))
 
-  // What is wrong with the translation of a section's details, read from `text` at `path`, of
-  // the definitive file `definitive`: what is wrong with it as details, and where its title
+  // What is wrong with the translation of a section's file, read from `text` at `path`, of
+  // the definitive file `definitive`: what is wrong with it as one, and where its title
   // is not a translation of the definitive title, as `Translation` finds.
   def check(path: Text, text: Text, definitive: Text): List[Block] =
     read(path, text) match
@@ -233,7 +234,7 @@ object Details:
         case theirs: Prose => Translation.progress(Translation.parse(theirs.text), ours.text)
         case _             => Translation.Progress(0, 0, 0, 0, 1)
 
-  // A section's details at `path` held to their translations, each a language and a path, as
+  // A section's file at `path` held to its translations, each a language and a path, as
   // `Translations.check` holds a document.
   def verify
     ( path:         Text,
@@ -250,5 +251,5 @@ object Details:
       read(target).lay(missing): (source: Text) =>
         check(target, source, text)
 
-// What a section's details say: its title, if it has one.
-case class Details(title: Optional[Text])
+// What a section's file says: its title, if it has one.
+case class SectionFile(title: Optional[Text])

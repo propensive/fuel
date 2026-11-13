@@ -67,8 +67,8 @@ object Workspace:
       languages:       List[(Text, Text)]        = Nil,
       // Each section, a name and the directory of its definitive text.
       sections:        List[(Text, Text)]        = Nil,
-      // Each section's `details` file, by the directory of its definitive text.
-      details:         List[(Text, Text)]        = Nil )
+      // Each section's file, by the directory of its definitive text.
+      sectionFiles:    List[(Text, Text)]        = Nil )
 
   def load(directory: Text)(using Cli, Interpreter, Configurator): Config =
     // The project the directory is in, as `Tool` finds it: its root is what every path in the
@@ -99,17 +99,17 @@ object Workspace:
 
     // A `section` is read from the configuration whole, as a `sync` line is, since it holds
     // more than a `Setting` reads: its name and its directory, and beneath it the `definitive`
-    // text — the language it is written in and its directory — and a `translation` for each
-    // language it is translated into, a language and a directory too, perhaps with a
-    // `fallback` language. Beneath the `definitive` are what is found in its directory, and in
-    // each translation's at the same path: the section's `details`, each `overlay` directory
-    // and each `glossary`. Every path is within its parent's: a `definitive` and a
-    // `translation` in the section's directory, the others in the definitive's. What is wrong
-    // with a section is kept, to be reported, and a section which cannot be read is left out.
+    // text — the language it is written in, its directory and, in that directory, the file
+    // which says what a reader is told of the section — and a `translation` for each language
+    // it is translated into, a language and a directory too, perhaps with a `fallback`
+    // language. Beneath the `definitive` are what else is found in its directory, and in each
+    // translation's at the same path: each `overlay` directory and each `glossary`. Every
+    // path is within its parent's: a `definitive` and a `translation` in the section's
+    // directory, the others in the definitive's. What is wrong with a section is kept, to be
+    // reported, and a section which cannot be read is left out.
     //
     //     section guide doc
-    //       definitive en-US en
-    //         details section.tel
+    //       definitive en-US en section.tel
     //         overlay api
     //         glossary glossary.tel
     //       translation fr fr
@@ -129,7 +129,7 @@ object Workspace:
       ( name:         Text,
         directory:    Text,
         language:     Text,
-        details:      Optional[Text],
+        file:         Optional[Text],
         overlays:     List[Text],
         glossaries:   List[Text],
         translations: List[Translations.Target] )
@@ -158,7 +158,7 @@ object Workspace:
 
       // What belongs beneath the `definitive`, or is no longer said.
       val misplaced: List[Text] =
-        List(t"details", t"overlay", t"glossary").bind: (keyword: Text) =>
+        List(t"overlay", t"glossary").bind: (keyword: Text) =>
           lines(tel, keyword).map: (atoms: List[Text]) =>
             t"`$keyword ${atoms.join(t" ")}`, of `section $written`, belongs beneath the " +
               t"section's `definitive`, whose directory it is in"
@@ -169,10 +169,13 @@ object Workspace:
 
       val originals: List[Tel] = tel.fields(t"definitive").to[List]
 
-      val original: Optional[(Text, Text, Tel)] =
+      // The language, the directory, and the section's file if the line names one.
+      val original: Optional[(Text, Text, Optional[Text], Tel)] =
         if originals.stdlib.size != 1 then Unset else originals.head.let: (node: Tel) =>
           val atoms: scala.collection.immutable.Vector[Text] = words(node).stdlib.toVector
-          if atoms.length != 2 || !Tongue.valid(atoms(0)) then Unset else (atoms(0), atoms(1), node)
+
+          if atoms.length < 2 || atoms.length > 3 || !Tongue.valid(atoms(0)) then Unset
+          else (atoms(0), atoms(1), if atoms.length == 3 then atoms(2) else Unset, node)
 
       val baseless: List[Text] =
         if original.present then Nil
@@ -186,23 +189,22 @@ object Workspace:
           List
             ( t"`definitive ${originals.head.let(words(_).join(t" ")).or(t"")}`, of `section " +
                 t"$written`, is not a language and the directory of the text written in it, " +
-                t"as `definitive en-US en`" )
+                t"perhaps with the section's file in that directory, as `definitive en-US en " +
+                t"section.tel`" )
 
       if atoms.length != 2 || !nameable(atoms(0)) then (Unset, misnamed + misplaced + outdated)
       else original.lay((Unset: Optional[Group], baseless + misplaced + outdated)):
-        (language: Text, entry: Text, node: Tel) =>
+        (language: Text, entry: Text, file: Optional[Text], node: Tel) =>
           val home: Text = project.resolve(atoms(1)).encode
           val directory: Text = within(home, entry)
-          val described: List[List[Text]] = lines(node, t"details")
           val nested: List[Text] = lines(node, t"overlay").bind(_.head.let(List(_)).or(Nil))
           val defined: List[Text] = lines(node, t"glossary").bind(_.head.let(List(_)).or(Nil))
 
-          val overdescribed: List[Text] =
-            if described.stdlib.size <= 1 && described.all(_.stdlib.size == 1) then Nil
-            else
-              List
-                ( t"`section $written` has `details` which are not one file, as " +
-                    t"`details section.tel`" )
+          // The section's file is named on the `definitive` line, not beneath it.
+          val former: List[Text] = lines(node, t"details").map: (atoms: List[Text]) =>
+            t"`details ${atoms.join(t" ")}`, of `section $written`, is written on the " +
+              t"`definitive` line, after its directory, as `definitive $language $entry " +
+              t"${atoms.join(t" ")}`"
 
           val read: List[(List[Text], List[List[Text]])] =
             tel.fields(t"translation").to[List].map: line =>
@@ -253,14 +255,11 @@ object Workspace:
             targets.filter { target => target.tongue != language && target.directory != directory }
             . map { target => if grounded(target) then target else target.copy(fallback = Unset) }
 
-          val details: Optional[Text] =
-            if !overdescribed.nil then Unset
-            else described.head.let(_.head).let(within(directory, _))
-
           ( Group
-              ( atoms(0), directory, language, details, nested.map(within(directory, _)),
+              ( atoms(0), directory, language, file.let(within(directory, _)),
+                nested.map(within(directory, _)),
                 defined.map(within(directory, _)), kept ),
-            misplaced + outdated + overdescribed + malformed + groundless + own + same )
+            misplaced + outdated + former + malformed + groundless + own + same )
 
     val read: List[(Optional[Group], List[Text])] =
       project.config.lay(List[(Optional[Group], List[Text])]()): (tel: Tel) =>
@@ -271,7 +270,7 @@ object Workspace:
     // What is of a `section`, at the top level, is of nothing; and a `document` in the
     // configuration is what a `section` was.
     val loose: List[Text] = project.config.lay(Nil: List[Text]): (tel: Tel) =>
-      val stray: List[Text] = List(t"translation", t"definitive", t"details").bind: keyword =>
+      val stray: List[Text] = List(t"translation", t"definitive").bind: keyword =>
         lines(tel, keyword).map: (atoms: List[Text]) =>
           t"`$keyword ${atoms.join(t" ")}` is not beneath the `section` it is of"
 
@@ -306,8 +305,8 @@ object Workspace:
 
     val languages: List[(Text, Text)] = groups.map(group => (group.directory, group.language))
 
-    val details: List[(Text, Text)] = groups.bind: (group: Group) =>
-      group.details.lay(List[(Text, Text)]()) { (file: Text) => List((group.directory, file)) }
+    val sectionFiles: List[(Text, Text)] = groups.bind: (group: Group) =>
+      group.file.lay(List[(Text, Text)]()) { (file: Text) => List((group.directory, file)) }
 
     val overlays: List[Text] = (entries(ui.Overlay()) + groups.bind(_.overlays)).distinct
 
@@ -331,4 +330,4 @@ object Workspace:
         badTranslations,
         languages,
         sections,
-        details )
+        sectionFiles )

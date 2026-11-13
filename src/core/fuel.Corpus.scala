@@ -43,7 +43,7 @@ object Corpus:
   // a line each; nothing more is said of them (error reporting is Pyrocosm's to improve).
   //
   // `name` is the section's, which the address of each of its documents begins with in every
-  // language; `title` is what its details call it in the language it is read in, which a
+  // language; `title` is what its file calls it in the language it is read in, which a
   // reader is shown in place of the name.
   case class Section
     ( name:    Text,

@@ -4949,40 +4949,40 @@ entry .Channel
       val undescribed: Text = t"tel 1.0\n\ntitle\n    - User guide\n"
       val redescribed: Text = t"tel 1.0\n\ntitle\n    - User guide\n    + Guide de l'utilisateur\n"
 
-      def details(text: Text): Details = Details.read(t"section.tel", text) match
+      def sectionFile(text: Text): SectionFile = SectionFile.read(t"section.tel", text) match
         case (details, _) => details
-        case _            => Details.none
+        case _            => SectionFile.none
 
-      test(m"a section's details say its title, which may be several words"):
-        (details(described).title, Details.read(t"section.tel", described) match
+      test(m"a section's file says its title, which may be several words"):
+        (sectionFile(described).title, SectionFile.read(t"section.tel", described) match
           case (_, faults) => faults.size
           case _           => -1)
 
       . assert(_ == (t"User guide", 0))
 
-      test(m"what the schema does not allow in a section's details is a failure at its line"):
-        Details.read(t"section.tel", t"title  User guide\nsubtitle  More\n") match
+      test(m"what the schema does not allow in a section's file is a failure at its line"):
+        SectionFile.read(t"section.tel", t"title  User guide\nsubtitle  More\n") match
           case (_, faults) => places(faults)
           case _           => Nil
 
       . assert(_ == List((t"section.tel", 2, Tone.Failure)))
 
-      test(m"the translation of a section's details is its title, to be translated"):
-        Details.generate(described)
+      test(m"the translation of a section's file is its title, to be translated"):
+        SectionFile.generate(described)
 
       . assert(_ == undescribed)
 
       test(m"a translated title is the section's in its language, and an untranslated one is not"):
-        ( Details.foreign(redescribed, details(described)).title,
-          Details.foreign(undescribed, details(described)).title,
-          places(Details.check(t"fr/section.tel", redescribed, described)),
-          places(Details.check(t"fr/section.tel", undescribed, described)).map(_(2)),
-          Details.progress(redescribed, described).complete )
+        ( SectionFile.foreign(redescribed, sectionFile(described)).title,
+          SectionFile.foreign(undescribed, sectionFile(described)).title,
+          places(SectionFile.check(t"fr/section.tel", redescribed, described)),
+          places(SectionFile.check(t"fr/section.tel", undescribed, described)).map(_(2)),
+          SectionFile.progress(redescribed, described).complete )
 
       . assert(_ == (t"Guide de l'utilisateur", t"User guide", Nil, List(Tone.Warning), true))
 
       test(m"a title which changes is kept beside the new one for the translator"):
-        Details.generate(t"tel 1.0\n\ntitle  Handbook\n", redescribed)
+        SectionFile.generate(t"tel 1.0\n\ntitle  Handbook\n", redescribed)
 
       . assert(_ == t"tel 1.0\n\ntitle\n    ! User guide\n    - Handbook\n    + Guide de l'utilisateur\n")
 

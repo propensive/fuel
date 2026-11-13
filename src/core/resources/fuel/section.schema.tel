@@ -2,8 +2,8 @@ tel 1.0
 
 name section
 
-# The format of a section's details, the file a `details` line of the configuration names:
-# `Details.schema` reads this file. A translation of one is the same file, its prose a source
+# The format of a section's file, which the `definitive` line of the configuration names after
+# its directory: `SectionFile.schema` reads this file. A translation of one is the same file, its prose a source
 # atom of `-` and `+` passages.
 
 document
