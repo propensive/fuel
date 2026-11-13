@@ -1,17 +1,17 @@
                                                                                                   /*
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃                                                                                                  ┃
+┃                                ╭────────╮                   ╭───╮                                ┃
+┃                                │   ╭────╯                   │   │                                ┃
+┃                                │   │                        │   │                                ┃
+┃                                │   ╰──╮╭───╮ ╭───╮╭────────╮│   │                                ┃
+┃                                │   ╭──╯│   │ │   ││   ╭─╮  ││   │                                ┃
+┃                                │   │   │   │ │   ││   ╰─╯  ││   │                                ┃
+┃                                │   │   │   │ │   ││   ╭────╯│   │                                ┃
+┃                                │   │   │   ╰─╯   ││   ╰────╮│   │                                ┃
+┃                                ╰───╯   ╰────╌╰───╯╰────────╯╰───╯                                ┃
 ┃                                                                                                  ┃
-┃                                 ╭─────────╮╭───╮   ╭───╮╭─────────╮╭───╮                         ┃
-┃                                 │   ╭─────╯│   │   │   ││   ╭─────╯│   │                         ┃
-┃                                 │   ╰───╮  │   │   │   ││   ╰───╮  │   │                         ┃
-┃                                 │   ╭───╯  │   │   │   ││   ╭───╯  │   │                         ┃
-┃                                 │   │      │   ╰───╯   ││   ╰─────╮│   ╰─────╮                   ┃
-┃                                 ╰───╯      ╰───────────╯╰─────────╯╰─────────╯                   ┃
-┃                                                                                                  ┃
-┃                                                                                                  ┃
-┃                                                                                                  ┃
-┃    FUEL, version 0.1.0.                                                                          ┃
+┃    Fuel, version 0.6.0.                                                                          ┃
 ┃    © Copyright 2026 Jon Pretty, Propensive OÜ.                                                   ┃
 ┃                                                                                                  ┃
 ┃    The primary distribution site is:                                                             ┃
@@ -75,12 +75,19 @@ object Overlay:
     List(t"format", t"base", t"info", t"detail", t"hidden", t"until")
 
   // The lines `headed` adds before the file's own.
-  private def headed(text: Text): Text = Tels.headed(text)(0)
+  private[fuel] def headed(text: Text): Text = Tels.headed(text)(0)
 
   private def added(text: Text): Int = Tels.headed(text)(1)
 
-  // An overlay read from its text, or the diagnostic which says why it could not be.
-  def read(path: Text, text: Text): Overlay | Block.Diagnostic =
+  // An overlay read from its text, or the diagnostic which says why it could not be; `prose`
+  // is how its prose — each `info`, `detail` and `keyword` — reads, which for an overlay's
+  // translation is one of the two readings of what is written (`OverlayTranslations`).
+  def read
+    ( path:  Text,
+      text:  Text,
+      prose: Text -> Text = (text: Text) => text )
+  :   Overlay | Block.Diagnostic =
+
     import strategies.throwUnsafely
 
     try
@@ -96,13 +103,15 @@ object Overlay:
 
       base.lay[Overlay | Block.Diagnostic](missing): (base: Text) =>
         val problems: List[Block] =
-          check(path, lines, Unset, tel.childCompounds.to[List], fileKeywords)
+          check(path, lines, Unset, tel.childCompounds.to[List], fileKeywords, prose)
 
         // The format of what it documents, by its `id`: Scala's, unless it says.
         val format: Text =
           tel.fields(t"format").to[List].head.let(_.primaryAtom).let(_.puncture(t"")).or(t"scala")
 
-        Overlay(path, base, doc(tel, 1, Nil), entries(tel, lines), problems, format)
+        Overlay
+          ( path, base, doc(tel, 1, Nil, prose), entries(tel, lines, Nil, prose), problems,
+            format )
 
     catch case error: Tel.Error =>
       val shift: Int = -added(text)
@@ -116,7 +125,7 @@ object Overlay:
   // The line of each compound of the file, since a node does not know its own: walking the
   // compounds and the lines together, in order, a compound is on the first line from where the
   // last one ended which begins with its keyword, and its source atom's lines follow it.
-  private class Lines(text: Text, roots: List[Tel.Compound]):
+  private[fuel] class Lines(text: Text, roots: List[Tel.Compound]):
     private val all: List[Text] = text.cut(t"\n")
     private val placed: java.util.IdentityHashMap[Tel.Compound, Int] = java.util.IdentityHashMap()
 
@@ -151,10 +160,10 @@ object Overlay:
     Block.Diagnostic(Tone.Failure, Block.Location(path, line), List(Block.paragraph(message)))
 
   // The inline atoms of a compound, and its source atom.
-  private def inlineAtoms(compound: Tel.Compound): List[Text] =
+  private[fuel] def inlineAtoms(compound: Tel.Compound): List[Text] =
     List.from(compound.atoms.stdlib.collect { case Tel.Atom.Inline(text, _) => text }.toList)
 
-  private def sourceAtom(compound: Tel.Compound): Optional[Text] =
+  private[fuel] def sourceAtom(compound: Tel.Compound): Optional[Text] =
     compound.atoms.stdlib.collectFirst { case Tel.Atom.Source(text) => text }.getOrElse(Unset)
 
   private def texts(compound: Tel.Compound): List[Text] =
@@ -164,7 +173,7 @@ object Overlay:
 
     List.from(all)
 
-  private def childrenOf(compound: Tel.Compound): List[Tel.Compound] =
+  private[fuel] def childrenOf(compound: Tel.Compound): List[Tel.Compound] =
     List.from(compound.children.stdlib.toList.flatMap(_.compounds.stdlib.toList))
 
   // The failures of the children of one node: the file (`entry` unset) or an entry.
@@ -173,7 +182,8 @@ object Overlay:
       lines:    Lines,
       entry:    Optional[Tel.Compound],
       children: List[Tel.Compound],
-      allowed:  List[Text] )
+      allowed:  List[Text],
+      prose:    Text -> Text )
   :   List[Block] =
 
     def written(keywords: List[Text]): Text = keywords.map { (k: Text) => t"`$k`" }.join(t", ")
@@ -196,7 +206,7 @@ object Overlay:
         val name: List[Block] =
           if inlineAtoms(child).nil then List(failure(path, lines(child), unnamed)) else Nil
 
-        name + check(path, lines, child, grandchildren, entryKeywords)
+        name + check(path, lines, child, grandchildren, entryKeywords, prose)
       else
         grandchildren.head.lay(Nil: List[Block]): (first: Tel.Compound) =>
           val message: Text = t"`$keyword` holds no `${first.keyword}`: it takes its value alone."
@@ -241,7 +251,7 @@ object Overlay:
       val line: Int = infoChild.let(lines(_)).or(entry.let(lines(_)).or(1))
 
       info.lay(Nil: List[Block]): (info: Text) =>
-        val size: Int = Blocks.plain(Blocks.inline(info)).length
+        val size: Int = Blocks.plain(Blocks.inline(prose(info))).length
 
         val message: Text =
           t"This info is ${size.show} characters long, and may be at most ${InfoLimit.show}: " +
@@ -268,25 +278,25 @@ object Overlay:
     . filter(_ != t"")
 
   // What a node says of its entity, with the imports of those enclosing it.
-  private def doc(node: Tel, line: Int, inherited: List[Text]): Api.Entry =
+  private def doc(node: Tel, line: Int, inherited: List[Text], prose: Text -> Text): Api.Entry =
     val until: Optional[Api.Until] =
       node.fields(t"until").to[List].head.let: (until: Tel) =>
         val texts: List[Text] = until.atomTexts.to[List].filter(_ != t"")
         texts.head.let: (version: Text) => Api.Until(version, texts.at(Sec))
 
     Api.Entry
-      ( info    = child(node, t"info"),
-        detail  = child(node, t"detail"),
+      ( info    = child(node, t"info").let(prose),
+        detail  = child(node, t"detail").let(prose),
         hidden  = flag(node, t"hidden"),
         until   = until,
         refer   = atoms(node, t"refer"),
         imports = inherited + atoms(node, t"import"),
         line    = line,
-        keywords = phrases(node, t"keyword") )
+        keywords = phrases(node, t"keyword").map(prose) )
 
-  private def entries(node: Tel, lines: Lines): List[Entry] = entries(node, lines, Nil)
+  private def entries(node: Tel, lines: Lines, inherited: List[Text], prose: Text -> Text)
+  :   List[Entry] =
 
-  private def entries(node: Tel, lines: Lines, inherited: List[Text]): List[Entry] =
     val scope: List[Text] = inherited + atoms(node, t"import")
 
     // A node, and the compound it wraps (whose atoms say which is inline and which the source),
@@ -304,14 +314,15 @@ object Overlay:
         val isType: Boolean = name.starts(t"#")
         val plain: Text = if name.starts(t".") || name.starts(t"#") then name.skip(1) else name
         val joined: Text = inline.skip(1).join(t" ")
-        val info: Optional[Text] = if joined == t"" then Unset else joined
-        val base: Api.Entry = doc(tel, line, scope)
+        val info: Optional[Text] = if joined == t"" then Unset else prose(joined)
+        val base: Api.Entry = doc(tel, line, scope, prose)
 
         val entry: Api.Entry =
           val imports: List[Text] = scope + atoms(tel, t"import")
-          base.copy(info = base.info.or(info), detail = base.detail.or(source), imports = imports)
+          val detail: Optional[Text] = base.detail.or(source.let(prose))
+          base.copy(info = base.info.or(info), detail = detail, imports = imports)
 
-        List(Entry(plain, isType, entry, entries(tel, lines, entry.imports), line))
+        List(Entry(plain, isType, entry, entries(tel, lines, entry.imports, prose), line))
 
   // Every overlay merged onto the model, with the diagnostics the merging raises.
   def merge(api: Api, overlays: List[Overlay]): (Api, List[Block]) =

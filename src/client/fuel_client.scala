@@ -1,17 +1,17 @@
                                                                                                   /*
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃                                                                                                  ┃
+┃                                ╭────────╮                   ╭───╮                                ┃
+┃                                │   ╭────╯                   │   │                                ┃
+┃                                │   │                        │   │                                ┃
+┃                                │   ╰──╮╭───╮ ╭───╮╭────────╮│   │                                ┃
+┃                                │   ╭──╯│   │ │   ││   ╭─╮  ││   │                                ┃
+┃                                │   │   │   │ │   ││   ╰─╯  ││   │                                ┃
+┃                                │   │   │   │ │   ││   ╭────╯│   │                                ┃
+┃                                │   │   │   ╰─╯   ││   ╰────╮│   │                                ┃
+┃                                ╰───╯   ╰────╌╰───╯╰────────╯╰───╯                                ┃
 ┃                                                                                                  ┃
-┃                                 ╭─────────╮╭───╮   ╭───╮╭─────────╮╭───╮                         ┃
-┃                                 │   ╭─────╯│   │   │   ││   ╭─────╯│   │                         ┃
-┃                                 │   ╰───╮  │   │   │   ││   ╰───╮  │   │                         ┃
-┃                                 │   ╭───╯  │   │   │   ││   ╭───╯  │   │                         ┃
-┃                                 │   │      │   ╰───╯   ││   ╰─────╮│   ╰─────╮                   ┃
-┃                                 ╰───╯      ╰───────────╯╰─────────╯╰─────────╯                   ┃
-┃                                                                                                  ┃
-┃                                                                                                  ┃
-┃                                                                                                  ┃
-┃    FUEL, version 0.1.0.                                                                          ┃
+┃    Fuel, version 0.6.0.                                                                          ┃
 ┃    © Copyright 2026 Jon Pretty, Propensive OÜ.                                                   ┃
 ┃                                                                                                  ┃
 ┃    The primary distribution site is:                                                             ┃
@@ -90,6 +90,10 @@ object ui:
     Subcommand("transcript", "print a presentation's transcript, its slides' in order")
   val Github = Subcommand("github", "a GitHub repository, as owner/repo")
 
+  val Translate =
+    Subcommand
+      ( "translate", "write the translations nobody has begun, check them all, or update them" )
+
   // Each is read from the cascade every Pyrocosm tool shares: the flag, the `fuel.*` property,
   // the `FUEL_*` variable, the repository's `.pyrocosm/fuel/config.tel` and the user's. A
   // repeated keyword's atoms arrive joined by `:`.
@@ -141,6 +145,26 @@ object ui:
         false,
         List('f'),
         "compile everything again, ignoring what the output directory keeps" )
+
+  val Update =
+    Flag[Unit]
+      ( "update",
+        false,
+        Nil,
+        "bring each translation up to the text it translates, keeping what it was written for" )
+
+  val Language =
+    Flag[Text]
+      ( "language",
+        false,
+        List('l'),
+        "translate into this language alone, as `fr` or `pt-BR`, whatever the configuration names" )
+
+  val Translation =
+    Setting[Text]
+      ( t"translation",
+        t"beneath a `document`, a language and the directory which holds its translation of " +
+          t"that directory, as `fr doc/fr`; it may hold a `fallback` language" )
 
   val Autoplay =
     Flag[Unit]
@@ -301,10 +325,55 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
       val config: Workspace.Config = Workspace.load(directory)
       ambient(sync(config, directory, Unset, named = false))
 
+    // `fuel translate [--language <language>] [<file>...]`: the translations nobody has begun
+    // written, and all of them checked; with `--update`, each brought up to the text it
+    // translates.
+    case ui.Translate() :: rest =>
+      val config: Workspace.Config = Workspace.load(directory)
+      val update: Boolean = ui.Update().present
+
+      // Registered here, so that it is offered and documented; its value is the word after it.
+      ui.Language()
+
+      val words: List[Text] = rest.map(_())
+      val flags: List[Text] = List(t"--language", t"-l")
+
+      def valued(index: Ordinal): Boolean =
+        index.n0 > 0 && flags.has(words.stdlib(index.n0 - 1))
+
+      val tongue: Optional[Text] =
+        words.indexed.filter { (_, index) => valued(index) }.head.let(_(0))
+
+      val files: List[Text] = words.indexed.filter: (word: Text, index: Ordinal) =>
+        !word.starts(t"-") && !valued(index)
+
+      . map { (word: Text, _) => absolute(directory, word) }
+
+      ambient(translate(config, update, tongue, flags.exists(words.has(_)), files))
+
     case _ =>
       ambient
         ( Fuel.usage
-            ( List(ui.Compile, ui.Show, ui.Search, ui.Present, ui.Transcript, ui.Sync) ) )
+            ( List
+                ( ui.Compile, ui.Show, ui.Search, ui.Present, ui.Transcript, ui.Sync,
+                  ui.Translate ) ) )
+
+// The translations: those nobody has begun written, and all checked; or each updated.
+private def translate
+  ( config: Workspace.Config,
+    update: Boolean,
+    tongue: Optional[Text],
+    asked:  Boolean,
+    files:  List[Text] )
+  ( using Stdio, Environment )
+:   Exit | Tool.UsageError.type | NoDocument.type | Mistranslated.type =
+
+  if asked && !tongue.lay(false)(Tongue.valid(_)) then
+    Out.println(t"fuel: usage: fuel translate [--update] [--language <language>] [<file>...]")
+    Out.println(t"fuel: a language is written as `fr`, or with a region as `pt-BR`")
+    Tool.UsageError
+  else if update then Translating.update(config, tongue, files)
+  else Translating.run(config, tongue, files, width)
 
 // Compiles every configured directory into the daemon's corpus, which the dashboard shows, and
 // reports a line per section and a line per file that could not be read.
@@ -452,10 +521,20 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
       val location: Block.Location = Block.Location(entry)
       progress.report(Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(text))))
 
+    // What is wrong with the configuration's `translation` lines.
+    config.badTranslations.each: (reason: Text) =>
+      val text: Text = t"$reason."
+
+      val location: Block.Location = Block.Location(t"${config.root}/.pyrocosm/fuel/config.tel")
+      progress.report(Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(text))))
+
     // The work there is, counted before it starts: the documents of every root, the dependency
     // jars, the sources; the pages are guessed from the sources until the API says.
     val documents: Int =
-      config.documents.stdlib.map { root => Compilation.files(root).stdlib.size }.sum
+      config.documents.stdlib.map: root =>
+        Compilation.files(root, config.translations).stdlib.size
+
+      . sum
 
     val jars: Int = config.classpath.filter(_.ends(t".jar")).stdlib.size
     progress.plan(Phase.Documents, documents)
@@ -514,7 +593,8 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
           linker,
           store,
           (path: Text) => Digests.of(environment, path),
-          glossary )
+          glossary,
+          translations = config.translations )
 
     // The API first, since the documents link to it: the sources compiled and saved, their
     // output and the dependencies walked, the overlays merged, and the pages of the project's
@@ -758,14 +838,27 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
       report(Block.Diagnostic(Tone.Failure, Block.Location(directory), List(Block.paragraph(text))))
       Nil
     else
-      filesBeneath(root, t".tel").bind: (file: Text) =>
+      // A file in a directory of translations is not an overlay but a translation of one,
+      // which the overlay it translates is held to.
+      val files: List[Text] =
+        filesBeneath(root, t".tel").filter(!Translations.held(_, config.translations))
+
+      files.bind: (file: Text) =>
         def unreadable: List[Overlay] =
           report(Compilation.unreadable(file))
           Nil
 
         readText(file).lay(unreadable): (text: Text) =>
           Overlay.read(file, text) match
-            case overlay: Overlay => List(overlay)
+            case overlay: Overlay =>
+              val reader: Text -> Optional[Text] = (path: Text) => readText(path)
+
+              OverlayTranslations.verify
+                ( file, text, Translations.of(file, config.translations), reader,
+                  Translations.partial(Translations.within(file, config.translations)) )
+              . each(report)
+
+              List(overlay)
 
             case diagnostic: Block.Diagnostic =>
               report(diagnostic)
@@ -1010,7 +1103,9 @@ private def compiled(config: Workspace.Config, path: Text): Optional[Doc] =
     config.documents.map { (root: Text) => (Compilation.name(root), root) }
 
   val regime: Compilation.Regime =
-    Compilation.Regime(config.session, config.fixtures, glossary = glossary, sections = sections)
+    Compilation.Regime
+      ( config.session, config.fixtures, glossary = glossary, sections = sections,
+        translations = config.translations )
 
   if checked then
     try Checking.session(config.classpath, config.options): (checker: Checker) =>

@@ -156,6 +156,18 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   the daemon polls every ten minutes while serving, with `since` and `If-None-Match`, so a poll
   with nothing new is a free 304. Other targets may follow `github`. Left for later: detaching
   by command, backoff on a rate limit, a timeout on the fetch.
+- **Translations** (done, first cut: the model and its maintenance). A translation is a file
+  of the definitive one's relative path, in the directory the configuration gives its language
+  beneath the `document` it translates (`translation fr doc/fr`, perhaps with a `fallback`
+  language for the files it lacks), which holds the text it translates in `- `
+  lines and its translation in `+ ` lines, so that it is consistent by itself and a line diff
+  against the definitive text says where it is out of date. `fuel
+  compile` and `fuel translate` check each one (stale text, untranslated passages, structure
+  which is not the definitive text's), `fuel translate` writes those nobody has begun, and
+  `fuel translate --update` rewrites one for a changed text, keeping what its translation was
+  written for in `! ` lines for the translator to work from. Left for later: serving a
+  translation (its pages, its search, its hyphenation), a link's anchor on a translated
+  heading, and translating glossaries, presentations and schema descriptions.
 - **M1 Markdown with embedded code, compiled and viewed** (done, first cut). This document's
   second half. Found while building it:
   - A chain of `Optional#let` calls with `_` lambdas (`file.parent.let(_.parent).let(_.parent)`
