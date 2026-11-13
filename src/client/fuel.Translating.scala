@@ -225,7 +225,7 @@ object Translating:
 
       Out.println
         ( t"fuel: the configuration has no directory of translations$into: it names one as " +
-            t"`translation $example doc/$example`, beneath the `document` it translates" )
+            t"`translation $example guide doc/$example`, beneath the `document` it translates" )
 
     targets.nil
 

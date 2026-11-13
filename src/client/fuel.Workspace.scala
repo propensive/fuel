@@ -65,10 +65,8 @@ object Workspace:
       translations:    List[Translations.Target] = Nil,
       badTranslations: List[Text]                = Nil,
       languages:       List[(Text, Text)]        = Nil,
-      // Each section, a name and its `document` directory, as the configuration names it;
-      // and the `document` lines which name none, each a caution.
-      sections:        List[(Text, Text)]        = Nil,
-      unnamed:         List[Text]                = Nil )
+      // Each section, a name and its `document` directory, as the configuration names it.
+      sections:        List[(Text, Text)]        = Nil )
 
   def load(directory: Text)(using Cli, Interpreter, Configurator): Config =
     // The project the directory is in, as `Tool` finds it: its root is what every path in the
@@ -103,6 +101,8 @@ object Workspace:
     // for each language it is translated into — a language and the directory which mirrors
     // the document's, perhaps with a `fallback` language. So each is read from the
     // configuration whole, as a `sync` line is; what is wrong with one is kept, to be reported.
+    // A `translation` is written as the `document` is, after its language: what the language
+    // calls the section, then its directory.
     def words(tel: Tel): List[Text] = tel.atomTexts.to[List].filter(_ != t"")
 
     def lines(tel: Tel, keyword: Text): List[List[Text]] =
@@ -121,21 +121,27 @@ object Workspace:
         translations: List[Translations.Target],
         faults:       List[Text] )
 
-    // A `document` line is a section's name and its directory, `document guide doc/en`; one
-    // which gives the directory alone is a section named after it.
+    // Whether a name can be a section's: it is one segment of a page's address.
+    def nameable(name: Text): Boolean =
+      name != t"" && !name.s.contains("/") && !name.s.contains("#")
+
+    // A `document` line is a section's name and its directory, `document guide doc/en`. One
+    // which is anything else is reported, and where it gives a directory alone, its section
+    // is named after that, so that what else is wrong with the project can still be said.
     def group(tel: Tel): List[Group] = words(tel).reverse.head.lay(List[Group]()): (entry: Text) =>
       val directory: Text = project.resolve(entry).encode
+      val written: Text = words(tel).join(t" ")
       val title: Optional[Text] = if words(tel).stdlib.size == 2 then words(tel).head else Unset
 
       val misnamed: List[Text] =
-        if words(tel).stdlib.size > 2 then
+        if words(tel).stdlib.size != 2 then
           List
-            ( t"`document ${words(tel).join(t" ")}` is not a section's name and its directory, " +
-                t"as `document guide doc/en`" )
-        else if title.lay(false) { name => name.s.contains("/") || name.s.contains("#") } then
+            ( t"`document $written` is not a section's name and its directory, as " +
+                t"`document guide doc/en`" )
+        else if !title.lay(false)(nameable(_)) then
           List
-            ( t"`document ${words(tel).join(t" ")}` names its section `${title.or(t"")}`, and a " +
-                t"name is one segment of a page's address, so it cannot hold `/` or `#`" )
+            ( t"`document $written` names its section `${title.or(t"")}`, and a name is one " +
+                t"segment of a page's address, so it cannot hold `/` or `#`" )
         else Nil
 
       val languages: List[List[Text]] = lines(tel, t"language")
@@ -147,7 +153,7 @@ object Workspace:
       val spoken: List[Text] =
         if languages.nil || (languages.stdlib.size == 1 && language.present) then Nil else
           List
-            ( t"`document $entry` has a `language` which is not one language, as `en` or " +
+            ( t"`document $written` has a `language` which is not one language, as `en` or " +
                 t"`en-US`" )
 
       val nested: List[Text] = lines(tel, t"overlay").bind(_.head.let(List(_)).or(Nil))
@@ -164,8 +170,10 @@ object Workspace:
           fallbacks.stdlib.size <= 1 && fallbacks.all(_.stdlib.size == 1) &&
             fallback.lay(true)(Tongue.valid(_))
 
-        if all.length != 2 || !Tongue.valid(all(0)) || !sound then Unset
-        else Translations.Target(all(0), directory, project.resolve(all(1)).encode, fallback)
+        if all.length != 3 || !Tongue.valid(all(0)) || !nameable(all(1)) || !sound then Unset
+        else
+          Translations.Target
+            ( all(0), directory, project.resolve(all(2)).encode, fallback, all(1) )
 
       val targets: List[Translations.Target] =
         read.bind { (atoms, fallbacks) => target(atoms, fallbacks).let(List(_)).or(Nil) }
@@ -178,9 +186,9 @@ object Workspace:
 
       val malformed: List[Text] =
         read.filter { (atoms, fallbacks) => target(atoms, fallbacks).absent }.map: (atoms, _) =>
-          t"`translation ${atoms.join(t" ")}`, of `document $entry`, is not a language and the " +
-            t"directory of its translations, perhaps with a `fallback` language, as " +
-            t"`translation fr doc/fr`"
+          t"`translation ${atoms.join(t" ")}`, of `document $entry`, is not a language, what it " +
+            t"calls the section, and the directory of its translations, perhaps with a " +
+            t"`fallback` language, as `translation fr guide doc/fr`"
 
       val groundless: List[Text] = targets.filter(!grounded(_)).map: target =>
         t"`translation ${target.tongue}`, of `document $entry`, falls back to " +
@@ -231,13 +239,6 @@ object Workspace:
       if !configured then stated.map(root => (after(root), root))
       else groups.map(group => (group.name.or(after(group.directory)), group.directory))
 
-    val unnamed: List[Text] =
-      if !configured then Nil else groups.filter(_.name.absent).map: (group: Group) =>
-        val name: Text = after(group.directory)
-
-        t"`document ${group.entry}` names no section, which is `$name` after its directory: " +
-          t"name it, as `document $name ${group.entry}`"
-
     // Two sections of one name would have one address.
     val shared: List[Text] =
       sections.map(_(0)).distinct.filter(name => sections.filter(_(0) == name).stdlib.size > 1)
@@ -271,5 +272,4 @@ object Workspace:
         translations,
         badTranslations,
         languages,
-        sections,
-        unnamed )
+        sections )

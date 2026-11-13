@@ -4927,7 +4927,7 @@ entry .Channel
         val targets: List[Translations.Target] =
           List
             ( Translations.Target(t"fr", t"$base/en", t"$base/fr"),
-              Translations.Target(t"fr-CA", t"$base/en", t"$base/ca", t"fr") )
+              Translations.Target(t"fr-CA", t"$base/en", t"$base/ca", t"fr", t"guide-ca") )
 
         val regime: Compilation.Regime = Compilation.Regime(translations = targets)
         val written: Corpus = Compilation.corpus(List(t"$base/en"), Checker.tokenized, regime)
@@ -4941,9 +4941,10 @@ entry .Channel
 
         ( read.doc(t"en", t"intro.md").let(_.title), anchors(read.doc(t"en", t"intro.md")),
           anchors(written.doc(t"en", t"intro.md")),
-          read.doc(t"en", t"other.md").lay(false) { doc => written.doc(t"en", t"other.md").lay(false)(_ eq doc) } )
+          read.doc(t"en", t"other.md").lay(false) { doc => written.doc(t"en", t"other.md").lay(false)(_ eq doc) },
+          read.sections.map(_.shown), read.sections.map(_.name), written.sections.map(_.shown) )
 
-      . assert(_ == (t"Pour commencer", List(t"getting-started"), List(t"getting-started"), true))
+      . assert(_ == (t"Pour commencer", List(t"getting-started"), List(t"getting-started"), true, List(t"guide-ca"), List(t"en"), List(t"en")))
 
       test(m"Fuel's words are said in the language read, a variant as its language, else English"):
         def said(tongue: Optional[Text]): Text =

@@ -326,7 +326,7 @@ final class Dashboard(audience: Audience = Audience()):
               val destination: Inline.Destination = Inline.Destination.Local(url)
               Block.TreeNode(Inline.text(doc.title), Nil, tone, Unset, Unset, destination)
 
-          Block.TreeNode(Inline.text(section.name), children, Unset, Unset, true)
+          Block.TreeNode(Inline.text(section.shown), children, Unset, Unset, true)
 
       // The glossary, after the sections, when there is one.
       val glossary: List[Block.TreeNode] =

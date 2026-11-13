@@ -158,7 +158,7 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   by command, backoff on a rate limit, a timeout on the fetch.
 - **Translations** (done, first cut: the model and its maintenance). A translation is a file
   of the definitive one's relative path, in the directory the configuration gives its language
-  beneath the `document` it translates (`translation fr doc/fr`, perhaps with a `fallback`
+  beneath the `document` it translates (`translation fr guide doc/fr`, perhaps with a `fallback`
   language for the files it lacks), which holds the text it translates in `- `
   lines and its translation in `+ ` lines, so that it is consistent by itself and a line diff
   against the definitive text says where it is out of date. `fuel
@@ -174,7 +174,9 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   the definitive term's in every language, a translated document may name a term in either
   language, and the page is sorted by the language's collation (cosmopolite's `Collatable`).
   A section is named by the configuration (`document guide doc/en`, `Config.sections`), not
-  by its directory, which for a translated project is a language's.
+  by its directory, which for a translated project is a language's; a `translation` line is
+  the same after its language (`translation fr guide doc/fr`), its name what that language's
+  readers see (`Corpus.Section.title`), while addresses keep the document's name.
   Left for later: a translation's pages in the output directory and compiled rather than
   rendered when asked for, hyphenation by language, holding a passage to the terms the text
   it translates names, and translating presentations and schema descriptions.

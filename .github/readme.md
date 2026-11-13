@@ -56,9 +56,15 @@ A `document` line of the configuration is a *section*: its name, then its direct
 `document guide doc/en`. The name is what the navigation calls the section and the first part
 of the address of each of its documents, `/doc/guide/intro.md`, whatever the directory is
 called and whichever language is read. It is one segment of an address, so it holds no `/`
-or `#`, and no two sections share one. A line which gives a directory alone still works, as
-the section named by the directory's last segment, and `fuel compile` cautions that it names
-none; so does a directory given by `--document` or in the environment, without the caution.
+or `#`, and no two sections share one. A line which is anything else — a directory alone —
+is a failure of `fuel compile`. A directory given by `--document` or in the environment has
+nowhere to say a name, and is the section named by its last segment.
+
+A language the section is translated into calls it what its `translation` line says, which
+is written as the `document` line is, after the language: `translation fr guide-fr doc/fr`
+(see [Translations](#translations)). That name is what the navigation shows a reader of the
+language; a document's address is the same in every language, and begins with the name the
+`document` line gives.
 
 When a `classpath` is configured, every Scala fence is also *compiled*, in one warm compiler
 session on that classpath with the configured `scalac-option`s, so a fragment that does not
@@ -499,7 +505,8 @@ val x = 1
 A language is written as its ISO 639 code, perhaps with a region: `fr`, `pt-BR`. Where
 translations are is said by the configuration alone, and by no document or overlay. A
 `document` says the `language` it is written in, and holds a `translation` for each language
-it is translated into: the language, and the directory which mirrors the document's. The
+it is translated into: the language, then what the `document` line itself says — what the
+language calls the section, and the directory which mirrors the document's. The
 translation of a file is the file of the same relative path there. An `overlay` beneath a
 `document` is a directory inside the document's, so it is translated with it.
 
@@ -507,15 +514,19 @@ translation of a file is the file of the same relative path there. An `overlay` 
 document guide doc/en
   language en-US
   overlay api                   # `doc/en/api`
-  translation fr     doc/fr     # `doc/en/prose/intro.md` is translated by
-                                # `doc/fr/prose/intro.md`, and `doc/en/api/gossamer.tel`
-                                # by `doc/fr/api/gossamer.tel`
-  translation fr-CA  doc/fr-CA
-    fallback fr                 # where `fr-CA` has no file, the French one stands for it
+  translation fr     guide   doc/fr     # `doc/en/prose/intro.md` is translated by
+                                        # `doc/fr/prose/intro.md`, and
+                                        # `doc/en/api/gossamer.tel` by
+                                        # `doc/fr/api/gossamer.tel`
+  translation fr-CA  guide   doc/fr-CA
+    fallback fr                         # where `fr-CA` has no file, the French one stands
+                                        # for it
+  translation de     handbuch  doc/de   # German readers see the section as `handbuch`
 ```
 
-A `translation` always names its directory, which nothing is assumed about: it is resolved
-as the document's is, and need not be beside it. A language with a `fallback` need not
+A `translation` always names its section and its directory, and nothing is assumed about
+either: the name is the language's own even where it is the document's, and the directory is
+resolved as the document's is, and need not be beside it. A language with a `fallback` need not
 translate everything: a file it has no translation of is read in its fallback (and that
 language's own fallback, in turn), and as it is written where none of them has one. So such a
 language's missing translations are no caution, and `fuel translate` writes them only when it
@@ -739,8 +750,8 @@ document guide doc/en
   language en-US
   overlay api
   glossary glossary.tel
-  translation fr     doc/fr
-  translation fr-CA  doc/fr-CA
+  translation fr     guide  doc/fr
+  translation fr-CA  guide  doc/fr-CA
     fallback fr
 
 # Serve the documents from the daemon's start, behind the machine's Pyrocosm hub at

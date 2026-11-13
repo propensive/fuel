@@ -528,11 +528,6 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
       val location: Block.Location = Block.Location(t"${config.root}/.pyrocosm/fuel/config.tel")
       progress.report(Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(text))))
 
-    // Each `document` which names no section: a caution.
-    config.unnamed.each: (reason: Text) =>
-      val location: Block.Location = Block.Location(t"${config.root}/.pyrocosm/fuel/config.tel")
-      progress.report(Block.Diagnostic(Tone.Warning, location, List(Block.paragraph(t"$reason."))))
-
     // The work there is, counted before it starts: the documents of every root, the dependency
     // jars, the sources; the pages are guessed from the sources until the API says.
     val documents: Int =

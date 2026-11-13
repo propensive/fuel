@@ -39,7 +39,7 @@ import pyrocosm.{Block, Tone}
 // Where translations are, and a Markdown document held to its own. The configuration gives
 // each `document` directory, with the overlays inside it, a directory for each language it is
 // translated into, and the translation of a file is the file of the same relative path there:
-// with `translation fr doc/fr` beneath `document doc/en`, `doc/en/prose/intro.md` is
+// with `translation fr guide doc/fr` beneath `document guide doc/en`, `doc/en/prose/intro.md` is
 // translated into French by `doc/fr/prose/intro.md`, and an overlay `doc/en/api/gossamer.tel`
 // by `doc/fr/api/gossamer.tel`. Nothing names a translation but its place. A language may
 // have a `fallback`, another language of the same directory, or the language the directory is
@@ -50,9 +50,14 @@ import pyrocosm.{Block, Tone}
 // document.
 object Translations:
   // A language's translations of a `document` directory, `base`: the directory which mirrors
-  // it, and the language which stands in where it has no file.
+  // it, the language which stands in where it has no file, and what the language calls the
+  // section.
   case class Target
-    ( tongue: Text, base: Text, directory: Text, fallback: Optional[Text] = Unset )
+    ( tongue:    Text,
+      base:      Text,
+      directory: Text,
+      fallback:  Optional[Text] = Unset,
+      name:      Optional[Text] = Unset )
 
   // The translations of the directory a file is in.
   def within(path: Text, targets: List[Target]): List[Target] =
