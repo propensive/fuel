@@ -4261,6 +4261,52 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
 
       . assert(_ == (t"val own = 1", t"val shared = 1"))
 
+      def configuration(text: Text): Tel =
+        import strategies.throwUnsafely
+        import codepages.utf8Codepage
+        t"tel 1.0\n\n$text".read[Tel]
+
+      def sectionFaults(text: Text): Int =
+        Workspace.faults(configuration(text)).count(_(1).starts(t"/section"))
+
+      val inline: Text =
+        t"section guide doc\n  original en-US en section.tel\n    overlay api\n    glossary glossary.tel\n  translation fr fr\n  translation fr-CA fr-CA\n    fallback fr\nsession\nclasspath a.jar\n"
+
+      val beneath: Text =
+        t"section\n  name guide\n  path doc\n  original\n    language en-US\n    path en\n    metadata section.tel\n    overlay api\n    glossary glossary.tel\n  translation\n    language fr\n    path fr\n  translation fr-CA fr-CA fr\n"
+
+      test(m"the configuration's schema is a valid schema, and a configuration follows it"):
+        (Workspace.schema.name, Workspace.faults(configuration(inline)).size)
+
+      . assert(_ == (t"fuel", 0))
+
+      test(m"a section's members are the same on its line as beneath it, each by its keyword"):
+        import strategies.throwUnsafely
+        (configuration(inline).as[Workspace.Sections], sectionFaults(beneath))
+
+      . assert: (sections, faults) =>
+          import strategies.throwUnsafely
+          faults == 0 && sections == configuration(beneath).as[Workspace.Sections] &&
+            sections.section.map(_.original.metadata) == List(t"section.tel") &&
+            sections.section.bind(_.translation.map(_.fallback)) == List(Unset, t"fr")
+
+      test(m"a section without its original, or with what belongs beneath it, is a fault"):
+        ( sectionFaults(t"section guide doc\n"),
+          sectionFaults(t"section guide doc\n  original en en\n  overlay api\n"),
+          sectionFaults(t"section guide\n  original en en\n"),
+          sectionFaults(t"section guide doc\n  original en en\n  original fr fr\n") )
+
+      . assert(_ == (1, 1, 1, 1))
+
+      test(m"values after an original's file are its overlays, as its members' order has it"):
+        import strategies.throwUnsafely
+        val text: Text = t"section guide doc\n  original en en a.tel api more\n"
+
+        ( sectionFaults(text),
+          configuration(text).as[Workspace.Sections].section.map(_.original.overlay) )
+
+      . assert(_ == (0, List(List(t"api", t"more"))))
+
       test(m"a section nothing names is named by its directory's last segment"):
         Compilation.name(t"/home/me/project/doc/modules/")
 

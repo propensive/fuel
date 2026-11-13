@@ -5,7 +5,7 @@ tel 1.0
 # which carries the fork's standard library and Soundness, with the options Soundness code
 # needs: the fork's repairs, and the proscenium predef with Soundness imported.
 section doc doc
-  definitive en .
+  original en .
 session
 
 # The project's own sources, whose API is documented by the overlays in doc/api, compiled in

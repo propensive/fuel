@@ -39,7 +39,7 @@ import pyrocosm.{Block, Tone}
 // Where translations are, and a Markdown document held to its own. The configuration gives
 // each section's definitive directory, with the overlays inside it, a directory for each
 // language it is translated into, and the translation of a file is the file of the same
-// relative path there: with `definitive en en` and `translation fr fr` beneath
+// relative path there: with `original en en` and `translation fr fr` beneath
 // `section guide doc`, `doc/en/prose/intro.md` is translated into French by
 // `doc/fr/prose/intro.md`, and an overlay `doc/en/api/gossamer.tel`
 // by `doc/fr/api/gossamer.tel`. Nothing names a translation but its place. A language may

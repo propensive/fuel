@@ -168,16 +168,16 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   written for in `! ` lines for the translator to work from. The dashboard
   serves each language (Pyrocosm's `Audience`): a document as its translation reads, an
   entity's page as its overlay's does, Fuel's own words as a `Polyglot` each (`Phrases`) in
-  English, French and German. A glossary named beneath a `definitive` is translated too
+  English, French and German. A glossary named beneath a `original` is translated too
   (`GlossaryTranslations`): an entry is keyed by the definitive term, a `term` beneath it is
   the language's own, and `Glossary.Term.origin` ties one to the other, so that the anchor is
   the definitive term's in every language, a translated document may name a term in either
   language, and the page is sorted by the language's collation (cosmopolite's `Collatable`).
-  A section is configured whole (`Workspace`): `section guide doc`, with `definitive en-US en`
+  A section is configured whole (`Workspace`): `section guide doc`, with `original en-US en`
   and each `translation fr fr` beneath it, every path within its parent's, and the overlays and
-  glossaries beneath the `definitive`, whose directory they are in. The name is
+  glossaries beneath the `original`, whose directory they are in. The name is
   the address's; what a reader is told of the section — its title — is in the tree, in the
-  section's file, which the `definitive` line names (`SectionFile`, to the schema `section`),
+  section's file, which the `original` line names (`SectionFile`, to the schema `section`),
   so that it is translated as the tree is
   (`Corpus.Section.title`).
   Left for later: a translation's pages in the output directory and compiled rather than

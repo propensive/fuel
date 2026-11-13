@@ -42,7 +42,7 @@ import errorDiagnostics.emptyDiagnostics
 import pyrocosm.{Block, Tone}
 
 // A section's file: a TEL file in the directory of the section's definitive text, named on the
-// `definitive` line of the configuration after the directory, which says what a reader is
+// `original` line of the configuration after the directory, as its `metadata`, which says what a reader is
 // told of the section — so far its `title`, which the navigation shows in place of the
 // section's name:
 //

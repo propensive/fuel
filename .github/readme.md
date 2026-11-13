@@ -53,34 +53,56 @@ a bare `serve` in the configuration) shows it: every section's documents, by tit
 chosen document. A document's title is its first level-one heading, else its filename.
 
 The documents are configured as *sections*. A `section` is a name and a directory, and holds
-the `definitive` text — the language the section is written in, where, and perhaps the file
+its `original` — the text it is written in: its language, where it is, and perhaps the file
 there which says what a reader is told of the section — with what else is found there
 beneath it:
 
 ```
 section guide doc
-  definitive en-US en section.tel   # `doc/en`, written in American English, and the
+  original en-US en section.tel     # `doc/en`, written in American English, and the
                                     # section's file, `doc/en/section.tel`
     overlay api                     # `doc/en/api`
     glossary glossary.tel           # `doc/en/glossary.tel`
   translation fr fr                 # `doc/fr`: see Translations
 ```
 
+Each value on these lines is a member with a keyword of its own, which the configuration's
+schema (`fuel/config.schema.tel`, among Fuel's resources) declares in the order they are
+written: a section's `name` and `path`; an original's `language`, `path` and `metadata`; a
+translation's `language`, `path` and `fallback`. So a member may be written beneath its
+parent instead, and this is the same section:
+
+```
+section
+  name guide
+  path doc
+  original
+    language en-US
+    path en
+    metadata section.tel
+    overlay api
+    glossary glossary.tel
+  translation
+    language fr
+    path fr
+```
+
 Every path is within its parent's: the section's directory is in the project's, a
-`definitive`'s and a `translation`'s in the section's, and the section's file, an `overlay`
-and a `glossary` in the definitive's. A section whose documents are in its own directory writes
-`definitive en .`. A path which begins with `/` is where it says.
+`original`'s and a `translation`'s in the section's, and the section's file, an `overlay`
+and a `glossary` in the original's. A section whose documents are in its own directory writes
+`original en .`. A path which begins with `/` is where it says.
 
 The name is the first part of the address of each of the section's documents,
 `/doc/guide/intro.md`, whatever its directories are called and whichever language is read. It
 is one segment of an address, so it holds no `/` or `#`, and no two sections share one. A
-`section` which is not a name and a directory, or has not exactly one `definitive`, a language
-and a directory, is a failure, and so is a `document` line, which a section once was. A
-directory given by `--document` or in the environment has nowhere to say more, and is the
-section named by its last segment, read in place of the configuration's.
+`section` which is not what the schema allows — not a name and a directory, or without
+exactly one `original`, a language and a directory — is a failure, and so is a `document`
+line, which a section once was. A directory given by `--document` or in the environment has
+nowhere to say more, and is the section named by its last segment, read in place of the
+configuration's.
 
 What a reader is told of a section is not in the configuration but in the tree, in the
-section's file, which the `definitive` line names after its directory, so that it is
+section's file, the `metadata` of its `original`, so that it is
 translated as everything else there is. It is a TEL file, to the schema `section`, which says
 the section's `title`:
 
@@ -284,7 +306,7 @@ dist/doc/
 
 The manifest (`Output.Manifest`) records Fuel's version, the hash of the classpath (of its
 bytes, until a hash of its API is available), the hash of every input the whole output depends
-on, each document by its section (its definitive directory relative to the project root) and its
+on, each document by its section (its original's directory relative to the project root) and its
 path, each API page by its entity, and the cache: from the key of each input to the record which
 holds its output. Naming records by their content means names never collide, whatever a
 document or an entity is called, and a record already written is not written again; the manifest
@@ -487,7 +509,7 @@ each document before it is parsed, so an author's own `[interface]: url` wins; a
 twice is a failure, as is a fence left open (which would swallow the definitions). The page
 lists its terms in the order of the dictionary of the language it is read in.
 
-A glossary named beneath a section's `definitive`, by its path within that directory, is
+A glossary named beneath a section's `original`, by its path within that directory, is
 translated as the section's documents are: see [Translations](#translations).
 
 ## Translations
@@ -529,15 +551,15 @@ val x = 1
 
 A language is written as its ISO 639 code, perhaps with a region: `fr`, `pt-BR`. Where
 translations are is said by the configuration alone, and by no document or overlay. A
-`section` says the language its `definitive` text is written in, and holds a `translation`
-for each language it is translated into, written as the `definitive` is: the language, and
-its directory within the section's, which mirrors the definitive's. The translation of a file
-is the file of the same relative path there, so whatever is beneath the `definitive` — the
+`section` says the language its `original` is written in, and holds a `translation`
+for each language it is translated into, written as the `original` is: the language, and
+its directory within the section's, which mirrors the original's. The translation of a file
+is the file of the same relative path there, so whatever is beneath the `original` — the
 section's file, an `overlay`, a `glossary` — is translated with the documents.
 
 ```
 section guide doc
-  definitive en-US en section.tel   # translated by `doc/fr/section.tel`
+  original en-US en section.tel     # translated by `doc/fr/section.tel`
     overlay api                     # `doc/en/api/gossamer.tel` by
                                     # `doc/fr/api/gossamer.tel`
   translation fr fr                 # `doc/en/prose/intro.md` by `doc/fr/prose/intro.md`
@@ -556,11 +578,11 @@ section is translated into, or the language it is written in. There may be sever
 `section`s, each with its own languages, overlays and translations.
 
 A file in a directory of translations is not a document or an overlay of its own. These are
-failures of the configuration: a `translation` or a `definitive` which is not
+failures of the configuration: a `translation` or a `original` which is not
 beneath a `section`; a `translation` which is not a language and a directory, or is into the
-section's own language or in its definitive directory; an `overlay` or a
-`glossary` beneath the `section` and not its `definitive`; and a fallback which is neither
-the definitive language nor another translation of the section.
+section's own language or in its original's directory; an `overlay` or a
+`glossary` beneath the `section` and not its `original`; and a fallback which is neither
+the original's language nor another translation of the section.
 
 The translation of a section's file is the same file, its `title` a source atom of
 passages, and a reader of the language sees the section under that title:
@@ -748,10 +770,10 @@ scalac-option -deprecation
 # with (`/doc/guide/…`), and its directory; and the language it is written in, with where in
 # that directory (`.` is the directory itself).
 section guide doc
-  definitive en .
+  original en .
 
 section modules doc/modules
-  definitive en .
+  original en .
 
 # Compile each document's fences as one session, each following the ones before it (as a
 # REPL would), with `doc/fixtures/<section>/<document>.scala` (else
@@ -780,12 +802,12 @@ check-links
 output dist/doc
 
 # A section may say more: its own file (which says its title), the overlays and the glossaries
-# in its definitive directory, and its translations, each a language and the directory, in
-# the section's, which mirrors the definitive one. A file without its translation there is a
+# in its original's directory, and its translations, each a language and the directory, in
+# the section's, which mirrors the original's. A file without its translation there is a
 # caution, and `fuel translate` writes it; a language with a fallback need not translate
 # everything.
 section handbook doc/handbook
-  definitive en-US en section.tel
+  original en-US en section.tel
     overlay api
     glossary glossary.tel
   translation fr     fr

@@ -164,7 +164,7 @@ object ui:
     Setting[Text]
       ( t"section",
         t"a section of documents, its name and its directory, as `guide doc`; beneath it, a " +
-          t"`definitive` and each `translation`, a language and a directory within it each" )
+          t"`original` and each `translation`, a language and a directory within it each" )
 
   val Translation =
     Setting[Text]
@@ -450,7 +450,7 @@ private def compile(config: Workspace.Config, force: Boolean, tty: Boolean)
     Out.println(t"fuel: no section of documents is configured")
 
     Out.println
-      ( t"fuel: add `section <name> <dir>` to .pyrocosm/fuel/config.tel, with `definitive " +
+      ( t"fuel: add `section <name> <dir>` to .pyrocosm/fuel/config.tel, with `original " +
           t"<language> <dir>` beneath it" )
 
     NoDocuments
