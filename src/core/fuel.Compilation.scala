@@ -47,7 +47,8 @@ object Compilation:
   // when the key of its inputs is not kept, `base` giving the key of everything a document
   // depends on beyond its own text, by its path; `glossary` has the terms its prose may name;
   // `sections` is every section's name and directory, which a relative link leaving its own
-  // section resolves through (a corpus gives its own when the regime gives none).
+  // section resolves through (a corpus gives its own when the regime gives none);
+  // `translations` are the directories which hold the translations of others.
   case class Regime
     ( session:  Boolean                  = false,
       fixtures: Optional[Text]           = Unset,
@@ -56,14 +57,20 @@ object Compilation:
       cache:    Optional[Cache]          = Unset,
       base:     Text => Text             = (_: Text) => t"",
       glossary: Glossary                 = Glossary.none,
-      sections: List[(Text, Text)]       = Nil )
+      sections: List[(Text, Text)]       = Nil,
+      translations: List[Translations.Target] = Nil )
 
   // A section's name is its directory's last segment.
   def name(root: Text): Text = root.cut(t"/").filter(_ != t"").reverse.head.or(root)
 
-  // The Markdown files beneath a root, in order: what a section compiles, and so what there is
-  // to do, which a compile may count before it starts.
-  def files(root: Text): List[Text] =
+  // The Markdown documents beneath a root, in order: what a section compiles, and so what there
+  // is to do, which a compile may count before it starts. A file in a directory of translations
+  // is not a document.
+  def files(root: Text, translations: List[Translations.Target] = Nil): List[Text] =
+    sources(root).filter(!Translations.held(_, translations))
+
+  // Every Markdown file beneath a root, in order.
+  def sources(root: Text): List[Text] =
     import filesystemBackends.javaBaseFilesystem
     import filesystemOptions.dereferenceSymlinks
     import sortingAlgorithms.timsort
@@ -81,9 +88,12 @@ object Compilation:
     import charsets.utf8Charset
     import textSanitizers.skipSanitizer
 
-    val files: List[Text] = this.files(root)
+    val files: List[Text] = this.files(root, regime.translations)
 
     def relative(path: Text): Text = path.skip(root.length + 1)
+
+    def read(path: Text): Optional[Text] =
+      safely(path.as[Path on Linux]).let: (file: Path on Linux) => safely(file.read[Text])
 
     def fixture(path: Text): Optional[(Text, Text)] =
       Compilation.fixture(regime, name(root), relative(path))
@@ -98,11 +108,18 @@ object Compilation:
             val within: Text = relative(path)
             val linker: Linker = regime.linker(name(root), within)
 
-            val doc: Doc =
+            val parsed: Doc =
               Doc.parse
                 ( within, text, checker, regime.session, fixture(path), linker, regime.cache,
                   regime.base(t"${name(root)}/$within"), name(root), regime.glossary, root,
                   regime.sections )
+
+            val problems: List[Block] =
+              Translations.check
+                ( within, text, Translations.of(path, regime.translations), read,
+                  Translations.partial(Translations.within(path, regime.translations)) )
+
+            val doc: Doc = parsed.copy(problems = parsed.problems + problems)
 
             regime.progress(within, doc)
             recur(tail, docs + List(doc), skipped)

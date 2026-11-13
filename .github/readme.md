@@ -26,6 +26,11 @@ fuel present doc/slides.tel --align talk.wav  # the same, timed to a recording o
 fuel transcript doc/slides.tel  # the presentation's transcript, set to the terminal's width
 fuel sync github propensive/fuel  # attach a repository's issues to the API pages, and fetch them
 fuel sync          # fetch every attached tracker's issues again
+fuel translate     # write the translations nobody has begun, into each configured language,
+                   # and say how far each is done, and what is wrong with any
+fuel translate doc/x.md doc/y.md  # the same, for these documents (or overlays) alone
+fuel translate --language fr  # the same, into French alone
+fuel translate --update  # bring each translation up to the text it translates
 fuel install       # install tab-completions and the manpage
 fuel about         # fuel's version, and the daemon serving it
 fuel --version     # the version alone
@@ -36,8 +41,9 @@ A failure of the daemon itself while it carries out a command (running out of me
 reported on the standard error, where it was thrown, and the command exits with status 6, apart
 from a compile's own failures (status 4), from a tracker whose issues could not be fetched
 (status 7), from a presentation whose transcript and alignment do not correspond (status 8),
-from an aligner that could not be installed or run (status 9) and from a command line it did
-not understand (status 2).
+from an aligner that could not be installed or run (status 9), from a translation which is not
+consistent with the text it translates (status 10, from `fuel translate`) and from a command
+line it did not understand (status 2).
 
 `fuel compile` reads every `*.md` beneath each configured `document` directory, parses it as
 CommonMark, and converts it to Pyrocosm blocks: a fenced block whose info string is `scala` or
@@ -441,6 +447,145 @@ brackets are CommonMark's own reference link, since the glossary's definitions a
 each document before it is parsed, so an author's own `[interface]: url` wins; a term defined
 twice is a failure, as is a fence left open (which would swallow the definitions).
 
+## Translations
+
+A document or an overlay is written in one language, its *definitive* text, and may be
+translated into others. A translation is a file of its own which holds the text it translates
+beside the translation of it, so that it is consistent by itself, and can be held to the
+definitive text as that changes. A line of it is one of four kinds, by how it begins:
+
+```
+- The definitive text, a line of it.
++ Its translation.
+! The definitive text as it was when the translation was written.
+A line both languages share.
+```
+
+A *passage* is a run of `!` lines, then `-` lines, then `+` lines: its `+` lines translate its
+`-` lines together, so a paragraph may be reflowed. A sigil alone is an empty line of its kind.
+A line both languages share never begins with a sigil and a space, so one which would — an item
+of a Markdown list which is the same in both languages — is a passage whose `+` line repeats
+its `-` line. Taking the `-` lines with the shared lines gives the definitive text back, and
+taking the `+` lines with them gives the translation.
+
+````
+- # Tutorial
++ # Tutoriel
+
+- Fuel compiles every Markdown file,
+- and serves it on the web.
++ Fuel compile chaque fichier Markdown, et le sert sur le web.
+
+- - first, write a document
++ - d'abord, écrivez un document
+
+```scala
+val x = 1
+```
+````
+
+A language is written as its ISO 639 code, perhaps with a region: `fr`, `pt-BR`. Where
+translations are is said by the configuration alone, and by no document or overlay. A
+`document` says the `language` it is written in, and holds a `translation` for each language
+it is translated into: the language, and the directory which mirrors the document's. The
+translation of a file is the file of the same relative path there. An `overlay` beneath a
+`document` is a directory inside the document's, so it is translated with it.
+
+```
+document doc/en
+  language en-US
+  overlay api                   # `doc/en/api`
+  translation fr     doc/fr     # `doc/en/prose/intro.md` is translated by
+                                # `doc/fr/prose/intro.md`, and `doc/en/api/gossamer.tel`
+                                # by `doc/fr/api/gossamer.tel`
+  translation fr-CA  doc/fr-CA
+    fallback fr                 # where `fr-CA` has no file, the French one stands for it
+```
+
+A `translation` always names its directory, which nothing is assumed about: it is resolved
+as the document's is, and need not be beside it. A language with a `fallback` need not
+translate everything: a file it has no translation of is read in its fallback (and that
+language's own fallback, in turn), and as it is written where none of them has one. So such a
+language's missing translations are no caution, and `fuel translate` writes them only when it
+is asked for the language by name, with `--language`. A fallback is another language the
+document is translated into, or the language it is written in. There may be several
+`document`s, each with its own language, overlays and translations.
+
+A file in a directory of translations is not a document or an overlay of its own, even where
+that directory is inside a directory of documents. These are failures of the configuration:
+a `translation` which is not beneath a `document`, or is not a language and a directory; a
+translated `document` which does not say its `language`, or is translated into it; and a
+fallback which is neither that language nor another translation of the document.
+
+An overlay's translation is an overlay with the same entries, which TEL reads as any other,
+whose prose alone is paired: each `info` and `detail` is written beneath its keyword, as a
+source atom of passages. An `info` the definitive overlay gives on an entry's line is an `info`
+beneath the entry in its translation. An entry's `hidden`, `until`, `refer` and `import` are
+the same in every language.
+
+```
+base gossamer
+
+entry .Text
+  info
+      - a one-line summary
+      + un résumé d'une ligne
+  detail
+      - Markdown about `Text`.
+      + Du Markdown sur `Text`.
+```
+
+`fuel compile` holds every translation to its definitive text, and `fuel translate`
+does so alone, without compiling anything, with a line for each translation saying how far it
+is done. Each of these is reported at its line of the translation's file:
+
+- the `-` lines are not the definitive text: a caution, with the change as it reads
+  (`every Markdown {+and TEL+} file`, `[-gone-]`);
+- a passage nobody has translated (it reads as the definitive text until someone does): one
+  caution for the file, listing their lines;
+- a passage which still has `!` lines, or has no `-` lines: a caution;
+- `+` lines which translate nothing: a failure;
+- a translation whose structure is not the definitive text's — a block of another kind, a
+  heading of another level, a list of more or fewer items, a block more or fewer: a failure. A
+  fence must be the same in every language, apart from a `tabular` fence, whose content is
+  prose. A paragraph which names different inline code, or links to different places, is a
+  caution. Structure is checked once no passage is waiting to be revised;
+- for an overlay, an entry or a run of prose which one of the two has and the other lacks: a
+  caution; an entry which differs in more than its prose: a failure.
+
+A document or an overlay with no file where its translation should be is a caution, unless
+the language has a fallback, and
+`fuel translate` reports a file in a directory of translations which translates nothing.
+
+`fuel translate` writes each translation nobody has begun — every line of prose a `-` line,
+fences and blank lines shared — in its place, making the directories it needs; it never
+overwrites one. It does so for every document and overlay, or for the files it is given, and
+into every language the configuration has a directory for, or into the one given with
+`--language` (`-l`); then it checks them, as above. When the definitive text
+changes, `fuel translate --update` (which takes files, translations among them, and
+`--language`, in the same way)
+rewrites each translation so that it is of the text as it stands, and shows the translator
+what to do: a passage whose text changed keeps its `+` lines, takes the new text as its `-`
+lines, and keeps the text its translation was written for as `!` lines.
+
+```
+! Fuel compiles every Markdown file,
+! and serves it on the web.
+- Fuel compiles every Markdown and TEL file,
+- and serves it on the web.
++ Fuel compile chaque fichier Markdown, et le sert sur le web.
+```
+
+The translator revises the `+` lines and deletes the `!` lines. New text arrives as a passage
+with no `+` lines, and text which has gone leaves its `!` and `+` lines, to be deleted. A
+second update before the first is dealt with keeps the first `!` lines, which are what the
+`+` lines still say. An overlay's translation is made again from the overlay, each run of its
+prose updated in this way; the translation of an entry the overlay no longer has is left out,
+and `fuel translate --update` says so.
+
+Translations are checked and maintained, and not yet served: the dashboard shows the
+definitive text. Glossaries, presentations and a schema's descriptions are not yet translated.
+
 ## Issues
 
 A tracker's issues can be attached to the API's pages: `fuel sync github propensive/fuel`
@@ -518,6 +663,17 @@ check-links
 # Write the compiled documents and API pages here, as BinTEL, compiling only what changed.
 output dist/doc
 
+# A directory of documents may say more: the language it is written in, the overlays inside
+# it, and its translations, each a language and the directory which mirrors this one. A file
+# without its translation there is a caution, and `fuel translate` writes it; a language with
+# a fallback need not translate everything.
+document doc/en
+  language en-US
+  overlay api
+  translation fr     doc/fr
+  translation fr-CA  doc/fr-CA
+    fallback fr
+
 # Serve the documents from the daemon's start, behind the machine's Pyrocosm hub at
 # http://localhost:8090/fuel/; `port` would serve them on a port of their own as well.
 serve
@@ -533,11 +689,13 @@ and a `FUEL_`-prefixed environment variable, in that order of priority ahead of 
 ## Modules
 
 - `fuel-core` (`src/core`): `Doc`, `Corpus`, the `Blocks` conversion of Markdown to Pyrocosm
-  blocks (recording every `Linkage` it makes), the `Glossary`, and the `Embedding` of fenced
-  code, for another tool to embed.
+  blocks (recording every `Linkage` it makes), the `Glossary`, the `Embedding` of fenced
+  code, for another tool to embed, and a `Translation` with the `Mirror` of its structure and
+  the `Translations` which say where each is.
 - `fuel-api` (`src/api`): the `Api` model of each `Format` (`Apis`), Scala's read from
   compiled code by `Inspection` and a TEL schema's by `TelsFormat`, documented by `Overlay`s,
-  with the `Resolver` of references, `Signatures` as tokens, `ApiPages`, and the `Links` check.
+  with the `Resolver` of references, `Signatures` as tokens, `ApiPages`, the `Links` check, and
+  `OverlayTranslations`.
 - `fuel-client` (`src/client`): the `Tool`, its subcommands and settings, the daemon's corpus
   and model, and the dashboard.
 - `launcher` (`src/launcher`): the entry point alone, built into the executable.

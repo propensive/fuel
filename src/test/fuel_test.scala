@@ -4696,3 +4696,271 @@ entry .Channel
         fuel.Help.codec.decode(fuel.Help.codec.encode(index))
 
       . assert(_ == fuel.Help.Message.Index(3L, List(fuel.Help.Entry(t"a.B#c", t"a member"))))
+
+    suite(m"Translations"):
+      val english: Text =
+        t"# Title\n\nThe first paragraph,\non two lines.\n\n- one\n- two\n\n```scala\nval x = 1\n```\n"
+
+      val french: Text =
+        t"- # Title\n+ # Titre\n\n- The first paragraph,\n- on two lines.\n+ Le premier paragraphe, sur une ligne.\n\n- - one\n+ - un\n- - two\n+ - deux\n\n```scala\nval x = 1\n```\n"
+
+      def places(problems: List[Block]): List[(Text, Int, Tone)] = problems.bind:
+        case Block.Diagnostic(tone, location, _, _, _) =>
+          List((location.let(_.path).or(t""), location.let(_.line).or(0), tone))
+
+        case _ =>
+          Nil
+
+      def updated(text: Text): Text = Translation.update(Translation.parse(french), text).serialize
+
+      test(m"a translation is written as it was read"):
+        Translation.parse(french).serialize
+
+      . assert(_ == french)
+
+      test(m"its definitive projection is the text it translates"):
+        Translation.parse(french).definitive.text
+
+      . assert(_ == english)
+
+      test(m"its foreign projection is the translation alone"):
+        Translation.parse(french).foreign.text
+
+      . assert(_ == t"# Titre\n\nLe premier paragraphe, sur une ligne.\n\n- un\n- deux\n\n```scala\nval x = 1\n```\n")
+
+      test(m"a line of a projection knows its line of the file"):
+        val translation: Translation = Translation.parse(french)
+        (translation.definitive.origin(3), translation.foreign.origin(3), translation.foreign.origin(5))
+
+      . assert(_ == (4, 6, 9))
+
+      test(m"a skeleton marks prose, and leaves blank lines and fences common"):
+        Translation.skeleton(english).serialize
+
+      . assert(_ == t"- # Title\n\n- The first paragraph,\n- on two lines.\n\n- - one\n- - two\n\n```scala\nval x = 1\n```\n")
+
+      test(m"a skeleton's definitive projection is the text"):
+        Translation.skeleton(english).definitive.text
+
+      . assert(_ == english)
+
+      test(m"a line of a fence which begins as a marked line is a passage which says it twice"):
+        Translation.skeleton(t"```yaml\n- a\n```").serialize
+
+      . assert(_ == t"```yaml\n- - a\n+ - a\n```")
+
+      test(m"a table's fence holds prose"):
+        Translation.skeleton(t"```tabular\ncolumn  Planet\n```").serialize
+
+      . assert(_ == t"```tabular\n- column  Planet\n```")
+
+      test(m"a translation of the definitive text has nothing wrong with it"):
+        places(Translation.check(t"x.fr.md", french, english) + Mirror.check(t"x.fr.md", french))
+
+      . assert(_ == Nil)
+
+      test(m"a change to the definitive text is a caution where the translation has it"):
+        val changed: Text = english.sub(t"on two lines.", t"on two short lines.")
+        places(Translation.check(t"x.fr.md", french, changed))
+
+      . assert(_ == List((t"x.fr.md", 5, Tone.Warning)))
+
+      test(m"an update keeps the text a translation was written for beside the new text"):
+        updated(english.sub(t"on two lines.", t"on two short lines."))
+
+      . assert(_ == french.sub(t"- The first paragraph,\n- on two lines.", t"! The first paragraph,\n! on two lines.\n- The first paragraph,\n- on two short lines."))
+
+      test(m"an updated translation is of the new text, with its passage pending"):
+        val changed: Text = english.sub(t"on two lines.", t"on two short lines.")
+        val text: Text = updated(changed)
+        (Translation.parse(text).definitive.text == changed, places(Translation.check(t"x.fr.md", text, changed)))
+
+      . assert(_ == (true, List((t"x.fr.md", 4, Tone.Warning))))
+
+      test(m"a second update keeps the first text the translation was written for"):
+        val once: Text = updated(english.sub(t"on two lines.", t"on two short lines."))
+        val again: Text = english.sub(t"on two lines.", t"on three lines.")
+        Translation.update(Translation.parse(once), again).serialize
+
+      . assert(_ == french.sub(t"- The first paragraph,\n- on two lines.", t"! The first paragraph,\n! on two lines.\n- The first paragraph,\n- on three lines."))
+
+      test(m"a new paragraph is a passage nobody has translated"):
+        updated(english.sub(t"- one\n", t"A new one.\n\n- one\n"))
+
+      . assert(_ == french.sub(t"- - one\n", t"- A new one.\n\n- - one\n"))
+
+      test(m"a paragraph which has gone leaves its translation to be deleted"):
+        updated(english.sub(t"The first paragraph,\non two lines.\n\n", t""))
+
+      . assert(_ == french.sub(t"- The first paragraph,\n- on two lines.\n+ Le premier paragraphe, sur une ligne.\n\n", t"! The first paragraph,\n! on two lines.\n+ Le premier paragraphe, sur une ligne.\n"))
+
+      test(m"a passage nobody has translated is a caution, and reads as the definitive text"):
+        val text: Text = french.sub(t"+ # Titre\n", t"")
+        (places(Translation.check(t"x.fr.md", text, english)), Translation.parse(text).foreign.text.keep(7))
+
+      . assert(_ == (List((t"x.fr.md", 1, Tone.Warning)), t"# Title"))
+
+      test(m"lines which translate nothing are a failure"):
+        places(Translation.check(t"x.fr.md", t"+ Rien\n$french", english))
+
+      . assert(_ == List((t"x.fr.md", 1, Tone.Failure)))
+
+      test(m"a heading of another level is a failure at its line"):
+        places(Mirror.check(t"x.fr.md", french.sub(t"+ # Titre", t"+ ## Titre")))
+
+      . assert(_ == List((t"x.fr.md", 2, Tone.Failure)))
+
+      test(m"a list of fewer items is a failure at its line"):
+        places(Mirror.check(t"x.fr.md", french.sub(t"- - two\n+ - deux", t"- - two\n+   et deux")))
+
+      . assert(_ == List((t"x.fr.md", 9, Tone.Failure)))
+
+      test(m"a paragraph where the text has a heading is a failure"):
+        places(Mirror.check(t"x.fr.md", french.sub(t"+ # Titre", t"+ Titre")))
+
+      . assert(_ == List((t"x.fr.md", 2, Tone.Failure)))
+
+      test(m"a fence which is not the definitive text's is a failure"):
+        val text: Text = french.sub(t"val x = 1", t"- val x = 1\n+ val x = 2")
+        places(Mirror.check(t"x.fr.md", text))
+
+      . assert(_ == List((t"x.fr.md", 13, Tone.Failure)))
+
+      test(m"structure is not checked while a passage awaits revision"):
+        val text: Text = updated(english.sub(t"- two\n", t"- two\n- three\n"))
+        (Translation.parse(text).passages.map(_.state).has(Translation.State.Pending), places(Mirror.check(t"x.fr.md", text)))
+
+      . assert(_ == (true, Nil))
+
+      test(m"a paragraph which names other code is a caution"):
+        val text: Text = t"- Use `Text` here.\n+ Utilisez `Texte` ici."
+        places(Mirror.check(t"x.fr.md", text))
+
+      . assert(_ == List((t"x.fr.md", 2, Tone.Warning)))
+
+      val mirrors: List[Translations.Target] =
+        List
+          ( Translations.Target(t"fr", t"/p/doc/en", t"/p/doc/fr"),
+            Translations.Target(t"fr-CA", t"/p/doc/en", t"/p/doc/ca", t"fr"),
+            Translations.Target(t"de", t"/p/doc/en", t"/p/doc/en/de", t"en"),
+            Translations.Target(t"fr", t"/p/other", t"/p/autre") )
+
+      test(m"a translation has its original's path from its directory, in its language's"):
+        ( Translations.of(t"/p/doc/en/prose/intro.md", mirrors),
+          Translations.of(t"/p/other/intro.md", mirrors), Translations.of(t"/p/readme.md", mirrors) )
+
+      . assert(_ == (List((t"fr", t"/p/doc/fr/prose/intro.md"), (t"fr-CA", t"/p/doc/ca/prose/intro.md"), (t"de", t"/p/doc/en/de/prose/intro.md")), List((t"fr", t"/p/autre/intro.md")), Nil))
+
+      test(m"a file in a directory of translations translates the file it mirrors"):
+        ( Translations.original(t"/p/doc/fr/api/sample.tel", mirrors),
+          Translations.held(t"/p/doc/en/de/prose/intro.md", mirrors),
+          Translations.held(t"/p/doc/en/prose/intro.md", mirrors) )
+
+      . assert(_ == ((t"fr", t"/p/doc/en/api/sample.tel"), true, false))
+
+      test(m"a language with no file of its own is read in its fallback, and then as written"):
+        def serving(present: Text*): Optional[Text] =
+          Translations.serving(t"/p/doc/en/intro.md", t"fr-CA", mirrors, (file: Text) => present.exists(_ == file))
+
+        ( serving(t"/p/doc/ca/intro.md", t"/p/doc/fr/intro.md"), serving(t"/p/doc/fr/intro.md"),
+          serving(t"/p/autre/intro.md") )
+
+      . assert(_ == (t"/p/doc/ca/intro.md", t"/p/doc/fr/intro.md", Unset))
+
+      test(m"fallbacks end at the language a document is written in, and are each tried once"):
+        val round: List[Translations.Target] =
+          List(Translations.Target(t"a", t"/p", t"/p/a", t"b"), Translations.Target(t"b", t"/p", t"/p/b", t"a"))
+
+        (Translations.chain(t"de", Translations.within(t"/p/doc/en/x.md", mirrors)), Translations.chain(t"a", round))
+
+      . assert(_ == (List(t"de", t"en"), List(t"a", t"b")))
+
+      test(m"a language with a fallback need not translate a document"):
+        val file: Text = t"/p/doc/en/intro.md"
+        val where: List[(Text, Text)] = Translations.of(file, mirrors)
+        places(Translations.check(t"intro.md", t"# Title\n", where, _ => Unset, Translations.partial(Translations.within(file, mirrors))))
+
+      . assert(_ == List((t"intro.md", 0, Tone.Warning)))
+
+      test(m"a document with no translation where one should be is a caution in the document"):
+        places(Translations.check(t"intro.md", t"# Title\n", List((t"fr", t"/p/fr/doc/intro.md")), _ => Unset))
+
+      . assert(_ == List((t"intro.md", 0, Tone.Warning)))
+
+      test(m"a document's translation is checked in its own file"):
+        val read: Text => Optional[Text] = _ => t"- # Title\n+ # Titre\n\n- Old text.\n+ Vieux texte.\n"
+        places(Translations.check(t"intro.md", t"# Title\n\nNew text.\n", List((t"fr", t"/p/fr/doc/intro.md")), read))
+
+      . assert(_ == List((t"/p/fr/doc/intro.md", 4, Tone.Warning)))
+
+      test(m"a language is a code, perhaps with a region"):
+        (Tongue.valid(t"fr"), Tongue.valid(t"pt-BR"), Tongue.valid(t"french"))
+
+      . assert(_ == (true, true, false))
+
+      val overlay: Text =
+        t"base sample\ninfo a sample package\ndetail\n    All about _sample_.\n\nentry .Text   a one-line summary\n  detail\n      Markdown about `Text`.\n\n      - a point\n  entry #length   its length\n  refer sample.Other\n"
+
+      val untranslated: Text =
+        t"base sample\ninfo\n    - a sample package\ndetail\n    - All about _sample_.\n\nentry .Text\n  info\n      - a one-line summary\n  detail\n      - Markdown about `Text`.\n\n      - - a point\n  entry #length\n    info\n        - its length\n  refer sample.Other\n"
+
+      val translated: Text =
+        untranslated
+        . sub(t"    - a sample package\n", t"    - a sample package\n    + un paquet\n")
+        . sub(t"    - All about _sample_.\n", t"    - All about _sample_.\n    + Tout sur _sample_.\n")
+        . sub(t"      - a one-line summary\n", t"      - a one-line summary\n      + un sommaire\n")
+        . sub(t"      - Markdown about `Text`.\n", t"      - Markdown about `Text`.\n      + Du Markdown sur `Text`.\n")
+        . sub(t"      - - a point\n", t"      - - a point\n      + - un point\n")
+        . sub(t"        - its length\n", t"        - its length\n        + sa longueur\n")
+
+
+      test(m"an overlay's translation is the overlay, its prose to be translated"):
+        OverlayTranslations.generate(overlay)
+
+      . assert(_ == untranslated)
+
+      test(m"an overlay's translation which nobody has translated is one caution"):
+        places(OverlayTranslations.check(t"sample.fr.tel", untranslated, overlay))
+
+      . assert(_ == List((t"sample.fr.tel", 3, Tone.Warning)))
+
+      test(m"an overlay's translation reads as an overlay in its language"):
+        Overlay.read(t"sample.fr.tel", translated, text => Translation.parse(text).foreign.text) match
+          case overlay: Overlay =>
+            ( overlay.doc.info, overlay.entries.map(_.doc.info), overlay.entries.bind(_.entries.map(_.doc.info)),
+              overlay.entries.map(_.doc.detail) )
+
+          case _ =>
+            Unset
+
+      . assert(_ == (t"un paquet", List(t"un sommaire"), List(t"sa longueur"), List(t"Du Markdown sur `Text`.\n\n- un point")))
+
+      test(m"a translated overlay has nothing wrong with it"):
+        places(OverlayTranslations.check(t"sample.fr.tel", translated, overlay))
+
+      . assert(_ == Nil)
+
+      test(m"a change to an overlay's prose is a caution at its line of the translation"):
+        places(OverlayTranslations.check(t"sample.fr.tel", translated, overlay.sub(t"its length", t"how long it is")))
+
+      . assert(_ == List((t"sample.fr.tel", 21, Tone.Warning)))
+
+      test(m"an overlay's translation is made again with what was translated"):
+        OverlayTranslations.generate(overlay.sub(t"its length", t"how long it is"), translated)
+
+      . assert(_ == translated.sub(t"        - its length\n", t"        ! its length\n        - how long it is\n"))
+
+      test(m"an entry the overlay no longer has, and one the translation lacks, are cautions"):
+        places(OverlayTranslations.check(t"sample.fr.tel", translated, overlay.sub(t"entry #length", t"entry #size")))
+
+      . assert(_ == List((t"sample.fr.tel", 9, Tone.Warning), (t"sample.fr.tel", 19, Tone.Warning)))
+
+      test(m"what an entry says beside its prose is the same in every language"):
+        places(OverlayTranslations.check(t"sample.fr.tel", translated.sub(t"sample.Other", t"sample.Autre"), overlay))
+
+      . assert(_ == List((t"sample.fr.tel", 9, Tone.Failure)))
+
+      test(m"what was translated and has gone is known before the translation is made again"):
+        OverlayTranslations.lost(overlay.sub(t"entry #length", t"entry #size"), translated).map(_.title)
+
+      . assert(_ == List(t"the `info` of `.Text#length`"))
