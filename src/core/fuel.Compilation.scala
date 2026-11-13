@@ -60,8 +60,12 @@ object Compilation:
       sections: List[(Text, Text)]       = Nil,
       translations: List[Translations.Target] = Nil )
 
-  // A section's name is its directory's last segment.
+  // A section's name where nothing says it: its directory's last segment.
   def name(root: Text): Text = root.cut(t"/").filter(_ != t"").reverse.head.or(root)
+
+  // A section's name: the one the regime gives its directory, as the configuration names it.
+  def name(root: Text, regime: Regime): Text =
+    regime.sections.filter(_(1) == root).head.let(_(0)).or(name(root))
 
   // The Markdown documents beneath a root, in order: what a section compiles, and so what there
   // is to do, which a compile may count before it starts. A file in a directory of translations
@@ -95,8 +99,10 @@ object Compilation:
     def read(path: Text): Optional[Text] =
       safely(path.as[Path on Linux]).let: (file: Path on Linux) => safely(file.read[Text])
 
+    val named: Text = name(root, regime)
+
     def fixture(path: Text): Optional[(Text, Text)] =
-      Compilation.fixture(regime, name(root), relative(path))
+      Compilation.fixture(regime, named, relative(path))
 
     def recur(rest: List[Text], docs: List[Doc], skipped: List[Text]): Corpus.Section = rest match
       case path :: tail =>
@@ -106,12 +112,12 @@ object Compilation:
         text match
           case text: Text =>
             val within: Text = relative(path)
-            val linker: Linker = regime.linker(name(root), within)
+            val linker: Linker = regime.linker(named, within)
 
             val parsed: Doc =
               Doc.parse
                 ( within, text, checker, regime.session, fixture(path), linker, regime.cache,
-                  regime.base(t"${name(root)}/$within"), name(root), regime.glossary, root,
+                  regime.base(t"$named/$within"), named, regime.glossary, root,
                   regime.sections )
 
             val problems: List[Block] =
@@ -128,7 +134,7 @@ object Compilation:
             recur(tail, docs, skipped + List(path))
 
       case _ =>
-        Corpus.Section(name(root), root, docs, skipped)
+        Corpus.Section(named, root, docs, skipped)
 
     recur(files, Nil, Nil)
 
@@ -142,7 +148,7 @@ object Compilation:
     import textSanitizers.skipSanitizer
 
     val directory: Text = Text(path.s.substring(0, path.s.lastIndexOf('/').max(0)).nn)
-    val section: Text = name(directory)
+    val section: Text = name(directory, regime)
     val leaf: Text = Text(path.s.substring(path.s.lastIndexOf('/') + 1).nn)
     val fixture: Optional[(Text, Text)] = Compilation.fixture(regime, section, leaf)
 
@@ -177,6 +183,70 @@ object Compilation:
         read(file).let(List(_)).or(Nil)
 
       found.head
+
+  // A corpus as a language reads it: each document compiled from its translation — the one
+  // `Translations.serving` finds, the language's own or a fallback's — as its definitive text
+  // was, so that a fence, being the same, is compiled once where the regime keeps what it
+  // compiles; and the definitive document itself where nothing translates it. A translated
+  // heading keeps the anchor of the heading it translates, so a link to a place in a document
+  // means the same in every language. Nothing is reported: what is wrong with a translation
+  // is said when the definitive text is compiled.
+  def translated(corpus: Corpus, tongue: Text, checker: Checker, regime: Regime): Corpus =
+    import charsets.utf8Charset
+    import textSanitizers.skipSanitizer
+
+    def read(path: Text): Optional[Text] =
+      safely(path.as[Path on Linux]).let: (file: Path on Linux) => safely(file.read[Text])
+
+    def anchored(doc: Doc, definitive: Doc): Doc =
+      def anchors(blocks: List[Block]): List[Optional[Text]] =
+        blocks.bind:
+          case Block.Heading(_, _, id) => List(id)
+          case _                       => Nil
+
+      val theirs: List[Optional[Text]] = anchors(definitive.blocks)
+
+      if anchors(doc.blocks).size != theirs.size then doc else
+        val (blocks, _) =
+          doc.blocks.stdlib.foldLeft((List[Block](), theirs)): (state, block) =>
+            val (done, left) = state
+
+            block match
+              case Block.Heading(level, content, _) =>
+                (done + List(Block.Heading(level, content, left.head.or(Unset))), left.skip(1))
+
+              case other =>
+                (done + List(other), left)
+
+        doc.copy(blocks = blocks, anchors = definitive.anchors)
+
+    val complete: Regime =
+      if !regime.sections.nil then regime
+      else regime.copy(sections = corpus.sections.map { section => (section.name, section.root) })
+
+    val sections: List[Corpus.Section] = corpus.sections.map: (section: Corpus.Section) =>
+      val docs: List[Doc] = section.docs.map: (doc: Doc) =>
+        val path: Text = t"${section.root}/${doc.path}"
+
+        val served: Optional[Text] =
+          Translations.serving(path, tongue, complete.translations, read(_).present)
+
+        served.let(read(_)).lay(doc): (source: Text) =>
+          val text: Text = Translation.parse(source).foreign.text
+
+          val parsed: Doc =
+            Doc.parse
+              ( doc.path, text, checker, complete.session,
+                fixture(complete, section.name, doc.path),
+                complete.linker(section.name, doc.path), complete.cache,
+                complete.base(t"${section.name}/${doc.path}"), section.name, complete.glossary,
+                section.root, complete.sections )
+
+          anchored(parsed, doc)
+
+      section.copy(docs = docs, skipped = Nil)
+
+    Corpus(sections)
 
   // A file that could not be read or parsed, as a diagnostic.
   def unreadable(path: Text): Block =

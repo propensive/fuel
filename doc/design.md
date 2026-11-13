@@ -158,16 +158,31 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   by command, backoff on a rate limit, a timeout on the fetch.
 - **Translations** (done, first cut: the model and its maintenance). A translation is a file
   of the definitive one's relative path, in the directory the configuration gives its language
-  beneath the `document` it translates (`translation fr doc/fr`, perhaps with a `fallback`
+  beneath the `section` it translates (`translation fr fr`, perhaps with a `fallback`
   language for the files it lacks), which holds the text it translates in `- `
   lines and its translation in `+ ` lines, so that it is consistent by itself and a line diff
   against the definitive text says where it is out of date. `fuel
   compile` and `fuel translate` check each one (stale text, untranslated passages, structure
   which is not the definitive text's), `fuel translate` writes those nobody has begun, and
   `fuel translate --update` rewrites one for a changed text, keeping what its translation was
-  written for in `! ` lines for the translator to work from. Left for later: serving a
-  translation (its pages, its search, its hyphenation), a link's anchor on a translated
-  heading, and translating glossaries, presentations and schema descriptions.
+  written for in `! ` lines for the translator to work from. The dashboard
+  serves each language (Pyrocosm's `Audience`): a document as its translation reads, an
+  entity's page as its overlay's does, Fuel's own words as a `Polyglot` each (`Phrases`) in
+  English, French and German. A glossary named beneath a `original` is translated too
+  (`GlossaryTranslations`): an entry is keyed by the definitive term, a `term` beneath it is
+  the language's own, and `Glossary.Term.origin` ties one to the other, so that the anchor is
+  the definitive term's in every language, a translated document may name a term in either
+  language, and the page is sorted by the language's collation (cosmopolite's `Collatable`).
+  A section is configured whole (`Workspace`): `section guide doc`, with `original en-US en`
+  and each `translation fr fr` beneath it, every path within its parent's, and the overlays and
+  glossaries beneath the `original`, whose directory they are in. The name is
+  the address's; what a reader is told of the section — its title — is in the tree, in the
+  section's file, which the `original` line names (`SectionFile`, to the schema `section`),
+  so that it is translated as the tree is
+  (`Corpus.Section.title`).
+  Left for later: a translation's pages in the output directory and compiled rather than
+  rendered when asked for, hyphenation by language, holding a passage to the terms the text
+  it translates names, and translating presentations and schema descriptions.
 - **M1 Markdown with embedded code, compiled and viewed** (done, first cut). This document's
   second half. Found while building it:
   - A chain of `Optional#let` calls with `_` lambdas (`file.parent.let(_.parent).let(_.parent)`

@@ -1,0 +1,10 @@
+tel 1.0
+
+name section
+
+# The format of a section's file, which the `original` line of the configuration names after
+# its directory, as its `metadata`: `SectionFile.schema` reads this file. A translation of one is the same file, its prose a source
+# atom of `-` and `+` passages.
+
+document
+  field title String optional

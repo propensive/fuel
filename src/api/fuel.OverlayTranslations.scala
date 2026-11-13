@@ -208,7 +208,9 @@ object OverlayTranslations:
     prose(old).filter: (run: Prose) =>
       !kept.contains(run.key) && !Translation.parse(run.text).passages.filter(!_.foreign.nil).nil
 
-  private def foreign(text: Text): Text = Translation.parse(text).foreign.text
+  // An overlay's prose as its translation reads: what `Overlay.read` is given to read a
+  // translation as the overlay it is in its own language.
+  def foreign(text: Text): Text = Translation.parse(text).foreign.text
 
   // What is wrong with the translation of an overlay, read from `text` at `path`, of the
   // definitive overlay `definitive`: what is wrong with it as an overlay, as its translation

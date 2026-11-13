@@ -41,10 +41,21 @@ import pyrocosm.Block
 object Corpus:
   // `skipped` lists the files which could not be read or parsed, which the command reports in
   // a line each; nothing more is said of them (error reporting is Pyrocosm's to improve).
-  case class Section(name: Text, root: Text, docs: List[Doc], skipped: List[Text] = Nil)
+  //
+  // `name` is the section's, which the address of each of its documents begins with in every
+  // language; `title` is what its file calls it in the language it is read in, which a
+  // reader is shown in place of the name.
+  case class Section
+    ( name:    Text,
+      root:    Text,
+      docs:    List[Doc],
+      skipped: List[Text]     = Nil,
+      title:   Optional[Text] = Unset ):
 
-// Everything `fuel compile` produced: one section per configured document directory, named by
-// the directory's last segment, each holding its documents in path order.
+    def shown: Text = title.or(name)
+
+// Everything `fuel compile` produced: one section per configured document directory, named as
+// the configuration names it, each holding its documents in path order.
 case class Corpus(sections: List[Corpus.Section]):
   def section(name: Text): Optional[Corpus.Section] = sections.seek(_.name == name)
 

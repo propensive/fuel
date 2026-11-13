@@ -160,11 +160,18 @@ object ui:
         List('l'),
         "translate into this language alone, as `fr` or `pt-BR`, whatever the configuration names" )
 
+  val Section =
+    Setting[Text]
+      ( t"section",
+        t"a section of documents, its name and its directory, as `guide doc`; beneath it, a " +
+          t"`original` and each `translation`, a language and a directory within it each" )
+
   val Translation =
     Setting[Text]
       ( t"translation",
-        t"beneath a `document`, a language and the directory which holds its translation of " +
-          t"that directory, as `fr doc/fr`; it may hold a `fallback` language" )
+        t"beneath a `section`, a language and the directory, within the section's, which " +
+          t"holds its translation of the definitive text, as `fr fr`; it may hold a `fallback` " +
+          t"language" )
 
   val Autoplay =
     Flag[Unit]
@@ -438,8 +445,14 @@ private def compile(config: Workspace.Config, force: Boolean, tty: Boolean)
 :   Exit | NoDocuments.type | CompileFailed.type =
 
   if config.documents.nil then
-    Out.println(t"fuel: no document directory is configured")
-    Out.println(t"fuel: add `document <dir>` to .pyrocosm/fuel/config.tel")
+    // What is wrong with the sections the configuration has, if that is why there is none.
+    config.badTranslations.each { (reason: Text) => Out.println(t"fuel: $reason") }
+    Out.println(t"fuel: no section of documents is configured")
+
+    Out.println
+      ( t"fuel: add `section <name> <dir>` to .pyrocosm/fuel/config.tel, with `original " +
+          t"<language> <dir>` beneath it" )
+
     NoDocuments
   else
     // On a terminal the compile runs behind a board: a gauge of the work, and each problem as
@@ -562,8 +575,25 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
     val classpath: Text = Digests.of(config.classpath.map(Server.hash)*)
 
     // The glossary first, since every document's prose may name its terms.
-    val (glossary, glossaryProblems) = glossaries(config)
+    val (glossary, glossaryProblems, glossed) = glossaries(config)
     progress.reports(glossaryProblems)
+
+    // What each section's file says, and what each language reads of it.
+    val (titles, sectionProblems, titled) = sectionFiles(config)
+    progress.reports(sectionProblems)
+
+    // A corpus with each section called what its file calls it, in a language.
+    def entitled(corpus: Corpus, titles: List[(Text, Text)]): Corpus =
+      Corpus:
+        corpus.sections.map: (section: Corpus.Section) =>
+          section.copy(title = titles.filter(_(0) == section.root).head.let(_(1)))
+
+    def retitled(corpus: Corpus, tongue: Text): Corpus =
+      entitled(corpus, titled.filter(_(0) == tongue).head.let(_(1)).or(titles))
+
+    // The glossary a language reads: its own, or the one the terms are defined in.
+    def terms(tongue: Text): Glossary =
+      glossed.filter(_(0) == tongue).head.let(_(1)).or(glossary)
 
     // The key of everything a document or a page depends on beyond its own text: Fuel's
     // version, the classpath, the project's sources, the compiler's options, whether documents
@@ -581,6 +611,13 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
         ( t"fuel ${Fuel.version}", classpath, sources, config.options.join(t"\n"), mode, checking,
           config.imports.join(t"\n"), entities, glossary.definitions )
 
+    // The languages the documents are translated into; and what a compile keeps of what it
+    // compiles: the output's, or for one which writes none and has translations, its own, so
+    // that a fence every language shares is compiled once.
+    val tongues: List[Text] = config.translations.map(_.tongue).distinct
+    val transient: Optional[Cache] = if tongues.nil then Unset else Cache.Transient()
+    val kept: Optional[Cache] = store.lay(transient) { (store: Store) => store }
+
     def regime(environment: Text, linker: (Text, Text) -> Linker): Compilation.Regime =
       // Each document is reported as it is done, with its problems, since a corpus can take a
       // long while.
@@ -591,18 +628,21 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
             progress.reports(doc.problems)
             progress.step(Phase.Documents),
           linker,
-          store,
+          kept,
           (path: Text) => Digests.of(environment, path),
           glossary,
+          sections = config.sections,
           translations = config.translations )
 
     // The API first, since the documents link to it: the sources compiled and saved, their
     // output and the dependencies walked, the overlays merged, and the pages of the project's
     // own entities rendered with their examples compiled.
-    val outcome: Optional[(Corpus, Apis, sci.Map[Text, List[Block]], Text)] =
+    type Readings = sci.Map[Text, Server.Reading]
+
+    val outcome: Optional[(Corpus, Apis, sci.Map[Text, List[Block]], Text, Readings)] =
       if !checked then Unset else
         try Checking.session(config.classpath, config.options): (checker: Checker) =>
-          val (apis, sources) = model(config, checker, progress)
+          val (apis, sources, spoken) = model(config, checker, progress)
           val api: Api = apis.primary
           val key: Text = environment(sources, apis)
           val standard: List[Locator] = Scope.standardOf(config.options)
@@ -615,7 +655,19 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
           val linker: (Text, Text) -> Linker =
             (section: Text, path: Text) => Resolver(api, scope, Doc.url(section, path), apis)
 
-          (Compilation.corpus(config.documents, checker, regime(key, linker)), apis, pages, key)
+          val written: Corpus = Compilation.corpus(config.documents, checker, regime(key, linker))
+
+          // The corpus and the API as each language reads them.
+          val readings: Readings =
+            sci.Map.from:
+              spoken.stdlib.map: (tongue: Text, apis: Apis) =>
+                val read: Corpus =
+                  Compilation.translated
+                    ( written, tongue, checker, regime(key, linker).copy(glossary = terms(tongue)) )
+
+                tongue -> Server.Reading(retitled(read, tongue), apis)
+
+          (entitled(written, titles), apis, pages, key, readings)
         catch case error: Throwable =>
           progress.report(failed(t"The fragments could not be compiled", error))
           Unset
@@ -626,12 +678,34 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
 
     val corpus: Corpus =
       outcome.let(_(0)).or:
-        try Compilation.corpus(config.documents, Checker.tokenized, regime(unchecked, unlinked))
+        try
+          entitled
+            ( Compilation.corpus(config.documents, Checker.tokenized, regime(unchecked, unlinked)),
+              titles )
         catch case error: Throwable =>
           progress.report(failed(t"The documents could not be highlighted", error))
           Corpus(Nil)
 
     val apis: Apis = outcome.let(_(1)).or(Apis.of(Api.empty))
+
+    // Without an API, a language still reads the documents, highlighted alone.
+    val readings: Readings = outcome.let(_(4)).or:
+      sci.Map.from:
+        tongues.stdlib.map: (tongue: Text) =>
+          val read: Corpus =
+            try
+              Compilation.translated
+                ( corpus, tongue, Checker.tokenized,
+                  regime(unchecked, unlinked).copy(glossary = terms(tongue)) )
+            catch case error: Throwable => corpus
+
+          tongue -> Server.Reading(retitled(read, tongue), apis)
+
+    // The languages there are to read in: the one the documents are written in, then each
+    // they are translated into.
+    val languages: List[Text] =
+      if tongues.nil then Nil
+      else (config.languages.map(_(1)).stdlib.take(1) ++ tongues.stdlib).distinct.to(List)
     val api: Api = apis.primary
 
     // Every link, now that every target is known.
@@ -639,15 +713,23 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
     progress.reports(links)
     progress.finish(Phase.Links)
 
-    val glossaryPage: List[Block] =
+    // The glossary page, in the order and the words of the language it is read in.
+    def glossaryPage(glossary: Glossary, tongue: Optional[Text], apis: Apis): List[Block] =
       if glossary.terms.nil then Nil
       else
         val scope: Scope = Scope.document(config.imports, Scope.standardOf(config.options))
-        glossary.page(Resolver(api, scope, t"/glossary", apis))
+
+        glossary.page
+          ( Resolver(apis.primary, scope, t"/glossary", apis), Phrases.locale(tongue) )
+
+    val glossaried: Readings = readings.map: (tongue: Text, reading: Server.Reading) =>
+      val read: Glossary = terms(tongue)
+      tongue -> reading.copy(glossary = glossaryPage(read, tongue, reading.apis), terms = read)
 
     Server.publish
-      ( corpus, api, outcome.let(_(2)).or(sci.Map()), config.imports, glossaryPage,
-        Scope.standardOf(config.options), glossary, apis.others )
+      ( corpus, api, outcome.let(_(2)).or(sci.Map()), config.imports,
+        glossaryPage(glossary, languages.head, apis), Scope.standardOf(config.options), glossary,
+        apis.others, languages, glossaried )
 
     fuel.Help.announce()
 
@@ -686,27 +768,97 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
     val result: Exit | CompileFailed.type = if progress.problems.nil then Exit.Ok else CompileFailed
     result
 
-// The glossaries the configuration names, read and combined, with the problems: a file which
-// cannot be read or is not TEL, and what `Glossary.merge` finds.
-private def glossaries(config: Workspace.Config): (Glossary, List[Block]) =
+// What each section's file says, as the title its directory's section has; the problems — a
+// file which cannot be read or is not what the schema allows, and what is wrong with a
+// translation of one; and the titles each language the documents are translated into reads:
+// a section's file as its translation says — the language's own or a fallback's.
+private def sectionFiles(config: Workspace.Config)
+:   (List[(Text, Text)], List[Block], List[(Text, List[(Text, Text)])]) =
+
   @scala.caps.unsafe.untrackedCaptures
   var problems: List[Block] = Nil
 
-  val read: List[Glossary] = config.glossaries.bind: (file: Text) =>
-    def unreadable: List[Glossary] =
+  val read: List[(Text, Text, Text, SectionFile)] = config.sectionFiles.bind: (root: Text, file: Text) =>
+    def unreadable: List[(Text, Text, Text, SectionFile)] =
+      problems = Compilation.unreadable(file) :: problems
+      Nil
+
+    readText(file).lay(unreadable): (text: Text) =>
+      SectionFile.read(file, text) match
+        case diagnostic: Block.Diagnostic =>
+          problems = diagnostic :: problems
+          Nil
+
+        case (said, faults) =>
+          faults.each { (fault: Block) => problems = fault :: problems }
+          List((root, file, text, said))
+
+  def titles(all: List[(Text, SectionFile)]): List[(Text, Text)] =
+    all.bind { (root, said) => said.title.let { title => List((root, title)) }.or(Nil) }
+
+  val translating: List[Block] = read.bind: (_, file: Text, text: Text, _) =>
+    SectionFile.verify
+      ( file, text, Translations.of(file, config.translations), readText(_),
+        Translations.partial(Translations.within(file, config.translations)) )
+
+  val spoken: List[(Text, List[(Text, Text)])] =
+    config.translations.map(_.tongue).distinct.map: (tongue: Text) =>
+      val each: List[(Text, SectionFile)] = read.map: (root: Text, file: Text, _, defined: SectionFile) =>
+        val served: Optional[Text] =
+          Translations.serving
+            ( file, tongue, config.translations, (file: Text) => readText(file).present )
+
+        (root, served.let(readText(_)).lay(defined)(SectionFile.foreign(_, defined)))
+
+      (tongue, titles(each))
+
+  val defined: List[(Text, SectionFile)] = read.map { (root, _, _, said) => (root, said) }
+  (titles(defined), problems.reverse + translating, spoken)
+
+// The glossaries the configuration names, read and combined, with the problems: a file which
+// cannot be read or is not TEL, what `Glossary.merge` finds, and what is wrong with a
+// translation of one. With them, the glossary each language the documents are translated into
+// reads: every glossary which has a translation — the language's own or a fallback's — as
+// that says, combined as the glossaries were.
+private def glossaries(config: Workspace.Config): (Glossary, List[Block], List[(Text, Glossary)]) =
+  @scala.caps.unsafe.untrackedCaptures
+  var problems: List[Block] = Nil
+
+  val read: List[(Text, Text, Glossary)] = config.glossaries.bind: (file: Text) =>
+    def unreadable: List[(Text, Text, Glossary)] =
       problems = Compilation.unreadable(file) :: problems
       Nil
 
     readText(file).lay(unreadable): (text: Text) =>
       Glossary.read(file, text) match
-        case glossary: Glossary => List(glossary)
+        case glossary: Glossary => List((file, text, glossary))
 
         case diagnostic: Block.Diagnostic =>
           problems = diagnostic :: problems
           Nil
 
-  val (glossary, merging) = Glossary.merge(read)
-  (glossary, problems.reverse + merging)
+  val (glossary, merging) = Glossary.merge(read.map(_(2)))
+  val names: List[Text] = glossary.terms.map(_.name)
+  val reader: Text -> Optional[Text] = (path: Text) => readText(path)
+
+  val translating: List[Block] = read.bind: (file: Text, text: Text, _) =>
+    GlossaryTranslations.verify
+      ( file, text, Translations.of(file, config.translations), reader,
+        Translations.partial(Translations.within(file, config.translations)), names )
+
+  val spoken: List[(Text, Glossary)] =
+    config.translations.map(_.tongue).distinct.map: (tongue: Text) =>
+      val each: List[Glossary] = read.map: (file: Text, _, defined: Glossary) =>
+        val served: Optional[Text] =
+          Translations.serving
+            ( file, tongue, config.translations, (file: Text) => readText(file).present )
+
+        served.lay(defined): (path: Text) =>
+          readText(path).lay(defined)(GlossaryTranslations.foreign(path, _, defined))
+
+      (tongue, Glossary.merge(each)(0))
+
+  (glossary, problems.reverse + merging + translating, spoken)
 
 // The API model of a project, in the session: its sources compiled and saved beneath the
 // cache (`$XDG_CACHE_HOME/fuel/<project>/classes`, or `~/.cache/fuel/…`), the output and each
@@ -715,7 +867,7 @@ private def glossaries(config: Workspace.Config): (Glossary, List[Block]) =
 // compiled as a document's are — with every problem found on the way.
 private def model(config: Workspace.Config, checker: Checker, progress: Progress)
   ( using Stdio, Environment )
-:   (Apis, Text) =
+:   (Apis, Text, List[(Text, Apis)]) =
 
   import Progress.Phase
 
@@ -842,6 +994,8 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
       // which the overlay it translates is held to.
       val files: List[Text] =
         filesBeneath(root, t".tel").filter(!Translations.held(_, config.translations))
+        . filter(!config.glossaries.has(_))
+        . filter { (file: Text) => !config.sectionFiles.exists(_(1) == file) }
 
       files.bind: (file: Text) =>
         def unreadable: List[Overlay] =
@@ -916,7 +1070,32 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
     Digests.of((sources + schemaTexts).bind { (path: Text, text: Text) => List(path, text) }*)
 
   val others: List[Api] = if schemas.entities.isEmpty then Nil else List(schemas)
-  (Apis(api :: others), hashed)
+
+  // The API as each language reads it: every overlay which has a translation — the language's
+  // own or a fallback's — read as that says, and merged as the overlays were. What is wrong
+  // with a translation was said above, so nothing is reported here.
+  val spoken: List[(Text, Apis)] =
+    config.translations.map(_.tongue).distinct.map: (tongue: Text) =>
+      val read: List[Overlay] = overlays.map: (overlay: Overlay) =>
+        val served: Optional[Text] =
+          Translations.serving
+            ( overlay.file, tongue, config.translations, (file: Text) => readText(file).present )
+
+        served.let(readText(_)).lay(overlay): (text: Text) =>
+          Overlay.read(overlay.file, text, OverlayTranslations.foreign(_)) match
+            case translated: Overlay => translated
+            case _                   => overlay
+
+      def documentedIn(api: Api): Api =
+        val these: List[Overlay] = read.filter(_.format == api.format.id)
+        if these.nil then api else Overlay.merge(api, these)(0)
+
+      val scala: Api = ScalaFormat.decorate(documentedIn(inspected))
+      val tels: Api = TelsFormat.decorate(documentedIn(combined))
+      val schemas: List[Api] = if tels.entities.isEmpty then Nil else List(tels)
+      (tongue, Apis(scala :: schemas))
+
+  (Apis(api :: others), hashed, spoken)
 
 // The pages of the project's own entities, each rendered — its examples compiled as a
 // document's are, its references resolved in its own scope — unless the output keeps it under
@@ -1099,8 +1278,7 @@ private def compiled(config: Workspace.Config, path: Text): Optional[Doc] =
   val checked: Boolean = !config.classpath.nil && config.classpath.all(exists(_))
   val glossary: Glossary = glossaries(config)(0)
 
-  val sections: List[(Text, Text)] =
-    config.documents.map { (root: Text) => (Compilation.name(root), root) }
+  val sections: List[(Text, Text)] = config.sections
 
   val regime: Compilation.Regime =
     Compilation.Regime

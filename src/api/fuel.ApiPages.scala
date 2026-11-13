@@ -80,7 +80,14 @@ object ApiPages:
   // What a format is given to make an entity's sections from: the entity and its API, how
   // references in it resolve, and its members — those which are parameters, listed apart, and
   // the others.
-  case class Context(api: Api, entity: Api.Entity, resolver: Resolver, scope: Scope):
+  // `locale` is the reader's, in which Fuel's own words on the page are said.
+  case class Context
+    ( api:      Api,
+      entity:   Api.Entity,
+      resolver: Resolver,
+      scope:    Scope,
+      locale:   Locale[Phrases.Spoken] = Phrases.english ):
+
     val children: List[Api.Entity] = api.children(entity).filter { c => !c.hidden && !c.derived }
     val parameters: List[Api.Entity] = children.filter(_.isParameter)
     val others: List[Api.Entity] = children.filter(!_.isParameter)
@@ -112,14 +119,15 @@ object ApiPages:
       after:       List[Block] = Nil )
   :   List[Block] =
 
+    given Locale[Phrases.Spoken] = page.locale
     val format: Format = page.api.format
     val signature: Block = format.signature(page.entity.name, declaration, page.api, page.scope)
 
     val own: List[Block.Row] =
       if ofType || page.entity.template.absent then page.rows(page.parameters) else Nil
 
-    val parameterTable: List[Block] = table(t"Parameter", t"Type", own)
-    val memberTable: List[Block] = table(t"Name", t"Signature", page.rows(listed))
+    val parameterTable: List[Block] = table(Phrases.parameter(), Phrases.kind(), own)
+    val memberTable: List[Block] = table(Phrases.name(), Phrases.signature(), page.rows(listed))
     signature :: beneath + parameterTable + memberTable + after
 
   // An entity's sections as any format has them: one for its term and one for its type, each
@@ -224,23 +232,28 @@ object ApiPages:
   def search(api: Api, text: Text, outcome: Search.Outcome, resolver: Resolver, scope: Scope)
   :   List[Block] =
 
-    search(Apis.of(api), text, outcome, resolver, scope)
+    search(Apis.of(api), text, outcome, resolver, scope, Phrases.english)
 
   // The same, of a search of every format's API: each hit's row is its own format's.
-  def search(apis: Apis, text: Text, outcome: Search.Outcome, resolver: Resolver, scope: Scope)
+  def search
+    ( apis:     Apis,
+      text:     Text,
+      outcome:  Search.Outcome,
+      resolver: Resolver,
+      scope:    Scope,
+      locale:   Locale[Phrases.Spoken] )
   :   List[Block] =
 
+    given Locale[Phrases.Spoken] = locale
     val count: Int = outcome.hits.size
     val drawn: List[Search.Hit] = List.from(outcome.hits.stdlib.take(shown))
 
-    val summary: Text =
-      if count == 1 then t"1 result for " else t"${count.toString.tt} results for "
+    val summary: Text = Phrases.resultsFor(count)()
 
     val truncation: List[Inline] =
-      if count <= shown then Nil
-      else Inline.text(t"; the first ${shown.toString.tt} are shown. Narrow the query to see others.")
+      if count <= shown then Nil else Inline.text(Phrases.firstShown(shown)())
 
-    val heading: Block = Block.Heading(1, Inline.text(t"Search"))
+    val heading: Block = Block.Heading(1, Inline.text(Phrases.search()))
     val snippet: Inline = Inline.Snippet(Language.Scala, List(Token(text, Token.Accent.Unparsed)))
     val asked: Block = Block.Paragraph(Inline.text(summary) + List(snippet) + truncation)
 
@@ -263,15 +276,20 @@ object ApiPages:
           val content: List[Inline] = link :: Inline.text(t": ") + definition
           Block.Item(List(Block.Paragraph(content)))
 
-        List(Block.Heading(2, Inline.text(t"Glossary")), Block.Listing(false, items))
+        List(Block.Heading(2, Inline.text(Phrases.glossary())), Block.Listing(false, items))
 
-    List(heading, asked) + notices + terms + table(t"Name", t"Signature", rows)
+    List(heading, asked) + notices + terms + table(Phrases.name(), Phrases.signature(), rows)
 
   // An entity's page with its open issues: their numbers after the title, each a link to the
   // issue, and a list of them with their titles at the foot. They are put on at show time, not
   // rendered into the page, which the output directory keeps by a key which knows nothing of
   // issues, and which would be stale as soon as an issue closed.
-  def withIssues(page: List[Block], issues: List[Issue]): List[Block] =
+  def withIssues
+    ( page: List[Block], issues: List[Issue], locale: Locale[Phrases.Spoken] = Phrases.english )
+  :   List[Block] =
+
+    given Locale[Phrases.Spoken] = locale
+
     if issues.nil then page else
       def link(issue: Issue, text: Text): Inline =
         Inline.Link(Inline.Destination.External(issue.url), Inline.text(text))
@@ -279,22 +297,30 @@ object ApiPages:
       val numbers: List[Inline] = issues.bind: (issue: Issue) =>
         List(Inline.Textual(t" "), link(issue, t"#${issue.number.show}"))
 
-      val top: Block = Block.Paragraph(Inline.text(t"Open issues:") + numbers)
+      val top: Block = Block.Paragraph(Inline.text(Phrases.openIssues()) + numbers)
 
       val items: List[Block.Item] = issues.map: (issue: Issue) =>
         val content: List[Inline] = List(link(issue, t"#${issue.number.show}")) + Inline.text(t" ${issue.title}")
         Block.Item(List(Block.Paragraph(content)), Unset, Inline.Destination.External(issue.url))
 
-      val foot: List[Block] = List(Block.Heading(3, Inline.text(t"Issues")), Block.Listing(false, items))
+      val foot: List[Block] =
+        List(Block.Heading(3, Inline.text(Phrases.issues())), Block.Listing(false, items))
+
 
       // After the title, so that the place above it stays the first block.
       val (before, from) = page.stdlib.span { case Block.Heading(1, _, _) => false; case _ => true }
       List.from(before ++ from.take(1)) + List(top) + List.from(from.drop(1)) + foot
 
   def page
-    ( api: Api, entity: Api.Entity, resolver: Resolver, scope: Scope, embeddings: List[Embedding] )
+    ( api:        Api,
+      entity:     Api.Entity,
+      resolver:   Resolver,
+      scope:      Scope,
+      embeddings: List[Embedding],
+      locale:     Locale[Phrases.Spoken] = Phrases.english )
   :   List[Block] =
 
+    given Locale[Phrases.Spoken] = locale
     val doc: Optional[Api.Entry] = entity.doc
 
     // Where the entity is, in code, as a qualified name is: each segment linked, and the name up
@@ -346,16 +372,17 @@ object ApiPages:
         val link: Inline = api.find(Locator(name)).lay(named): (e: Api.Entity) =>
           Inline.Link(Inline.Destination.Local(e.url), Inline.text(name))
 
-        List(Inline.Textual(t"; use "), link, Inline.Textual(t" instead"))
+        List(Inline.Textual(Phrases.useBefore()), link, Inline.Textual(Phrases.useAfter()))
 
-      val verb: Text = if entity.removed then t"was removed in" else t"is removed in"
-      val notice: Inline = Inline.Textual(t"${entity.name} $verb ${until.version}")
+      val notice: Inline =
+        Inline.Textual(Phrases.removed(entity.name, until.version, entity.removed)())
+
       val stop: Inline = Inline.Textual(t".")
       val paragraph: Block = Block.Paragraph(List(notice) + replacement + List(stop))
       List(Block.Notice(Tone.Warning, Unset, List(paragraph)))
 
     // What the entity declares, and what applies to it beyond that, are its format's to say.
-    val context: Context = Context(api, entity, resolver, scope)
+    val context: Context = Context(api, entity, resolver, scope, locale)
     val sections: List[Block] = api.format.sections(context)
     val applicable: List[Block] = api.format.applicable(context)
 
@@ -371,14 +398,19 @@ object ApiPages:
             val target: Inline.Destination = Inline.Destination.Local(e.url)
             Block.Item(List(Block.Paragraph(Inline.text(name))), Unset, target)
 
-        List(Block.Heading(3, Inline.text(t"See also")), Block.Listing(false, items))
+        List(Block.Heading(3, Inline.text(Phrases.seeAlso())), Block.Listing(false, items))
 
     place + List(heading) + info + removed + sections + applicable + detail + refer
 
   // The navigation: the project's own packages, then its dependencies' (closed), each node a
   // link to its page, open along the way to `current`, with the packages, types and objects
   // beneath it (not every method and value, which its page lists).
-  def tree(api: Api, current: Optional[Text]): Block.Tree =
+  def tree
+    ( api: Api, current: Optional[Text], locale: Locale[Phrases.Spoken] = Phrases.english )
+  :   Block.Tree =
+
+    given Locale[Phrases.Spoken] = locale
+
     val path: List[Text] = current.lay(Nil: List[Text]): (key: Text) =>
       def up(designator: Optional[Locator]): List[Text] =
         designator.lay(Nil: List[Text]): (d: Locator) => List(Api.key(d)) + up(d.parent)
@@ -417,7 +449,7 @@ object ApiPages:
       else
         val open: Boolean = dependencies.exists: (d: Api.Entity) => path.has(d.key)
         val nodes: List[Block.TreeNode] = dependencies.map(node(_, false))
-        List(Block.TreeNode(Inline.text(t"Dependencies"), nodes, Tone.Muted, Unset, open))
+        List(Block.TreeNode(Inline.text(Phrases.dependencies()), nodes, Tone.Muted, Unset, open))
 
     Block.Tree(ownNodes + dependencyNodes)
 

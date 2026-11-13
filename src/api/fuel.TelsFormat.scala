@@ -59,7 +59,7 @@ import stratiform.Tels
 // its place — and to the rules every schema is, and contributes nothing where it fails either.
 object TelsFormat extends Format:
   def id: Text = t"tels"
-  def title: Text = t"Schemas"
+  def title: Phrases.Phrase = Phrases.schemas
   def language: Language = Language.Tel
   def noun: Text = t"schema"
 

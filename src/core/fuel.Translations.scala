@@ -37,10 +37,11 @@ import soundness.*
 import pyrocosm.{Block, Tone}
 
 // Where translations are, and a Markdown document held to its own. The configuration gives
-// each `document` directory, with the overlays inside it, a directory for each language it is
-// translated into, and the translation of a file is the file of the same relative path there:
-// with `translation fr doc/fr` beneath `document doc/en`, `doc/en/prose/intro.md` is
-// translated into French by `doc/fr/prose/intro.md`, and an overlay `doc/en/api/gossamer.tel`
+// each section's definitive directory, with the overlays inside it, a directory for each
+// language it is translated into, and the translation of a file is the file of the same
+// relative path there: with `original en en` and `translation fr fr` beneath
+// `section guide doc`, `doc/en/prose/intro.md` is translated into French by
+// `doc/fr/prose/intro.md`, and an overlay `doc/en/api/gossamer.tel`
 // by `doc/fr/api/gossamer.tel`. Nothing names a translation but its place. A language may
 // have a `fallback`, another language of the same directory, or the language the directory is
 // written in, whose text stands for its own where it has none: such a language need not
@@ -49,8 +50,8 @@ import pyrocosm.{Block, Tone}
 // a translation's text is reported in the translation's file; that there is none, in the
 // document.
 object Translations:
-  // A language's translations of a `document` directory, `base`: the directory which mirrors
-  // it, and the language which stands in where it has no file.
+  // A language's translations of a section's definitive directory, `base`: the directory
+  // which mirrors it, and the language which stands in where it has no file.
   case class Target
     ( tongue: Text, base: Text, directory: Text, fallback: Optional[Text] = Unset )
 
