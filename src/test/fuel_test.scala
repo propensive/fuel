@@ -4281,7 +4281,7 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
 
       object Commands extends Format:
         def id: Text = t"toy"
-        def title: Text = t"Commands"
+        def title: Phrases.Phrase = en(t"Commands") | fr(t"Commandes") | de(t"Befehle")
         def language: Language = Language.Plain
         def noun: Text = t"tool"
 
@@ -4897,6 +4897,50 @@ entry .Channel
         (Tongue.valid(t"fr"), Tongue.valid(t"pt-BR"), Tongue.valid(t"french"))
 
       . assert(_ == (true, true, false))
+
+      test(m"a corpus is read in a language: translated where it is, as written where not"):
+        val root: java.nio.file.Path = java.nio.file.Files.createTempDirectory("fuel-tongue").nn
+
+        def write(path: String, text: String): Unit =
+          val file: java.nio.file.Path = root.resolve(path).nn
+          java.nio.file.Files.createDirectories(file.getParent)
+          java.nio.file.Files.writeString(file, text)
+
+        write("en/intro.md", "# Getting started\n\nSee [below](#getting-started).\n")
+        write("en/other.md", "# Other\n")
+        write("fr/intro.md", "- # Getting started\n+ # Pour commencer\n\n- See [below](#getting-started).\n+ Voir [plus bas](#getting-started).\n")
+
+        val base: Text = Text(root.toString)
+
+        val targets: List[Translations.Target] =
+          List
+            ( Translations.Target(t"fr", t"$base/en", t"$base/fr"),
+              Translations.Target(t"fr-CA", t"$base/en", t"$base/ca", t"fr") )
+
+        val regime: Compilation.Regime = Compilation.Regime(translations = targets)
+        val written: Corpus = Compilation.corpus(List(t"$base/en"), Checker.tokenized, regime)
+        val read: Corpus = Compilation.translated(written, t"fr-CA", Checker.tokenized, regime)
+
+        def anchors(doc: Optional[Doc]): List[Optional[Text]] =
+          doc.lay(List[Optional[Text]]()): (doc: Doc) =>
+            doc.blocks.bind:
+              case Block.Heading(_, _, id) => List(id)
+              case _                       => Nil
+
+        ( read.doc(t"en", t"intro.md").let(_.title), anchors(read.doc(t"en", t"intro.md")),
+          anchors(written.doc(t"en", t"intro.md")),
+          read.doc(t"en", t"other.md").lay(false) { doc => written.doc(t"en", t"other.md").lay(false)(_ eq doc) } )
+
+      . assert(_ == (t"Pour commencer", List(t"getting-started"), List(t"getting-started"), true))
+
+      test(m"Fuel's words are said in the language read, a variant as its language, else English"):
+        def said(tongue: Optional[Text]): Text =
+          given Locale[Phrases.Spoken] = Phrases.locale(tongue)
+          Phrases.seeAlso()
+
+        (said(t"fr-CA"), said(t"de"), said(t"es"), said(Unset))
+
+      . assert(_ == (t"Voir aussi", t"Siehe auch", t"See also", t"See also"))
 
       val overlay: Text =
         t"base sample\ninfo a sample package\ndetail\n    All about _sample_.\n\nentry .Text   a one-line summary\n  detail\n      Markdown about `Text`.\n\n      - a point\n  entry #length   its length\n  refer sample.Other\n"

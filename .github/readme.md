@@ -583,8 +583,26 @@ second update before the first is dealt with keeps the first `!` lines, which ar
 prose updated in this way; the translation of an entry the overlay no longer has is left out,
 and `fuel translate --update` says so.
 
-Translations are checked and maintained, and not yet served: the dashboard shows the
-definitive text. Glossaries, presentations and a schema's descriptions are not yet translated.
+The dashboard is read in a language. Where the documents are translated, its menu bar offers
+the languages they are in, each by its two letters (in full, as `fr-CA`, where two share them),
+and a reader's choice is kept for every tool of the hub. Without one, a reader has the
+`language` of `~/.config/pyrocosm/config.tel`, then the first their browser asks for which the
+documents are in, then the language they are written in.
+
+- A document is shown as its translation reads: the language's own, or the first there is
+  along its fallbacks. One which nothing translates is shown as it is written, under a note
+  which says so. A translated heading keeps the anchor of the heading it translates, so a
+  link to a place in a document means the same in every language.
+- An entity's page says what the overlay's translation says of it, and a search's results
+  with it. The pages of a translation are rendered when they are asked
+  for, their examples highlighted and not compiled again: an example is the same in every
+  language, and was compiled for the language it is written in.
+- Fuel's own words — the navigation's headings, a table's columns, a search's summary — are
+  in English, French and German, and follow the language read: a regional variant reads as
+  its language, and a language Fuel has no words for as English. Diagnostics are in English.
+
+Glossaries, presentations and a schema's descriptions are not yet translated, and the output
+directory keeps the documents as they are written alone.
 
 ## Issues
 

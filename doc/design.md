@@ -165,9 +165,12 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   compile` and `fuel translate` check each one (stale text, untranslated passages, structure
   which is not the definitive text's), `fuel translate` writes those nobody has begun, and
   `fuel translate --update` rewrites one for a changed text, keeping what its translation was
-  written for in `! ` lines for the translator to work from. Left for later: serving a
-  translation (its pages, its search, its hyphenation), a link's anchor on a translated
-  heading, and translating glossaries, presentations and schema descriptions.
+  written for in `! ` lines for the translator to work from. The dashboard
+  serves each language (Pyrocosm's `Audience`): a document as its translation reads, an
+  entity's page as its overlay's does, Fuel's own words as a `Polyglot` each (`Phrases`) in
+  English, French and German. Left for later: a translation's pages in the output directory
+  and compiled rather than rendered when asked for, hyphenation by language, and translating
+  glossaries, presentations and schema descriptions.
 - **M1 Markdown with embedded code, compiled and viewed** (done, first cut). This document's
   second half. Found while building it:
   - A chain of `Optional#let` calls with `_` lambdas (`file.parent.let(_.parent).let(_.parent)`

@@ -52,7 +52,7 @@ import pyrocosm.{Block, Inline, Language, Token}
 // assembled, and the words of its own a search may say.
 trait Format:
   def id: Text
-  def title: Text
+  def title: Phrases.Phrase
   def language: Language
   def noun: Text
 

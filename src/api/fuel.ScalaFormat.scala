@@ -45,7 +45,7 @@ import pyrocosm.{Block, Figure, Inline, Language, Token, Tone}
 // brings it: the companion, an import, a given) and the givens of it and for it.
 object ScalaFormat extends Format:
   def id: Text = t"scala"
-  def title: Text = t"API"
+  def title: Phrases.Phrase = Phrases.api
   def language: Language = Language.Scala
   def noun: Text = t"package"
 
@@ -76,6 +76,7 @@ object ScalaFormat extends Format:
   override def decorate(api: Api): Api = Applicables.decorate(api)
 
   override def sections(page: ApiPages.Context): List[Block] =
+    given Locale[Phrases.Spoken] = page.locale
     import page.{api, entity, scope}
 
     def row(member: Api.Entity, d: Api.Declaration, anchored: Boolean): Block.Row =
@@ -117,7 +118,7 @@ object ScalaFormat extends Format:
           val first: Api.Declaration = these.stdlib.head(1)
           val clause: Block = Signatures.line(Signatures.group(first.group, api, scope))
           val entries: List[Block.Row] = these.map: (m, d) => row(m, d, true)
-          clause :: ApiPages.table(t"Name", t"Signature", entries)
+          clause :: ApiPages.table(Phrases.name(), Phrases.signature(), entries)
 
       ApiPages.section(page, declaration, ofType, plain, hierarchy, groups)
 
@@ -132,6 +133,7 @@ object ScalaFormat extends Format:
     else definition + template + overloads
 
   override def applicable(page: ApiPages.Context): List[Block] =
+    given Locale[Phrases.Spoken] = page.locale
     import page.{api, entity, scope, link}
 
     def row(member: Api.Entity, d: Api.Declaration, anchored: Boolean): Block.Row =
@@ -147,9 +149,9 @@ object ScalaFormat extends Format:
 
           val where: List[Inline] = from match
             case from: Api.Entity =>
-              val companion: Text = t"In the companion object of "
+              val companion: Text = Phrases.inCompanionOf()
 
-              if from.key == entity.key then Inline.text(t"In the companion object")
+              if from.key == entity.key then Inline.text(Phrases.inCompanion())
               else if entity.bases.has(from.key) then Inline.text(companion) + link(from.key)
               else
                 val tokens: List[Token] =
@@ -159,13 +161,13 @@ object ScalaFormat extends Format:
                       Token(from.key, Token.Accent.Term, Unset, Inline.Destination.Local(from.url)),
                       Token(t".*", Token.Accent.Symbol) )
 
-                List(Inline.Textual(t"By "), Signatures.code(tokens))
+                List(Inline.Textual(Phrases.by()), Signatures.code(tokens))
 
             case _ => Nil
 
           val via: List[Inline] = first.via.let(api(_)).lay(Nil: List[Inline]): (g: Api.Entity) =>
             val within: Boolean = first.key.starts(t"${g.key}.")
-            val lead: Text = if within then t", within " else t", with "
+            val lead: Text = if within then Phrases.within() else Phrases.withGiven()
 
             val signature: List[Inline] =
               g.definition.lay(Nil: List[Inline]): (d: Api.Declaration) =>
@@ -198,16 +200,19 @@ object ScalaFormat extends Format:
                   case Some(d) => List(row(member, d, false))
                   case None    => Nil
 
-            source(first) + ApiPages.table(t"Name", t"Signature", these)
+            source(first) + ApiPages.table(Phrases.name(), Phrases.signature(), these)
 
         val every: List[Block] =
           if entity.key == Applicables.any then Nil
           else api(Applicables.any).lay(Nil: List[Block]): (any: Api.Entity) =>
-            val lead: Text = t"The extensions of every value are listed on "
-            val text: List[Inline] = Inline.text(lead) + link(any.key) + Inline.text(t".")
+            val lead: Text = Phrases.everyValueBefore()
+
+            val text: List[Inline] =
+              Inline.text(lead) + link(any.key) + Inline.text(Phrases.everyValueAfter())
+
             if any.extensions.nil then Nil else List(Block.Paragraph(text))
 
-        List(Block.Heading(3, Inline.text(t"Extensions"))) + tables + every
+        List(Block.Heading(3, Inline.text(Phrases.extensions()))) + tables + every
 
     // The givens which provide this type, as a type class, and those which provide another for
     // it.
@@ -227,11 +232,14 @@ object ScalaFormat extends Format:
             g.declarations.map(row(g, _, false))
 
           if these.nil then Nil
-          else List(Block.Paragraph(Inline.text(title))) + ApiPages.table(t"Name", t"Signature", entries)
+          else
+            List(Block.Paragraph(Inline.text(title))) +
+              ApiPages.table(Phrases.name(), Phrases.signature(), entries)
 
-        val givensHeading: Block = Block.Heading(3, Inline.text(t"Givens"))
+        val givensHeading: Block = Block.Heading(3, Inline.text(Phrases.givens()))
+
         val parts: List[Block] =
-          part(t"Instances:", instances) + part(t"For ${entity.name}:", others)
+          part(Phrases.instances(), instances) + part(Phrases.givensFor(entity.name)(), others)
 
         if parts.nil then Nil else List(givensHeading) + parts
 

@@ -178,6 +178,70 @@ object Compilation:
 
       found.head
 
+  // A corpus as a language reads it: each document compiled from its translation — the one
+  // `Translations.serving` finds, the language's own or a fallback's — as its definitive text
+  // was, so that a fence, being the same, is compiled once where the regime keeps what it
+  // compiles; and the definitive document itself where nothing translates it. A translated
+  // heading keeps the anchor of the heading it translates, so a link to a place in a document
+  // means the same in every language. Nothing is reported: what is wrong with a translation
+  // is said when the definitive text is compiled.
+  def translated(corpus: Corpus, tongue: Text, checker: Checker, regime: Regime): Corpus =
+    import charsets.utf8Charset
+    import textSanitizers.skipSanitizer
+
+    def read(path: Text): Optional[Text] =
+      safely(path.as[Path on Linux]).let: (file: Path on Linux) => safely(file.read[Text])
+
+    def anchored(doc: Doc, definitive: Doc): Doc =
+      def anchors(blocks: List[Block]): List[Optional[Text]] =
+        blocks.bind:
+          case Block.Heading(_, _, id) => List(id)
+          case _                       => Nil
+
+      val theirs: List[Optional[Text]] = anchors(definitive.blocks)
+
+      if anchors(doc.blocks).size != theirs.size then doc else
+        val (blocks, _) =
+          doc.blocks.stdlib.foldLeft((List[Block](), theirs)): (state, block) =>
+            val (done, left) = state
+
+            block match
+              case Block.Heading(level, content, _) =>
+                (done + List(Block.Heading(level, content, left.head.or(Unset))), left.skip(1))
+
+              case other =>
+                (done + List(other), left)
+
+        doc.copy(blocks = blocks, anchors = definitive.anchors)
+
+    val complete: Regime =
+      if !regime.sections.nil then regime
+      else regime.copy(sections = corpus.sections.map { section => (section.name, section.root) })
+
+    val sections: List[Corpus.Section] = corpus.sections.map: (section: Corpus.Section) =>
+      val docs: List[Doc] = section.docs.map: (doc: Doc) =>
+        val path: Text = t"${section.root}/${doc.path}"
+
+        val served: Optional[Text] =
+          Translations.serving(path, tongue, complete.translations, read(_).present)
+
+        served.let(read(_)).lay(doc): (source: Text) =>
+          val text: Text = Translation.parse(source).foreign.text
+
+          val parsed: Doc =
+            Doc.parse
+              ( doc.path, text, checker, complete.session,
+                fixture(complete, section.name, doc.path),
+                complete.linker(section.name, doc.path), complete.cache,
+                complete.base(t"${section.name}/${doc.path}"), section.name, complete.glossary,
+                section.root, complete.sections )
+
+          anchored(parsed, doc)
+
+      section.copy(docs = docs, skipped = Nil)
+
+    Corpus(sections)
+
   // A file that could not be read or parsed, as a diagnostic.
   def unreadable(path: Text): Block =
     val message: Block = Block.paragraph(t"The file could not be read.")
