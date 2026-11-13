@@ -445,7 +445,11 @@ inflected form — shows its definition when pointed at, and leads to its link, 
 entry on the glossary page at `/glossary`, which lists every term and is in the navigation. The
 brackets are CommonMark's own reference link, since the glossary's definitions are appended to
 each document before it is parsed, so an author's own `[interface]: url` wins; a term defined
-twice is a failure, as is a fence left open (which would swallow the definitions).
+twice is a failure, as is a fence left open (which would swallow the definitions). The page
+lists its terms in the order of the dictionary of the language it is read in.
+
+A glossary named beneath a `document`, by its path within the document's directory, is
+translated as the document is: see [Translations](#translations).
 
 ## Translations
 
@@ -535,6 +539,30 @@ entry .Text
       + Du Markdown sur `Text`.
 ```
 
+A glossary's translation is a glossary of the same terms, each named on its `define` line as
+the glossary it translates names it, so the file itself says which term is which. Beneath the
+name, a `term` says what the term is in its own language, and the `definition` is a source
+atom of passages:
+
+```
+define library
+  term bibliothèque
+  keyword bib
+  definition
+      - A collection of code that other programs use.
+      + Un ensemble de code que d'autres programmes utilisent.
+```
+
+An entry with no `term` is one nobody has translated, and reads as the definitive term. Its
+`keyword`s are its own language's, in place of the definitive term's. Its `link` is the
+definitive term's, since a page of the site is the same page in every language; a `link` is
+written only for a page elsewhere which another explains in this language.
+
+A translated document names a term as its own language does, `[bibliothèque]`, and may name
+it as the glossary defines it too, `[library]`, as a passage nobody has translated does;
+where one name is two terms, it is this language's. The term's anchor on the glossary page is
+the definitive term's in every language, `/glossary#library`.
+
 `fuel compile` holds every translation to its definitive text, and `fuel translate`
 does so alone, without compiling anything, with a line for each translation saying how far it
 is done. Each of these is reported at its line of the translation's file:
@@ -551,15 +579,21 @@ is done. Each of these is reported at its line of the translation's file:
   prose. A paragraph which names different inline code, or links to different places, is a
   caution. Structure is checked once no passage is waiting to be revised;
 - for an overlay, an entry or a run of prose which one of the two has and the other lacks: a
-  caution; an entry which differs in more than its prose: a failure.
+  caution; an entry which differs in more than its prose: a failure;
+- for a glossary, a term which one of the two has and the other lacks: a caution; an entry
+  with no `term`: counted with the passages nobody has translated; a `term` which holds a
+  bracket, or which two entries share: a failure; a `term` which is the name of another term
+  as the glossary defines it: a caution, since `[term]` then means this one in this language;
+  a `link` in place of one to a page of the site: a caution.
 
-A document or an overlay with no file where its translation should be is a caution, unless
+A document, an overlay or a glossary with no file where its translation should be is a caution, unless
 the language has a fallback, and
 `fuel translate` reports a file in a directory of translations which translates nothing.
 
 `fuel translate` writes each translation nobody has begun — every line of prose a `-` line,
 fences and blank lines shared — in its place, making the directories it needs; it never
-overwrites one. It does so for every document and overlay, or for the files it is given, and
+overwrites one. It does so for every document, overlay and glossary, or for the files it is
+given, and
 into every language the configuration has a directory for, or into the one given with
 `--language` (`-l`); then it checks them, as above. When the definitive text
 changes, `fuel translate --update` (which takes files, translations among them, and
@@ -581,7 +615,10 @@ with no `+` lines, and text which has gone leaves its `!` and `+` lines, to be d
 second update before the first is dealt with keeps the first `!` lines, which are what the
 `+` lines still say. An overlay's translation is made again from the overlay, each run of its
 prose updated in this way; the translation of an entry the overlay no longer has is left out,
-and `fuel translate --update` says so.
+and `fuel translate --update` says so. A glossary's translation is made again from the
+glossary in the same way: each entry keeps its `term`, its `keyword`s and its `link`, a new
+term takes the definitive term's keywords, and the translation of a term the glossary no
+longer has — one which was renamed, too — is left out, and said to be.
 
 The dashboard is read in a language. Where the documents are translated, its menu bar offers
 the languages they are in, each by its two letters (in full, as `fr-CA`, where two share them),
@@ -597,11 +634,15 @@ documents are in, then the language they are written in.
   with it. The pages of a translation are rendered when they are asked
   for, their examples highlighted and not compiled again: an example is the same in every
   language, and was compiled for the language it is written in.
+- The glossary is the language's own: its page in the order of that language's dictionary,
+  each term under its own name, and a search finds a term by its name in either language and
+  by its own keywords. A language with no translation of a glossary, along its fallbacks,
+  reads it as it is defined.
 - Fuel's own words — the navigation's headings, a table's columns, a search's summary — are
   in English, French and German, and follow the language read: a regional variant reads as
   its language, and a language Fuel has no words for as English. Diagnostics are in English.
 
-Glossaries, presentations and a schema's descriptions are not yet translated, and the output
+Presentations and a schema's descriptions are not yet translated, and the output
 directory keeps the documents as they are written alone.
 
 ## Issues
@@ -681,13 +722,14 @@ check-links
 # Write the compiled documents and API pages here, as BinTEL, compiling only what changed.
 output dist/doc
 
-# A directory of documents may say more: the language it is written in, the overlays inside
-# it, and its translations, each a language and the directory which mirrors this one. A file
-# without its translation there is a caution, and `fuel translate` writes it; a language with
-# a fallback need not translate everything.
+# A directory of documents may say more: the language it is written in, the overlays and the
+# glossaries inside it, and its translations, each a language and the directory which mirrors
+# this one. A file without its translation there is a caution, and `fuel translate` writes
+# it; a language with a fallback need not translate everything.
 document doc/en
   language en-US
   overlay api
+  glossary glossary.tel
   translation fr     doc/fr
   translation fr-CA  doc/fr-CA
     fallback fr

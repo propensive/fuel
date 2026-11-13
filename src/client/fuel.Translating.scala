@@ -46,17 +46,17 @@ import pyrocosm.{Block, Filing, TerminalRenderer, Tone, Tool}
 object Mistranslated
 extends Status(10, t"a translation is not consistent with the text it translates")
 
-// `fuel translate`: the translations of a project's documents and overlays, without compiling
-// anything. A translation is where the configuration puts it: the file of the same relative
-// path in the directory a `translation` line, beneath a `document`, gives its language. The
-// command writes each translation nobody has started — of every document and overlay, or of
-// the files named, into every language configured, or the one given with `--language` — and
-// says how far each translation is done and everything wrong with any; with `--update`, it
-// brings each translation up to the text it translates, leaving the translator the `!` lines
-// to work from.
+// `fuel translate`: the translations of a project's documents, overlays and glossaries,
+// without compiling anything. A translation is where the configuration puts it: the file of
+// the same relative path in the directory a `translation` line, beneath a `document`, gives
+// its language. The command writes each translation nobody has started — of every document,
+// overlay and glossary, or of the files named, into every language configured, or the one
+// given with `--language` — and says how far each translation is done and everything wrong
+// with any; with `--update`, it brings each translation up to the text it translates,
+// leaving the translator the `!` lines to work from.
 object Translating:
   enum Kind:
-    case Document, Overlay
+    case Document, Overlay, Glossary
 
   // A file which is translated from: its path, what it is, its text, and its translations, a
   // language and a path each.
@@ -93,24 +93,40 @@ object Translating:
 
     val overlays: List[Source] = config.overlays.bind: (root: Text) =>
       telFiles(root).filter(!Translations.held(_, config.translations))
+      . filter(!config.glossaries.has(_))
       . bind(source(config, Kind.Overlay, _))
 
-    documents + overlays
+    val glossaries: List[Source] =
+      config.glossaries.filter(!Translations.held(_, config.translations))
+      . bind(source(config, Kind.Glossary, _))
+
+    documents + overlays + glossaries
+
+  // The names of every term the glossaries define, which a translated term may be mistaken
+  // for.
+  private def names(config: Workspace.Config): List[Text] =
+    config.glossaries.bind: (file: Text) =>
+      read(file).lay(List[Text]())(GlossaryTranslations.entries(_).map(_.name))
 
   // The languages which need not translate a source.
   private def lenient(config: Workspace.Config, source: Source): List[Text] =
     Translations.partial(Translations.within(source.path, config.translations))
 
   // What is wrong with a source's translations.
-  def problems(source: Source, partial: List[Text]): List[Block] = source.kind match
-    case Kind.Document =>
-      Translations.check(source.path, source.text, source.translations, read, partial)
+  def problems(source: Source, partial: List[Text], names: List[Text] = Nil): List[Block] =
+    val reader: Text -> Optional[Text] = (path: Text) => read(path)
 
-    case Kind.Overlay =>
-      val reader: Text -> Optional[Text] = (path: Text) => read(path)
+    source.kind match
+      case Kind.Document =>
+        Translations.check(source.path, source.text, source.translations, read, partial)
 
-      OverlayTranslations.verify
-        ( source.path, source.text, source.translations, reader, partial )
+      case Kind.Overlay =>
+        OverlayTranslations.verify
+          ( source.path, source.text, source.translations, reader, partial )
+
+      case Kind.Glossary =>
+        GlossaryTranslations.verify
+          ( source.path, source.text, source.translations, reader, partial, names )
 
   // The files in the directories of translations which translate nothing: each a caution.
   private def strays(config: Workspace.Config, targets: List[Translations.Target]): List[Block] =
@@ -129,6 +145,7 @@ object Translating:
   private def progress(source: Source, text: Text): Translation.Progress = source.kind match
     case Kind.Document => Translation.progress(Translation.parse(text), source.text)
     case Kind.Overlay  => OverlayTranslations.progress(text, source.text)
+    case Kind.Glossary => GlossaryTranslations.progress(text, source.text)
 
   private def shown(config: Workspace.Config, path: Text): Text =
     if path.starts(t"${config.root}/") then path.skip(config.root.length + 1) else path
@@ -144,8 +161,11 @@ object Translating:
 
     if parts.nil then t"nothing to translate" else parts.join(t", ")
 
-  private def kind(path: Text): Optional[Kind] =
-    if path.ends(t".md") then Kind.Document else if path.ends(t".tel") then Kind.Overlay else Unset
+  private def kind(config: Workspace.Config, path: Text): Optional[Kind] =
+    if path.ends(t".md") then Kind.Document
+    else if config.glossaries.has(path) then Kind.Glossary
+    else if path.ends(t".tel") then Kind.Overlay
+    else Unset
 
   // The sources the files name, or every source where none is named; and the files which name
   // nothing that can be translated, each with why.
@@ -155,13 +175,13 @@ object Translating:
     if files.nil then (all, List[Text]()) else
       val found: List[(Text, Optional[Source])] = files.map: (path: Text) =>
         val translation: Boolean = Translations.held(path, config.translations)
-        val unlisted: Optional[Source] = kind(path).let(source(config, _, path).head)
+        val unlisted: Optional[Source] = kind(config, path).let(source(config, _, path).head)
         (path, all.filter(_.path == path).head.or(if translation then Unset else unlisted))
 
       val reasons: List[Text] = found.filter(_(1).absent).map: (path: Text, _) =>
         if Translations.held(path, config.translations) then
           t"${shown(config, path)} is a translation: name the file it translates"
-        else t"${shown(config, path)} could not be read as a document or an overlay"
+        else t"${shown(config, path)} could not be read as a document, an overlay or a glossary"
 
       (found.bind { (_, source) => source.let(List(_)).or(List[Source]()) }, reasons)
 
@@ -172,6 +192,7 @@ object Translating:
       val content: Optional[Text] = source.kind match
         case Kind.Document => Translation.skeleton(source.text).serialize
         case Kind.Overlay  => OverlayTranslations.generate(source.text)
+        case Kind.Glossary => GlossaryTranslations.generate(source.text)
 
       content.let: (content: Text) =>
         if write(target, content) then Out.println(t"fuel: wrote ${shown(config, target)}")
@@ -241,9 +262,11 @@ object Translating:
             List(t"fuel: ${shown(config, target)}: ${summary(progress(source, text))}")
 
       val targets: List[Translations.Target] = mirrors(config, tongue)
+      val defined: List[Text] = names(config)
 
       val found: List[Block] =
-        all.bind { (source: Source) => problems(source, lenient(config, source)) } + (if files.nil then strays(config, targets) else Nil)
+        all.bind { (source: Source) => problems(source, lenient(config, source), defined) } +
+          (if files.nil then strays(config, targets) else Nil)
 
       if rows.nil && unread.nil then Out.println(t"fuel: there is nothing to translate")
       rows.each { (row: Text) => Out.println(row) }
@@ -274,6 +297,9 @@ object Translating:
               case Kind.Overlay =>
                 OverlayTranslations.generate(source.text, old)
 
+              case Kind.Glossary =>
+                GlossaryTranslations.generate(source.text, old)
+
             current.lay(List[Boolean]()): (current: Text) =>
               if current == old then List(false) else
                 if source.kind == Kind.Overlay then
@@ -282,6 +308,13 @@ object Translating:
                       Out.println
                         ( t"fuel: ${shown(config, target)}: the translation of ${run.title} is " +
                             t"left out, since the overlay no longer has it" )
+
+                if source.kind == Kind.Glossary then
+                  GlossaryTranslations.lost(source.text, old).each:
+                    (entry: GlossaryTranslations.Entry) =>
+                      Out.println
+                        ( t"fuel: ${shown(config, target)}: the translation of `${entry.name}` " +
+                            t"is left out, since the glossary no longer has the term" )
 
                 if write(target, current) then
                   Out.println

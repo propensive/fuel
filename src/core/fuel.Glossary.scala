@@ -50,21 +50,32 @@ import pyrocosm.{Block, Inline, Tone}
 //           A shared boundary where two systems meet and exchange information.
 object Glossary:
   // `keywords` are what a search finds the term by, besides its name; they are shown nowhere.
+  // `origin` is the term this one translates, as the glossary which defines it names it: a
+  // term of a glossary's translation has one, and a term as it is defined has none.
   case class Term
     ( name:       Text,
       definition: Text,
       link:       Optional[Text],
       file:       Text,
       line:       Int,
-      keywords:   List[Text] = Nil ):
+      keywords:   List[Text]     = Nil,
+      origin:     Optional[Text] = Unset ):
 
-    // Whether a word of a query names the term: its name or a keyword, in any case.
+    // Whether a word of a query names the term: its name, the name of the term it translates,
+    // or a keyword, in any case.
     def matches(word: Text): Boolean =
       val sought: Text = word.lower
-      name.lower == sought || keywords.exists(_.lower == sought)
 
-    // The term's anchor on the glossary page, and the key a document's `[term]` leads to.
-    def slug: Text = Blocks.slug(name)
+      name.lower == sought || origin.lay(false)(_.lower == sought) ||
+        keywords.exists(_.lower == sought)
+
+    // The term's anchor on the glossary page, and the key a document's `[term]` leads to: that
+    // of the term it translates, so that a link to a term means the same in every language.
+    def slug: Text = Blocks.slug(origin.or(name))
+
+  // Whether a name can be a term's: a term is written in brackets, so it cannot hold one.
+  def nameable(name: Text): Boolean =
+    name != t"" && !name.s.contains("[") && !name.s.contains("]")
 
   val none: Glossary = Glossary(Nil)
 
@@ -141,7 +152,7 @@ object Glossary:
     def recur(rest: List[Term], kept: List[Term], problems: List[Block]): (Glossary, List[Block]) =
       rest match
         case term :: tail =>
-          if term.name == t"" || term.name.s.contains("[") || term.name.s.contains("]") then
+          if !nameable(term.name) then
             val message: Text =
               t"`${term.name}` cannot be a glossary term: a term is written in brackets, so it " +
                 t"cannot hold one."
@@ -179,16 +190,37 @@ case class Glossary(terms: List[Glossary.Term]):
   // The link reference definitions added after a document's text before it is parsed, so that
   // `[term]` is a link the parser makes, not a pattern searched for; a definition the author
   // writes first wins, as CommonMark has it.
+  //
+  // A translated term is named by the name it translates too, since a passage of a translation
+  // nobody has translated reads as the text it translates; its own names come first, so that
+  // a name which is one term's here and another's there is this language's.
   def definitions: Text =
-    val lines: List[Text] = terms.map: (term: Glossary.Term) =>
-      t"[${term.name}]: ${Glossary.scheme}${term.slug}"
+    def line(name: Text, term: Glossary.Term): Text =
+      t"[$name]: ${Glossary.scheme}${term.slug}"
 
-    lines.join(t"\n")
+    val own: List[Text] = terms.map(term => line(term.name, term))
+
+    val origins: List[Text] = terms.bind: (term: Glossary.Term) =>
+      term.origin.lay(List[Text]()): (origin: Text) =>
+        if origin.lower == term.name.lower then Nil else List(line(origin, term))
+
+    (own + origins).join(t"\n")
+
+  // The terms in the order of a language's dictionary.
+  def sorted(locale: Locale[Phrases.Spoken]): List[Glossary.Term] =
+    val collation: Collation = Phrases.collation(locale)
+
+    def before(left: Text, right: Text): Boolean = collation.compare(left, right).less
+
+    List.from(terms.stdlib.sortWith { (left, right) => before(left.name, right.name) })
 
   // The glossary page: each term under a heading anchored by its slug, with its definition and
-  // where it is explained in full.
-  def page(linker: Linker): List[Block] =
-    val entries: List[Block] = terms.bind: (term: Glossary.Term) =>
+  // where it is explained in full, in the order of the dictionary of the language it is read
+  // in, whose words Fuel's own are.
+  def page(linker: Linker, locale: Locale[Phrases.Spoken] = Phrases.english): List[Block] =
+    given Locale[Phrases.Spoken] = locale
+
+    val entries: List[Block] = sorted(locale).bind: (term: Glossary.Term) =>
       val detail: List[Block] = Blocks.of(Parser.parse(term.definition), Nil, linker)
 
       val more: List[Block] = term.link.lay(Nil: List[Block]): (url: Text) =>
@@ -197,8 +229,9 @@ case class Glossary(terms: List[Glossary.Term]):
           else Inline.Destination.External(url)
 
         val link: Inline = Inline.Link(destination, Inline.text(url))
-        List(Block.Paragraph(List(Inline.Textual(t"See "), link, Inline.Textual(t"."))))
+        val see: Inline = Inline.Textual(t"${Phrases.see()} ")
+        List(Block.Paragraph(List(see, link, Inline.Textual(t"."))))
 
       Block.Heading(2, Inline.text(term.name), term.slug) :: detail + more
 
-    Block.Heading(1, Inline.text(t"Glossary")) :: entries
+    Block.Heading(1, Inline.text(Phrases.glossary())) :: entries

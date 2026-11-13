@@ -168,9 +168,14 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   written for in `! ` lines for the translator to work from. The dashboard
   serves each language (Pyrocosm's `Audience`): a document as its translation reads, an
   entity's page as its overlay's does, Fuel's own words as a `Polyglot` each (`Phrases`) in
-  English, French and German. Left for later: a translation's pages in the output directory
-  and compiled rather than rendered when asked for, hyphenation by language, and translating
-  glossaries, presentations and schema descriptions.
+  English, French and German. A glossary named beneath a `document` is translated too
+  (`GlossaryTranslations`): an entry is keyed by the definitive term, a `term` beneath it is
+  the language's own, and `Glossary.Term.origin` ties one to the other, so that the anchor is
+  the definitive term's in every language, a translated document may name a term in either
+  language, and the page is sorted by the language's collation (cosmopolite's `Collatable`).
+  Left for later: a translation's pages in the output directory and compiled rather than
+  rendered when asked for, hyphenation by language, holding a passage to the terms the text
+  it translates names, and translating presentations and schema descriptions.
 - **M1 Markdown with embedded code, compiled and viewed** (done, first cut). This document's
   second half. Found while building it:
   - A chain of `Optional#let` calls with `_` lambdas (`file.parent.let(_.parent).let(_.parent)`

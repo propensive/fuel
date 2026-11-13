@@ -4958,6 +4958,129 @@ entry .Channel
         . sub(t"        - its length\n", t"        - its length\n        + sa longueur\n")
 
 
+      val terms: Text =
+        t"tel 1.0\n\ndefine library\n  link /doc/guide/libraries.md\n  keyword lib\n  definition\n      A collection of code.\n\n      Other programs use it.\n\ndefine interface\n  definition  A shared boundary.\n\ndefine apple\n  definition\n      A fruit.\n"
+
+      val unglossed: Text =
+        t"tel 1.0\n\ndefine library\n  keyword lib\n  definition\n      - A collection of code.\n\n      - Other programs use it.\n\ndefine interface\n  definition\n      - A shared boundary.\n\ndefine apple\n  definition\n      - A fruit.\n"
+
+      val glossed: Text =
+        unglossed
+        . sub(t"define library\n  keyword lib\n", t"define library\n  term bibliothèque\n  keyword bib\n")
+        . sub(t"      - A collection of code.\n", t"      - A collection of code.\n      + Un ensemble de code.\n")
+        . sub(t"      - Other programs use it.\n", t"      - Other programs use it.\n      + D'autres programmes l'utilisent.\n")
+        . sub(t"define interface\n", t"define interface\n  term interface\n")
+        . sub(t"      - A shared boundary.\n", t"      - A shared boundary.\n      + Une frontière commune.\n")
+        . sub(t"define apple\n", t"define apple\n  term Écrou\n")
+        . sub(t"      - A fruit.\n", t"      - A fruit.\n      + Un fruit.\n")
+
+      val defined: Glossary = Glossary.read(t"en/glossary.tel", terms) match
+        case glossary: Glossary => glossary
+        case _                  => Glossary.none
+
+      val glossaire: Glossary = GlossaryTranslations.foreign(t"fr/glossary.tel", glossed, defined)
+
+      test(m"a glossary's translation is its terms, their definitions to be translated"):
+        GlossaryTranslations.generate(terms)
+
+      . assert(_ == unglossed)
+
+      test(m"a glossary's translation which nobody has translated is one caution"):
+        places(GlossaryTranslations.check(t"fr/glossary.tel", unglossed, terms)).map(_(2))
+
+      . assert(_ == List(Tone.Warning))
+
+      test(m"an untranslated glossary counts each term and each passage as one to translate"):
+        val progress: Translation.Progress = GlossaryTranslations.progress(unglossed, terms)
+        (progress.translated, progress.untranslated)
+
+      . assert(_ == (0, 7))
+
+      test(m"a translated glossary has nothing wrong with it, and is done"):
+        ( places(GlossaryTranslations.check(t"fr/glossary.tel", glossed, terms)),
+          GlossaryTranslations.progress(glossed, terms).complete )
+
+      . assert(_ == (Nil, true))
+
+      test(m"a translated term has its own name, keywords and definition, and its origin's anchor"):
+        glossaire.terms.map: (term: Glossary.Term) =>
+          (term.name, term.slug, term.keywords, term.definition.cut(t"\n").stdlib.head)
+
+      . assert: found =>
+          found == List
+            ( (t"bibliothèque", t"library", List(t"bib"), t"Un ensemble de code."),
+              (t"interface", t"interface", List[Text](), t"Une frontière commune."),
+              (t"Écrou", t"apple", List[Text](), t"Un fruit.") )
+
+      test(m"a translated term keeps the link of the term it translates"):
+        glossaire.terms.map(_.link.or(t""))
+
+      . assert(_ == List(t"/doc/guide/libraries.md", t"", t""))
+
+      test(m"a translated term is found by its name, its keyword and the name it translates"):
+        (glossaire.search(t"Bibliothèque").size, glossaire.search(t"bib").size, glossaire.search(t"library").size, glossaire.search(t"lib").size)
+
+      . assert(_ == (1, 1, 1, 0))
+
+      test(m"a translated document may name a term in either language, its own first"):
+        glossaire.definitions.cut(t"\n")
+
+      . assert: lines =>
+          lines == List
+            ( t"[bibliothèque]: glossary:library", t"[interface]: glossary:interface",
+              t"[Écrou]: glossary:apple", t"[library]: glossary:library",
+              t"[apple]: glossary:apple" )
+
+      test(m"each language's glossary page is in the order of its dictionary"):
+        def order(glossary: Glossary, locale: Locale[Phrases.Spoken]): List[Text] =
+          glossary.page(Linker.none, locale).bind:
+            case Block.Heading(2, _, id) => id.let(List(_)).or(Nil)
+            case _                       => Nil
+
+        (order(defined, Phrases.english), order(glossaire, Phrases.locale(t"fr")))
+
+      . assert(_ == (List(t"apple", t"interface", t"library"), List(t"library", t"apple", t"interface")))
+
+      test(m"a term the translation has no entry for is the term as it is defined"):
+        val partial: Text = glossed.cut(t"define interface").stdlib.head
+        GlossaryTranslations.foreign(t"fr/glossary.tel", partial, defined).terms.map(_.name)
+
+      . assert(_ == List(t"bibliothèque", t"interface", t"apple"))
+
+      test(m"a change to a definition is a caution at its line of the translation"):
+        places(GlossaryTranslations.check(t"fr/glossary.tel", glossed, terms.sub(t"A fruit.", t"A round fruit.")))
+
+      . assert(_ == List((t"fr/glossary.tel", 22, Tone.Warning)))
+
+      test(m"a glossary's translation is made again with what was translated"):
+        GlossaryTranslations.generate(terms.sub(t"A fruit.", t"A round fruit."), glossed)
+
+      . assert(_ == glossed.sub(t"      - A fruit.\n", t"      ! A fruit.\n      - A round fruit.\n"))
+
+      test(m"a term renamed is one the translation lacks and one it should not have"):
+        val renamed: Text = terms.sub(t"define apple", t"define pear")
+
+        ( places(GlossaryTranslations.check(t"fr/glossary.tel", glossed, renamed)),
+          GlossaryTranslations.lost(renamed, glossed).map(_.name) )
+
+      . assert(_ == (List((t"fr/glossary.tel", 1, Tone.Warning), (t"fr/glossary.tel", 19, Tone.Warning)), List(t"apple")))
+
+      test(m"a term which is another term's name as it is defined is a caution"):
+        places(GlossaryTranslations.check(t"fr/glossary.tel", glossed.sub(t"term Écrou", t"term Library"), terms))
+
+      . assert(_ == List((t"fr/glossary.tel", 19, Tone.Warning)))
+
+      test(m"a term two entries share, and one which holds a bracket, are failures"):
+        ( places(GlossaryTranslations.check(t"fr/glossary.tel", glossed.sub(t"term Écrou", t"term Interface"), terms)),
+          places(GlossaryTranslations.check(t"fr/glossary.tel", glossed.sub(t"term Écrou", t"term [x]"), terms)) )
+
+      . assert(_ == (List((t"fr/glossary.tel", 19, Tone.Failure)), List((t"fr/glossary.tel", 19, Tone.Failure))))
+
+      test(m"a link in place of one to a page of the site is a caution"):
+        places(GlossaryTranslations.check(t"fr/glossary.tel", glossed.sub(t"  keyword bib\n", t"  keyword bib\n  link https://example.com/\n"), terms))
+
+      . assert(_ == List((t"fr/glossary.tel", 3, Tone.Warning)))
+
       test(m"an overlay's translation is the overlay, its prose to be translated"):
         OverlayTranslations.generate(overlay)
 

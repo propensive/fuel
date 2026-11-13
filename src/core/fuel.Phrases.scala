@@ -56,6 +56,15 @@ object Phrases:
       case t"de" => Locale(de)
       case _     => Locale(en)
 
+  // The order of a language's dictionary, which its glossary is in.
+  def collation(locale: Locale[Spoken]): Collation = locale.language.code match
+    case t"fr" => summon[fr is Collatable].collation
+    case t"de" => summon[de is Collatable].collation
+    case _     => summon[en is Collatable].collation
+
+  // The glossary page: where a term is explained in full, as `See /doc/guide.md.`
+  val see: Phrase = en(t"See") | fr(t"Voir") | de(t"Siehe")
+
   // The dashboard.
   val documents: Phrase = en(t"Documents") | fr(t"Documents") | de(t"Dokumente")
   val glossary: Phrase = en(t"Glossary") | fr(t"Glossaire") | de(t"Glossar")

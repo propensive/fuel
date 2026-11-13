@@ -51,7 +51,10 @@ object Dashboard:
 
   // The results of a search, as a page; or what is wrong with the query.
   def searchPage
-    ( text: Text, apis: Apis = Server.apis, locale: Locale[Phrases.Spoken] = Phrases.english )
+    ( text:   Text,
+      apis:   Apis                   = Server.apis,
+      locale: Locale[Phrases.Spoken] = Phrases.english,
+      terms:  Glossary               = Server.terms )
   :   List[Block] =
 
     given Locale[Phrases.Spoken] = locale
@@ -64,7 +67,7 @@ object Dashboard:
         List(Block.Notice(Tone.Warning, Inline.text(Phrases.query()), message))
 
       case query: Query =>
-        val outcome: Search.Outcome = apis.search(query, Server.terms)
+        val outcome: Search.Outcome = apis.search(query, terms)
         ApiPages.search(apis, text, outcome, Resolver(api, scope, Unset, apis), scope, locale)
 
   // Where the documents on `port` are found.
@@ -158,7 +161,8 @@ final class Dashboard(audience: Audience = Audience()):
   // A search which fails says so in place of its results.
   private val searches: Latest[Text] = Latest: (text: Text) =>
     val page: List[Block] =
-      try Dashboard.searchPage(text, apis, locale) catch case error: Exception =>
+      try Dashboard.searchPage(text, apis, locale, Server.terms(tongue))
+      catch case error: Exception =>
         val message: List[Block] = List(Block.paragraph(error.toString.tt))
         List(Block.Notice(Tone.Failure, Inline.text(Phrases.search()), message))
 
@@ -296,7 +300,7 @@ final class Dashboard(audience: Audience = Audience()):
         content() = ApiPages.withIssues(page, Server.issues(key), locale)
 
       case Target.Glossary() =>
-        content() = Server.glossary
+        content() = Server.glossary(tongue)
 
       case Target.Search(text) =>
         searches(text)
@@ -326,7 +330,7 @@ final class Dashboard(audience: Audience = Audience()):
 
       // The glossary, after the sections, when there is one.
       val glossary: List[Block.TreeNode] =
-        if Server.glossary.nil then Nil else
+        if Server.glossary(tongue).nil then Nil else
           val tone: Optional[Tone] = if selected == Target.Glossary() then Tone.Accent else Unset
           val destination: Inline.Destination = Inline.Destination.Local(t"/glossary")
           val label: List[Inline] = Inline.text(Phrases.glossary())

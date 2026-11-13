@@ -94,7 +94,8 @@ object Workspace:
     val badSync: List[Text] = syncLines.filter(Sync.Target.parse(_).absent).map(_.join(t" "))
 
     // A `document` may hold more than its directory, which a `Setting` does not read: the
-    // `language` it is written in, each `overlay` directory inside it, and a `translation`
+    // `language` it is written in, each `overlay` directory and each `glossary` inside it
+    // (which its translations then translate, as they do its documents), and a `translation`
     // for each language it is translated into — a language and the directory which mirrors
     // the document's, perhaps with a `fallback` language. So each is read from the
     // configuration whole, as a `sync` line is; what is wrong with one is kept, to be reported.
@@ -110,6 +111,7 @@ object Workspace:
       ( directory:    Text,
         language:     Optional[Text],
         overlays:     List[Text],
+        glossaries:   List[Text],
         translations: List[Translations.Target],
         faults:       List[Text] )
 
@@ -128,6 +130,7 @@ object Workspace:
                 t"`en-US`" )
 
       val nested: List[Text] = lines(tel, t"overlay").bind(_.head.let(List(_)).or(Nil))
+      val defined: List[Text] = lines(tel, t"glossary").bind(_.head.let(List(_)).or(Nil))
 
       val read: List[(List[Text], List[List[Text]])] =
         tel.fields(t"translation").to[List].map { line => (words(line), lines(line, t"fallback")) }
@@ -181,7 +184,8 @@ object Workspace:
 
       List
         ( Group
-            ( directory, language, nested.map(within(directory, _)), kept,
+            ( directory, language, nested.map(within(directory, _)),
+              defined.map(within(directory, _)), kept,
               spoken + malformed + groundless + own + unspoken ) )
 
     val groups: List[Group] =
@@ -212,7 +216,7 @@ object Workspace:
         overlays,
         imports,
         output,
-        entries(ui.Glossary()),
+        (entries(ui.Glossary()) + groups.bind(_.glossaries)).distinct,
         ui.CheckLinks().or(false),
         sync,
         badSync,

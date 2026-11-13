@@ -47,8 +47,13 @@ import pyrocosm.{Block, Digests}
 // rebuilds only when a compile has happened. The models of dependency jars are kept by path
 // and modification time, since a jar seldom changes between compiles.
 object Server:
-  // The corpus and the API as a language they are translated into reads them.
-  case class Reading(corpus: Corpus, apis: Apis)
+  // The corpus, the API and the glossary — its page and its terms — as a language they are
+  // translated into reads them.
+  case class Reading
+    ( corpus:   Corpus,
+      apis:     Apis,
+      glossary: List[Block] = Nil,
+      terms:    Glossary    = Glossary.none )
 
   @scala.caps.unsafe.untrackedCaptures
   @volatile
@@ -191,6 +196,10 @@ object Server:
   def standard: List[Locator] = standard0
   def glossary: List[Block] = glossary0
   def terms: Glossary = terms0
+
+  // The glossary as a language reads it.
+  def glossary(tongue: Optional[Text]): List[Block] = reading(tongue).let(_.glossary).or(glossary0)
+  def terms(tongue: Optional[Text]): Glossary = reading(tongue).let(_.terms).or(terms0)
   def edition: Long = edition0.get
 
   def page(key: Text): Optional[List[Block]] = pages0.get(key) match
