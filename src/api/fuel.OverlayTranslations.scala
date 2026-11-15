@@ -127,78 +127,81 @@ object OverlayTranslations:
 
       List.from(walk(tel.childCompounds.to[List].stdlib, sci.Nil))
 
-  private def indent(line: String): Int = line.takeWhile(_ == ' ').length
-  private def spaces(count: Int): String = " ".repeat(count).nn
-
-  private def set(lines: sci.Vector[String], indent: Int): sci.Vector[String] =
-    lines.map { (line: String) => if line == "" then "" else spaces(indent) + line }
-
-  // The translation of a definitive overlay: each run of its prose a `Translation` of it —
-  // that of the translation `old`, brought up to date, where it has the run, and otherwise one
-  // nobody has translated — and the rest as the definitive overlay has it. `Unset` if the
+  // The translation of a definitive overlay: the overlay as TEL reads it, each run of its prose
+  // a `Translation` of it — that of the translation `old`, brought up to date, where it has the
+  // run, and otherwise one nobody has translated — written as the source atom of its keyword,
+  // and the rest as the definitive overlay has it. An `info` on an entry's line moves beneath
+  // the entry, and the entry's detail with it, beneath `detail`, since nothing may follow a
+  // source atom in its compound; a detail alone stays the entry's source atom. `Unset` if the
   // overlay is not TEL.
   def generate(definitive: Text, old: Optional[Text] = Unset): Optional[Text] =
-    if parsed(definitive).absent then Unset else
-      val lines: sci.Vector[String] = Translation.split(definitive)
-      val runs: sci.List[Prose] = prose(definitive).stdlib
+    val carried: Map[(List[Text], Text), Text] =
+      old.lay(List[Prose]())(prose(_)).map { (run: Prose) => run.key -> run.text }.to[Map]
 
-      val carried: sci.Map[(List[Text], Text), Text] =
-        sci.Map.from:
-          old.lay(sci.List[Prose]())(prose(_).stdlib).map { (run: Prose) => run.key -> run.text }
+    def translated(entry: List[Text], keyword: Text, text: Text): Tel.Atom =
+      val translation: Translation =
+        carried.at((entry, keyword)).lay(Translation.skeleton(text)): (before: Text) =>
+          Translation.update(Translation.parse(before), text)
 
-      def marked(run: Prose): sci.Vector[String] =
-        val translation: Translation = carried.get(run.key) match
-          case Some(text) => Translation.update(Translation.parse(text), run.text)
-          case None       => Translation.skeleton(run.text)
+      Tel.Atom.Source(translation.serialize)
 
-        Translation.split(translation.serialize)
+    def detail(entry: List[Text], text: Text): List[Tel.Atom] =
+      List(translated(entry, t"detail", text))
 
-      // What stands for each line (from zero) which does not stand for itself.
-      val replaced: sci.Map[Int, sci.Vector[String]] =
-        val written: sci.List[(Int, sci.Vector[String])] =
-          runs.groupBy(_.site).toList.flatMap: (site: Int, runs: sci.List[Prose]) =>
-            val head: String = lines.lift(site - 1).getOrElse("")
-            val depth: Int = indent(head)
-            val pad: String = spaces(depth)
+    def beneath(keyword: Text, atom: Tel.Atom): Tel.Compound =
+      Tel.Compound(keyword, Array(atom), Unset, Array.empty)
 
-            def beneath(run: Prose, first: sci.Vector[String], last: sci.Vector[String])
-            :   sci.List[(Int, sci.Vector[String])] =
+    // A compound as the translation writes it, within the entry `path`.
+    def written(path: List[Text])(compound: Tel.Compound): Tel.Compound =
+      val inline: List[Text] = Overlay.inlineAtoms(compound)
+      val source: Optional[Text] = Overlay.sourceAtom(compound)
 
-              val count: Int = Translation.split(run.text).size
-              val body: sci.Vector[String] = first ++ set(marked(run), depth + 4) ++ last
+      compound.keyword match
+        case t"info" | t"detail" =>
+          val text: Optional[Text] = source.or(if inline.nil then Unset else inline.join(t" "))
 
-              (site -> body) :: (1 until count).toList.map: (offset: Int) =>
-                (site + offset) -> sci.Vector[String]()
+          text.lay(compound): (text: Text) =>
+            compound.copy(atoms = Array(translated(path, compound.keyword, text)))
 
-            runs.find(_.own) match
-              case Some(run) =>
-                if !run.inline then beneath(run, sci.Vector(), sci.Vector())
-                else
-                  sci.List
-                    ( (site - 1) ->
-                        (sci.Vector(s"$pad${run.keyword.s}") ++ set(marked(run), depth + 4)) )
+        case t"entry" =>
+          inline.head.lay(compound): (name: Text) =>
+            val here: List[Text] = path :+ sigilled(name)
+            val info: Optional[Text] = if inline.size < 2 then Unset else inline.skip(1).join(t" ")
 
-              case None =>
-                val info: Option[Prose] = runs.find(_.keyword == t"info")
-                val detail: Option[Prose] = runs.find(_.keyword == t"detail")
-                val name: String = runs.head.entry.stdlib.lastOption.map(_.s).getOrElse("")
+            val named: List[Tel.Atom] =
+              compound.atoms.to[List].filter(_.isInstanceOf[Tel.Atom.Inline]).keep(1)
 
-                val block: sci.Vector[String] = info.toVector.flatMap: (run: Prose) =>
-                  sci.Vector(s"$pad  info") ++ set(marked(run), depth + 6)
+            val children: Array[Tel.Block] = compound.children.map: (block: Tel.Block) =>
+              block.copy(compounds = block.compounds.map(written(here)))
 
-                val entry: sci.Vector[String] =
-                  if info.isEmpty then sci.Vector(head) else sci.Vector(s"${pad}entry $name")
+            info.lay
+              ( compound.copy
+                  ( atoms    = (named + source.lay(List[Tel.Atom]())(detail(here, _))).to[Array],
+                    children = children ) ):
+              (info: Text) =>
+                val moved: List[Tel.Compound] =
+                  beneath(t"info", translated(here, t"info", info)) ::
+                    source.lay(List[Tel.Compound]()): (detail: Text) =>
+                      List(beneath(t"detail", translated(here, t"detail", detail)))
 
-                detail match
-                  case Some(run) => ((site - 1) -> entry) :: beneath(run, sci.Vector(), block)
-                  case None      => sci.List((site - 1) -> (entry ++ block))
+                val block: Tel.Block = Tel.Block(Array.empty, Unset, moved.to[Array], 0)
 
-        sci.Map.from(written)
+                compound.copy(atoms = named.to[Array], children = Array.concat(Array(block), children))
 
-      val result: sci.Vector[String] = lines.zipWithIndex.flatMap: (line: String, index: Int) =>
-        replaced.getOrElse(index, sci.Vector(line))
+        case _ =>
+          compound
 
-      Text(result.mkString("\n"))
+    safely:
+      val tel: Tel = definitive.read[Tel]
+
+      val replacements: List[Mutation.Op] =
+        tel.childCompounds.to[List].indexed.map: (compound: Tel.Compound, index: Ordinal) =>
+          val occurrence: Int =
+            tel.childCompounds.to[List].keep(index.n0).count(_.keyword == compound.keyword)
+
+          Mutation.Op.Replace(Tel.Pointer.Empty / (compound.keyword, occurrence), written(Nil)(compound))
+
+      Mutation(tel, replacements).show
 
   // The runs of a translation which someone has translated and the definitive overlay no
   // longer has: what making the translation again leaves out.
