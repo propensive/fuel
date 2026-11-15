@@ -342,7 +342,8 @@ object Embedding:
     // place, and must fail.
     // A line is marked, in any case, by a comment which says it does not compile.
     private def negative(line: Text): Boolean =
-      r"//\s*(does\s+not|doesn't|will\s+not|won't|cannot|can't)\s+compile\b".seek(line.lower).present
+      val comment = r"//\s*(does\s+not|doesn't|will\s+not|won't|cannot|can't)\s+compile\b"
+      comment.seek(line.lower).present
 
     private def negatives(code: Text): List[Int] =
       val marked: List[(Text, Ordinal)] = code.cut(t"\n").indexed.filter:
@@ -960,16 +961,31 @@ object Embedding:
   // The top-level definitions of a fragment, by their declarations — what a later fragment
   // defining one of them again hides from its import, and what a reference in prose names —
   // each a type (a class, trait, enum or type) or a term.
-  // A declaration is its modifiers, its keyword, perhaps a type's parameters (an extension's,
-  // say), and its name, plain or in backticks; whatever follows is not read.
+  private val modifiers: Set[Text] =
+    Set
+      ( t"final", t"lazy", t"private", t"protected", t"inline", t"transparent", t"opaque",
+        t"infix", t"open", t"case", t"abstract", t"sealed", t"override", t"implicit" )
+
+  // A line without the modifiers it begins with.
+  private def unmodified(line: Text): Text = line match
+    case r"$word([a-z]+)\s+$rest([\s\S]*)" if modifiers.has(word) => unmodified(rest)
+    case _                                                     => line
+
+  // The name a declaration's text after its keyword begins with, perhaps after a type's
+  // parameters (an extension's, say): plain or in backticks.
+  private def named(text: Text): Optional[Text] = text match
+    case r"(\[[^\]]*\]\s*)?$name([A-Za-z_][\w\x24]*|`[^`]+`)[\s\S]*" => name
+    case _                                                         => Unset
+
+  // A declaration is its modifiers, its keyword and its name; whatever follows is not read.
   def definitions(code: Text): List[(Text, Linker.Kind)] =
-    code.cut(t"\n").bind:
-      case r"((final|lazy|private|protected|inline|transparent|opaque|infix|open|case|abstract|sealed|override|implicit)\s+)*$keyword(val|var|def|object|class|trait|type|enum|given)\s+(\[[^\]]*\]\s*)?$name([A-Za-z_][\w\x24]*|`[^`]+`)[\s\S]*" =>
+    code.cut(t"\n").map(unmodified).bind:
+      case r"$keyword(val|var|def|object|class|trait|type|enum|given)\s+$rest([\s\S]*)" =>
         val kind: Linker.Kind = keyword match
           case t"class" | t"trait" | t"type" | t"enum" => Linker.Kind.Type
           case _                                       => Linker.Kind.Term
 
-        List((name, kind))
+        named(rest).lay(Nil) { (name: Text) => List((name, kind)) }
 
       case _ =>
         Nil

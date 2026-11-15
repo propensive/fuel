@@ -56,7 +56,9 @@ object Comments:
               text.offsetOf(t"*/").lay(recur(rest, comment(token) :: acc)): (close: Ordinal) =>
                 open = false
                 val (inside, after) = (text.keep(close.n0 + 2), text.skip(close.n0 + 2))
-                val remaining: List[Token] = if after == t"" then rest else token.copy(text = after) :: rest
+                val remaining: List[Token] =
+                  if after == t"" then rest else token.copy(text = after) :: rest
+
                 recur(remaining, comment(token.copy(text = inside)) :: acc)
 
             else if token.accent != Token.Accent.Unparsed then recur(rest, token :: acc)
