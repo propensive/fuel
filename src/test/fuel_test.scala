@@ -5150,7 +5150,7 @@ entry .Channel
       // in one.
       def generated(text: Text): Text =
         text.sub(t"use it.\n\ndefine", t"use it.\ndefine").sub(t"utilisent.\n\ndefine", t"utilisent.\ndefine")
-        . sub(t"      - A fruit.\n", t"      - A fruit.").sub(t"+ Un fruit.\n", t"+ Un fruit.")
+        . pipe { (text: Text) => if text.ends(t"\n") then text.skip(1, Rtl) else text }
 
       val glossed: Text =
         unglossed
