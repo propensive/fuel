@@ -3642,6 +3642,7 @@ entry .Doc   a document
         ]"""
 
         import strategies.throwUnsafely
+        import codepages.utf8Codepage
         val payloads: List[GitHubIssues.Payload] = json.read[Json].as[List[GitHubIssues.Payload]]
         payloads.bind { p => GitHubIssues.issue(p).let(List(_)).or(Nil) }.map: issue =>
           (issue.number, issue.open, issue.url, issue.affects)
@@ -4264,6 +4265,7 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
       def configuration(text: Text): Tel =
         import strategies.throwUnsafely
         import codepages.utf8Codepage
+        import codepages.utf8Codepage
         t"tel 1.0\n\n$text".read[Tel]
 
       def sectionFaults(text: Text): Int =
@@ -4282,6 +4284,7 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
 
       test(m"a section's members are the same on its line as beneath it, each by its keyword"):
         import strategies.throwUnsafely
+        import codepages.utf8Codepage
         (configuration(inline).as[Workspace.Sections], sectionFaults(beneath))
 
       . assert: (sections, faults) =>
@@ -4300,6 +4303,7 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
 
       test(m"values after an original's file are its overlays, as its members' order has it"):
         import strategies.throwUnsafely
+        import codepages.utf8Codepage
         val text: Text = t"section guide doc\n  original en en a.tel api more\n"
 
         ( sectionFaults(text),
@@ -5044,8 +5048,10 @@ entry .Channel
       val overlay: Text =
         t"base sample\ninfo a sample package\ndetail\n    All about _sample_.\n\nentry .Text   a one-line summary\n  detail\n      Markdown about `Text`.\n\n      - a point\n  entry #length   its length\n  refer sample.Other\n"
 
+      // TEL discards the blank lines which follow a source atom (§14), so the translation, which
+      // is written from the overlay as TEL reads it, has none after its `detail`.
       val untranslated: Text =
-        t"base sample\ninfo\n    - a sample package\ndetail\n    - All about _sample_.\n\nentry .Text\n  info\n      - a one-line summary\n  detail\n      - Markdown about `Text`.\n\n      - - a point\n  entry #length\n    info\n        - its length\n  refer sample.Other\n"
+        t"base sample\ninfo\n    - a sample package\ndetail\n    - All about _sample_.\nentry .Text\n  info\n      - a one-line summary\n  detail\n      - Markdown about `Text`.\n\n      - - a point\n  entry #length\n    info\n        - its length\n  refer sample.Other\n"
 
       val translated: Text =
         untranslated
@@ -5221,7 +5227,7 @@ entry .Channel
       test(m"a change to an overlay's prose is a caution at its line of the translation"):
         places(OverlayTranslations.check(t"sample.fr.tel", translated, overlay.sub(t"its length", t"how long it is")))
 
-      . assert(_ == List((t"sample.fr.tel", 21, Tone.Warning)))
+      . assert(_ == List((t"sample.fr.tel", 20, Tone.Warning)))
 
       test(m"an overlay's translation is made again with what was translated"):
         OverlayTranslations.generate(overlay.sub(t"its length", t"how long it is"), translated)
@@ -5231,14 +5237,15 @@ entry .Channel
       test(m"an entry the overlay no longer has, and one the translation lacks, are cautions"):
         places(OverlayTranslations.check(t"sample.fr.tel", translated, overlay.sub(t"entry #length", t"entry #size")))
 
-      . assert(_ == List((t"sample.fr.tel", 9, Tone.Warning), (t"sample.fr.tel", 19, Tone.Warning)))
+      . assert(_ == List((t"sample.fr.tel", 8, Tone.Warning), (t"sample.fr.tel", 18, Tone.Warning)))
 
       test(m"what an entry says beside its prose is the same in every language"):
         places(OverlayTranslations.check(t"sample.fr.tel", translated.sub(t"sample.Other", t"sample.Autre"), overlay))
 
-      . assert(_ == List((t"sample.fr.tel", 9, Tone.Failure)))
+      . assert(_ == List((t"sample.fr.tel", 8, Tone.Failure)))
 
       test(m"what was translated and has gone is known before the translation is made again"):
         OverlayTranslations.lost(overlay.sub(t"entry #length", t"entry #size"), translated).map(_.title)
 
       . assert(_ == List(t"the `info` of `.Text#length`"))
+
