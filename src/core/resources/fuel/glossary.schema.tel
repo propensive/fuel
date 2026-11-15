@@ -1,0 +1,29 @@
+tel 1.0
+
+name glossary
+
+# The format of a glossary, a file the configuration names as a `glossary` of a section's
+# `original`, and of its translation, which is the file of the same path in a translation's
+# directory: `Glossary.schema` reads this file. A value with spaces in it follows two spaces, as
+# `define  choice package`, since a single space separates one value from the next.
+
+record Term
+  description
+      A term: its name, as prose writes it in brackets, `[name]`, and its definition, a
+      Markdown source atom which a translation writes as `-` and `+` passages. A translation
+      names each term as the glossary it translates does, and says beneath it what the term is
+      in its own language, as its `term`. A term which is `unlisted` is not on the glossary
+      page, nor found by a search, but a bracketed `[name]` still shows its definition. A
+      `keyword` is another word a search finds the term by, shown nowhere; a `synonym` is
+      another name for it, which a search finds, `[synonym]` in prose means, and the glossary
+      page lists as leading to the term. `link` is the page which explains the term in full.
+  field name String
+  field term String optional
+  field unlisted Flag optional
+  field keyword String optional repeatable
+  field synonym String optional repeatable
+  field link String optional
+  field definition String optional
+
+document
+  field define Term optional repeatable

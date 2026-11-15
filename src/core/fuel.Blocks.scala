@@ -245,38 +245,49 @@ object Blocks:
 
   // A glossary term: its content annotated with the term's definition (its first paragraph,
   // which is a tooltip's size; the whole is on the glossary page), leading to the term's own
-  // link when it has one, else to its entry on the glossary page. A term the glossary does not
-  // have — a `glossary:` destination written by hand — leads to the glossary page, and the
-  // check says it is not there.
+  // link when it has one, else to its entry on the glossary page — which an unlisted term does
+  // not have, so it leads nowhere. A term the glossary does not have — a `glossary:`
+  // destination written by hand — leads to the glossary page, and the check says it is not
+  // there.
   private def glossary(slug: Text, content: List[Inline], context: Context, line: Int): Inline =
     val unknown: Inline = Inline.Link(Inline.Destination.Local(t"/glossary", slug), content)
 
     context.glossary(slug).lay[Inline](unknown): (term: Glossary.Term) =>
-      val entry: Inline.Destination = Inline.Destination.Local(t"/glossary", term.slug)
-
-      val destination: Inline.Destination = term.link.lay(entry): (url: Text) =>
-        val (path, fragment) = split(url)
-
-        if url.starts(t"/") then Inline.Destination.Local(path, fragment)
-        else Inline.Destination.External(url)
-
-      destination match
-        case Inline.Destination.Local(path, fragment) =>
-          context.refer(line, Linkage.Target.Site(path, fragment))
-
-        case Inline.Destination.External(url) =>
-          context.refer(line, Linkage.Target.Url(url))
-
-        case _ =>
-          ()
-
       val definition: List[Inline] = Blocks.inline(term.definition, context.linker)
-      Inline.Annotated(List(Inline.Link(destination, content)), definition)
+
+      if term.unlisted && term.link.absent then Inline.Annotated(content, definition) else
+        linked(term, content, definition, context, line)
 
     . also:
       // Recorded even when the term is unknown, so that the check reports it.
       if context.glossary(slug).absent
       then context.refer(line, Linkage.Target.Site(t"/glossary", slug))
+
+  // A term's content as a link to where the term is explained, annotated with its definition.
+  private def linked
+    ( term: Glossary.Term, content: List[Inline], definition: List[Inline], context: Context,
+      line: Int )
+  :   Inline =
+
+    val entry: Inline.Destination = Inline.Destination.Local(t"/glossary", term.slug)
+
+    val destination: Inline.Destination = term.link.lay(entry): (url: Text) =>
+      val (path, fragment) = split(url)
+
+      if url.starts(t"/") then Inline.Destination.Local(path, fragment)
+      else Inline.Destination.External(url)
+
+    destination match
+      case Inline.Destination.Local(path, fragment) =>
+        context.refer(line, Linkage.Target.Site(path, fragment))
+
+      case Inline.Destination.External(url) =>
+        context.refer(line, Linkage.Target.Url(url))
+
+      case _ =>
+        ()
+
+    Inline.Annotated(List(Inline.Link(destination, content)), definition)
 
   // The first embedding to answer a fence, else the plain rendering.
   def fence(info: List[Text], content: Text, line: Int, embeddings: List[Embedding])

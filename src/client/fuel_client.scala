@@ -816,10 +816,11 @@ private def sectionFiles(config: Workspace.Config)
   (titles(defined), problems.reverse + translating, spoken)
 
 // The glossaries the configuration names, read and combined, with the problems: a file which
-// cannot be read or is not TEL, what `Glossary.merge` finds, and what is wrong with a
-// translation of one. With them, the glossary each language the documents are translated into
-// reads: every glossary which has a translation — the language's own or a fallback's — as
-// that says, combined as the glossaries were.
+// cannot be read or is not TEL, what its schema or `Glossary.merge` finds, and what is wrong
+// with a translation of one. With them, the glossary each language the documents are
+// translated into reads: every glossary which has a translation — the language's own or a
+// fallback's — as that says, combined as the glossaries were, each translated term saying the
+// name it translates, in the language its glossary is written in.
 private def glossaries(config: Workspace.Config): (Glossary, List[Block], List[(Text, Glossary)]) =
   @scala.caps.unsafe.untrackedCaptures
   var problems: List[Block] = Nil
@@ -831,7 +832,9 @@ private def glossaries(config: Workspace.Config): (Glossary, List[Block], List[(
 
     readText(file).lay(unreadable): (text: Text) =>
       Glossary.read(file, text) match
-        case glossary: Glossary => List((file, text, glossary))
+        case glossary: Glossary =>
+          problems = Glossary.faults(file, text).reverse + problems
+          List((file, text, glossary))
 
         case diagnostic: Block.Diagnostic =>
           problems = diagnostic :: problems
@@ -846,15 +849,23 @@ private def glossaries(config: Workspace.Config): (Glossary, List[Block], List[(
       ( file, text, Translations.of(file, config.translations), reader,
         Translations.partial(Translations.within(file, config.translations)), names )
 
+  // The language a glossary is written in: that of the directory of the original text it is in.
+  def language(file: Text): Optional[Text] =
+    config.languages.filter { (directory, _) => file.starts(t"$directory/") }.head.let(_(1))
+
   val spoken: List[(Text, Glossary)] =
     config.translations.map(_.tongue).distinct.map: (tongue: Text) =>
+      given Locale[Phrases.Spoken] = Phrases.locale(tongue)
+
       val each: List[Glossary] = read.map: (file: Text, _, defined: Glossary) =>
         val served: Optional[Text] =
           Translations.serving
             ( file, tongue, config.translations, (file: Text) => readText(file).present )
 
+        val original: Text => Text = (name: Text) => Phrases.original(language(file), name)()
+
         served.lay(defined): (path: Text) =>
-          readText(path).lay(defined)(GlossaryTranslations.foreign(path, _, defined))
+          readText(path).lay(defined)(GlossaryTranslations.foreign(path, _, defined, original))
 
       (tongue, Glossary.merge(each)(0))
 

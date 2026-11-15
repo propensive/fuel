@@ -486,20 +486,30 @@ has a type form as well as a term's.
 
 ## Glossary
 
-A `glossary` is a TEL file of terms (several may be configured, and are combined), each with a
-Markdown `definition` and, when a page explains it in full, a `link` to that page, on the site
-(`/doc/guide/interfaces.md`) or elsewhere:
+A `glossary` is a TEL file of terms (several may be configured, and are combined), to the schema
+`glossary`, each with a Markdown `definition` and, when a page explains it in full, a `link` to
+that page, on the site (`/doc/guide/interfaces.md`) or elsewhere:
 
 ```
 tel 1.0
 
-define interface
+define  user interface               # a name of several words follows two spaces
+  synonym UI                         # another name for it: see below
+  keyword  front end                 # found by a search for `front end`; shown nowhere
   link  /doc/guide/interfaces.md
-  keyword API                        # found by a search for `API`; shown nowhere
   definition
-      A shared boundary, connection, or point of interaction where two or more separate
-      systems, devices, or people meet and exchange information.
+      Where a person and a program meet and exchange information.
+
+define padding
+  unlisted                           # defined, but on no page and found by no search
+  definition
+      What fills a value out to a width.
 ```
+
+As TEL reads a line, one space separates one value from the next, so a value with spaces in it —
+a term's name, a keyword, a synonym — follows two: `define type class` is a term `type` whose
+`term` (which only a translation says) is `class`, and a failure. What the schema finds wrong
+with a glossary is a failure at its line.
 
 A term in brackets in prose — `[interface]`, in any case, or `[interfaces][interface]` for an
 inflected form — shows its definition when pointed at, and leads to its link, or to the term's
@@ -508,6 +518,13 @@ brackets are CommonMark's own reference link, since the glossary's definitions a
 each document before it is parsed, so an author's own `[interface]: url` wins; a term defined
 twice is a failure, as is a fence left open (which would swallow the definitions). The page
 lists its terms in the order of the dictionary of the language it is read in.
+
+A `synonym` is another name for a term: a search finds the term by it, `[UI]` in prose is the
+term, and the glossary page lists the synonym in its own place, leading to the term. A name — a
+term's or a synonym's — which another term has already is a failure. An `unlisted` term is
+defined for prose to use, and for its translations to say alike, without being listed: it is
+not on the glossary page, nor found by a search, and `[padding]` shows its definition but leads
+only to its own `link`, where it has one.
 
 A glossary named beneath a section's `original`, by its path within that directory, is
 translated as the section's documents are: see [Translations](#translations).
@@ -626,7 +643,11 @@ define library
 ```
 
 An entry with no `term` is one nobody has translated, and reads as the definitive term. Its
-`keyword`s are its own language's, in place of the definitive term's. Its `link` is the
+`keyword`s and `synonym`s are its own language's, in place of the definitive term's; whether it
+is `unlisted` is the definitive term's, the same in every language. A term whose name is not
+the one it translates ends its definition with that name, in the language the glossary is
+written in where Fuel knows its name (*En anglais : classloader.*), so that a reader knows the
+word the original text uses. Its `link` is the
 definitive term's, since a page of the site is the same page in every language; a `link` is
 written only for a page elsewhere which another explains in this language.
 
