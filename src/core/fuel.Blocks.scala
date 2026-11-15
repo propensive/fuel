@@ -204,10 +204,8 @@ object Blocks:
 
   // A destination's path and its fragment, after `#`.
   private def split(destination: Text): (Text, Optional[Text]) =
-    val hash: Int = destination.s.indexOf('#')
-
-    if hash < 0 then (destination, Unset)
-    else (Text(destination.s.substring(0, hash).nn), Text(destination.s.substring(hash + 1).nn))
+    destination.offsetOf(t"#").lay((destination, Unset)): (hash: Ordinal) =>
+      (destination.keep(hash.n0), destination.skip(hash.n0 + 1))
 
   // Where a link leads, by its destination as written: a glossary term (through the reference
   // definition the glossary added), a URL with a scheme, a place on this page, a page of the
@@ -216,7 +214,10 @@ object Blocks:
   // document whose section is not known) a link is left as it is written.
   private def link(destination: Text, content: List[Inline], context: Context, line: Int): Inline =
     val (path, fragment) = split(destination)
-    val scheme: Boolean = path.s.matches("[A-Za-z][A-Za-z0-9+.-]*:.*")
+    val scheme: Boolean = path match
+      case r"[A-Za-z][A-Za-z0-9+.-]*:.*" => true
+      case _                            => false
+
     def external: Inline = Inline.Link(Inline.Destination.External(destination), content)
     val glossed: Boolean = destination.starts(Glossary.scheme)
 

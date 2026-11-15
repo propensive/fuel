@@ -88,7 +88,7 @@ object Glossary:
 
   // Whether a name can be a term's: a term is written in brackets, so it cannot hold one.
   def nameable(name: Text): Boolean =
-    name != t"" && !name.s.contains("[") && !name.s.contains("]")
+    name != t"" && !name.contains(t"[") && !name.contains(t"]")
 
   val none: Glossary = Glossary(Nil)
 

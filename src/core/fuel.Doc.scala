@@ -39,8 +39,7 @@ import pyrocosm.{Block, Digests, Tone}
 object Doc:
   // The URL of a document on the site: its section and its path, each segment encoded.
   def url(section: Text, path: Text): Text =
-    def encode(text: Text): Text =
-      Text(java.net.URLEncoder.encode(text.s, "UTF-8").nn.replace("+", "%20").nn)
+    def encode(text: Text): Text = text.urlEncode.sub(t"+", t"%20")
 
     t"/doc/${encode(section)}/${path.cut(t"/").map(encode).join(t"/")}"
 
@@ -79,7 +78,7 @@ object Doc:
     val unclosed: Optional[Int] =
       if definitions == t"" then Unset else parsed.children.reverse.head.let: (node: Layout) =>
         node match
-          case Layout.CodeBlock(line, _, content) if content.s.contains(definitions.s) => line.n1
+          case Layout.CodeBlock(line, _, content) if content.contains(definitions) => line.n1
           case _                                                                       => Unset
 
     val markdown: Markdown of Layout = if unclosed.present then Parser.parse(text) else parsed
@@ -150,7 +149,7 @@ object Doc:
 
         scanned.let: (anchor: Text, definitions: List[(Text, Linker.Kind)]) =>
           val named: List[Text] = definitions.map: (name: Text, kind: Linker.Kind) =>
-            t"$name:${kind.toString.tt}"
+            t"$name:${kind.show}"
 
           List(t"$anchor=${named.join(t",")}")
 
@@ -190,7 +189,7 @@ object Doc:
   // The last segment of a path, without a `.md` extension.
   def filename(path: Text): Text =
     val name: Text = path.cut(t"/").reverse.head.or(path)
-    if name.ends(t".md") then Text(name.s.substring(0, name.s.length - 3).nn) else name
+    if name.ends(t".md") then name.skip(3, Rtl) else name
 
 // One Markdown document, compiled: its path relative to the directory it was found under, its
 // title (the first level-one heading, else its filename), its blocks, the problems its

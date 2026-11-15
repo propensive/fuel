@@ -37,7 +37,7 @@ package fuel
 import soundness.{Language as _, Token as _, *}
 
 import dysasymptotics.{linearAccess, linearSize}
-import pyrocosm.{Block, Digests, Inline, Language, Token, Tone}
+import pyrocosm.{Block, Digests, Filing, Inline, Language, Token, Tone}
 
 object Embedding:
   // A Scala fence, highlighted by the checker — typechecked, in a compile with a classpath —
@@ -90,10 +90,13 @@ object Embedding:
     private var history: List[Joined] = Nil
 
     // Where a fence with a `path` writes its content: a directory of this document's own, made
-    // when first needed, which a `run` fragment's relative paths resolve against, through the
-    // `WorkingDirectory` its unit is given.
+    // as the first file is written into it, which a `run` fragment's relative paths resolve
+    // against, through the `WorkingDirectory` its unit is given.
     private lazy val samples: Text =
-      Text(java.nio.file.Files.createTempDirectory("fuel-samples").nn.toString)
+      import temporaryDirectories.javaBaseTemporaryDirectory
+      import strategies.throwUnsafely
+
+      (temporaryDirectory[Path on Linux] / t"fuel-samples-${Uuid().show}").encode
 
     private var sampled: Boolean = false
 
@@ -107,13 +110,11 @@ object Embedding:
         val message: Text = t"A `path` is a file within the document's own directory, as `data/config.json`; `$relative` is not."
         report(Block.Location(path, line), message)
       else
-        try
-          val file: java.nio.file.Path = java.nio.file.Path.of(samples.s, relative.s).nn
-          java.nio.file.Files.createDirectories(file.getParent.nn)
-          java.nio.file.Files.writeString(file, content.s)
-          sampled = true
-        catch case error: Exception =>
-          report(Block.Location(path, line), t"The file `$relative` could not be written: ${error.toString.tt}")
+        val written: Boolean =
+          safely(t"$samples/$relative".as[Path on Linux]).lay(false)(Filing.replace(_, content))
+
+        if written then sampled = true
+        else report(Block.Location(path, line), t"The file `$relative` could not be written.")
 
     // The given a `run` fragment resolves a relative path against, once a sample has been
     // written: written in full, since a fragment's own imports are its own to say.
@@ -189,8 +190,7 @@ object Embedding:
     // characters, scope it: two documents of the same name in different sections are apart.
     private val scope: Text =
       val qualified: Text = section.lay(path) { (section: Text) => t"$section/$path" }
-      val pattern = java.util.regex.Pattern.compile("[^A-Za-z0-9]").nn
-      Text(pattern.matcher(qualified.s).nn.replaceAll("_").nn)
+      qualified.sub(r"[^A-Za-z0-9]", t"_")
 
     private def objectName(index: Int): Text = t"fuel_${scope}_${index.show}"
 
@@ -340,15 +340,13 @@ object Embedding:
 
     // The lines of a fragment marked as not compiling, which are compiled alone, each in its
     // place, and must fail.
-    private val negative: java.util.regex.Pattern =
-      val pattern: String =
-        """//\s*(?:does\s+not|doesn't|will\s+not|won't|cannot|can't)\s+compile\b"""
-
-      java.util.regex.Pattern.compile(pattern, java.util.regex.Pattern.CASE_INSENSITIVE).nn
+    // A line is marked, in any case, by a comment which says it does not compile.
+    private def negative(line: Text): Boolean =
+      r"//\s*(does\s+not|doesn't|will\s+not|won't|cannot|can't)\s+compile\b".seek(line.lower).present
 
     private def negatives(code: Text): List[Int] =
       val marked: List[(Text, Ordinal)] = code.cut(t"\n").indexed.filter:
-        (line: Text, index: Ordinal) => negative.matcher(line.s).nn.find()
+        (line: Text, index: Ordinal) => negative(line)
 
       marked.map(_(1).n0)
 
@@ -434,16 +432,21 @@ object Embedding:
       val framed: Framing = framing(preamble, context, wrapper)
 
       // The preamble's frames which have code: one without its `code` child is a problem
-      // at its line in the file — the nth `frame` line of the preamble, since a TEL node
-      // does not know its line — and is dropped.
-      val frameLines: List[Int] = header.lay(Nil): (text: Text) =>
-        text.cut(t"\n").indexed.filter(_(0).starts(t"frame")).map(_(1).n0)
+      // at its line in the file — the line of the preamble's nth `frame`, which begins on the
+      // file's line `fence + 2` — and is dropped.
+      val positioned: Optional[Tel] = header.let: (text: Text) =>
+        import codepages.utf8Codepage
+        import parsing.trackPositions
+        safely(text.read[Tel])
 
       val described: List[Preamble.Frame] =
         preamble.frames.indexed.bind: (frame: Preamble.Frame, index: Ordinal) =>
           if frame.code.present then List(frame) else
-            val location = Block.Location(path, fence + 2 + frameLines.at(index).or(0))
-            report(location, t"Frame ${(index.n0 + 1).toString.tt} has no `code`.")
+            val line: Int =
+              positioned.lay(1)(Compounds.line(_, List(t"frame", index.n0.show)))
+
+            val location = Block.Location(path, fence + 1 + line)
+            report(location, t"Frame ${(index.n0 + 1).show} has no `code`.")
             Nil
 
       // An animated fence: its frames, then the code after `##` as the last if there is any.
@@ -529,32 +532,35 @@ object Embedding:
                   run,
                   id )
 
-            val all: scala.List[Preamble.Alternative] = preamble.alternatives.stdlib.toList
+            val all: List[Preamble.Alternative] = preamble.alternatives
 
             // The others are compiled before the fence's own, which joins the session: each is
             // compiled as the object the fence's own is entered as, so one compiled after the
             // join would displace it, and every later fence would find a stale object.
-            val others: scala.List[(Preamble.Alternative, List[Block])] =
-              all.zipWithIndex.drop(1).map: (alternative, index) =>
-                (alternative, of(alternative, false, false, t"$id-${(index + 1).show}"))
+            val others: List[(Preamble.Alternative, List[Block])] =
+              all.indexed.skip(1).map: (alternative: Preamble.Alternative, index: Ordinal) =>
+                (alternative, of(alternative, false, false, t"$id-${(index.n0 + 1).show}"))
 
-            val own: scala.List[(Preamble.Alternative, List[Block])] =
-              all.take(1).map: alternative =>
+            val own: List[(Preamble.Alternative, List[Block])] =
+              all.keep(1).map: (alternative: Preamble.Alternative) =>
                 (alternative, of(alternative, true, runnable, id))
 
-            val versions: scala.List[(Preamble.Alternative, List[Block])] = own ++ others
+            val versions: List[(Preamble.Alternative, List[Block])] = own + others
 
-            val alternatives: List[Block.Alternative] = List.from:
-              versions.flatMap: (alternative, blocks) =>
+            val alternatives: List[Block.Alternative] =
+              versions.bind: (alternative: Preamble.Alternative, blocks: List[Block]) =>
                 blocks.head match
                   case code: Block.Code =>
                     val label: List[Inline] = Blocks.inline(alternative.label, linker)
-                    scala.List(Block.Alternative(label, code.language, code.lines, code.notes, code.animation))
+
+                    List:
+                      Block.Alternative
+                        ( label, code.language, code.lines, code.notes, code.animation )
 
                   case _ =>
-                    scala.Nil
+                    Nil
 
-            versions.headOption.map(_(1)).getOrElse(Nil) match
+            versions.head.lay(List[Block]())(_(1)) match
               case (code: Block.Code) :: rest => code.copy(alternatives = alternatives) :: rest
               case other                      => other
 
@@ -604,13 +610,12 @@ object Embedding:
 
       language match
         case t"scala" =>
-          try
+          caught:
             if checked then checker.check(framing.unit(code), mode, framing.context)
             else Checker.tokenized.check(code, mode, framing.context)
-          catch case error: Throwable => error
 
         case t"java" =>
-          try harlequin.Java.highlight(code) catch case error: Throwable => error
+          caught(harlequin.Java.highlight(code))
 
         case _ =>
           Unset
@@ -648,7 +653,7 @@ object Embedding:
           val code: Text = frame.code.or(t"")
           val own: Text = frame.language.or(language)
           val scala: Boolean = own == t"scala"
-          val number: Text = (index.n0 + 1).toString.tt
+          val number: Text = (index.n0 + 1).show
 
           val highlighted: Optional[SourceCode | Throwable] =
             highlight(own, code, framing, mode, checked && scala)
@@ -955,27 +960,19 @@ object Embedding:
   // The top-level definitions of a fragment, by their declarations — what a later fragment
   // defining one of them again hides from its import, and what a reference in prose names —
   // each a type (a class, trait, enum or type) or a term.
-  private val declaration: java.util.regex.Pattern =
-    val modifiers: String =
-      """(?:final|lazy|private|protected|inline|transparent|opaque|infix|open|case|abstract|""" +
-        """sealed|override|implicit)"""
-
-    val keywords: String = """(val|var|def|object|class|trait|type|enum|given)"""
-    val name: String = """(?:\[[^\]]*\]\s*)?([A-Za-z_][\w$]*|`[^`]+`)"""
-    java.util.regex.Pattern.compile(s"^(?:$modifiers\\s+)*$keywords\\s+$name").nn
-
+  // A declaration is its modifiers, its keyword, perhaps a type's parameters (an extension's,
+  // say), and its name, plain or in backticks; whatever follows is not read.
   def definitions(code: Text): List[(Text, Linker.Kind)] =
-    code.cut(t"\n").bind: (line: Text) =>
-      val matcher = declaration.matcher(line.s).nn
-
-      if !matcher.find() then Nil else
-        val keyword: String = matcher.group(1).nn
-
+    code.cut(t"\n").bind:
+      case r"((final|lazy|private|protected|inline|transparent|opaque|infix|open|case|abstract|sealed|override|implicit)\s+)*$keyword(val|var|def|object|class|trait|type|enum|given)\s+(\[[^\]]*\]\s*)?$name([A-Za-z_][\w\x24]*|`[^`]+`)[\s\S]*" =>
         val kind: Linker.Kind = keyword match
-          case "class" | "trait" | "type" | "enum" => Linker.Kind.Type
-          case _                                   => Linker.Kind.Term
+          case t"class" | t"trait" | t"type" | t"enum" => Linker.Kind.Type
+          case _                                       => Linker.Kind.Term
 
-        List((matcher.group(2).nn.tt, kind))
+        List((name, kind))
+
+      case _ =>
+        Nil
 
   // What a Scala (or `fuel`) fence, the `count`th in its document, will have on the page before
   // it is compiled: its anchor — the preamble's `id`, else its number — and the definitions of
@@ -1025,7 +1022,7 @@ object Embedding:
 
   // A fence's content ends with the newline that closed its last line, which is not a line.
   def trimmed(content: Text): Text =
-    if content.ends(t"\n") then Text(content.s.substring(0, content.s.length - 1).nn) else content
+    if content.ends(t"\n") then content.skip(1, Rtl) else content
 
   private def modelLines(source: SourceCode): List[Block.Line] =
     import pyrocosm.modelLines
@@ -1065,3 +1062,9 @@ object Notes:
     val (endLine, end) = place(to.max(from))
     val last: Optional[Int] = if endLine > line then endLine else Unset
     Block.Note(line, start, end, style, caption, last)
+
+// What a block throws, kept as a value: Soundness has no means to keep whatever foreign code —
+// the compiler, the highlighter — throws, an `Error` as well as an `Exception`, so that it is
+// reported rather than ending the document, so this is the one place it is caught.
+private[fuel] def caught[result](block: => result): result | Throwable =
+  try block catch case error: Throwable => error

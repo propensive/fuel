@@ -37,16 +37,20 @@ import soundness.*
 object Cache:
   // A cache in memory, for the tests and for a compile which writes no output.
   class Transient() extends Cache:
-    private val fragments: java.util.concurrent.ConcurrentHashMap[Text, Output.Fragment] =
-      java.util.concurrent.ConcurrentHashMap()
+    private val fragments: Atomic.Ref[Map[Text, Output.Fragment]] = Atomic(Map())
+    private val proses: Atomic.Ref[Map[Text, Output.Prose]] = Atomic(Map())
 
-    private val proses: java.util.concurrent.ConcurrentHashMap[Text, Output.Prose] =
-      java.util.concurrent.ConcurrentHashMap()
+    def fragment(key: Text): Optional[Output.Fragment] = fragments().at(key)
 
-    def fragment(key: Text): Optional[Output.Fragment] = Optional(fragments.get(key))
-    def fragment(key: Text, fragment: Output.Fragment): Unit = fragments.put(key, fragment)
-    def prose(key: Text): Optional[Output.Prose] = Optional(proses.get(key))
-    def prose(key: Text, prose: Output.Prose): Unit = proses.put(key, prose)
+    def fragment(key: Text, fragment: Output.Fragment): Unit =
+      fragments.since(_ + Map(key -> fragment))
+      ()
+
+    def prose(key: Text): Optional[Output.Prose] = proses().at(key)
+
+    def prose(key: Text, prose: Output.Prose): Unit =
+      proses.since(_ + Map(key -> prose))
+      ()
 
 // Where compiled output is kept between compiles, by the key of the inputs which produced it:
 // a fence's, and a document's prose. A key not kept is `Unset`, and its output is compiled and
