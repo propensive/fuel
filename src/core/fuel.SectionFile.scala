@@ -34,8 +34,6 @@ package fuel
 
 import soundness.*
 
-import scala.collection.immutable as sci
-
 import codepages.utf8Codepage
 import dysasymptotics.{linearAccess, linearSize}
 import errorDiagnostics.emptyDiagnostics
@@ -72,9 +70,6 @@ object SectionFile:
     import strategies.throwUnsafely
     stratiform.Tels.Validation.validate(schemaSource.read[Tel].as[stratiform.Tels])
 
-  private def headed(text: Text): Text = pyrocosm.Tels.headed(text)(0)
-  private def added(text: Text): Int = pyrocosm.Tels.headed(text)(1)
-
   private case class Faults(items: List[(Tel.Error, Text, Span)] = Nil)
   extends Error(m"the section's file has ${items.size} faults"):
     def +(error: Tel.Error, pointer: Text, span: Span): Faults =
@@ -99,7 +94,7 @@ object SectionFile:
         error.message.text
 
   // The diagnostics the schema raises, each at its line of the file.
-  private def checked(path: Text, text: Text, tel: Tel): List[Block] =
+  private def checked(path: Text, tel: Tel): List[Block] =
     import strategies.throwUnsafely
 
     val faults: Faults =
@@ -111,58 +106,49 @@ object SectionFile:
       . protect(Tel.Type.assign(tel, schema))
 
     faults.items.map: (error, pointer, span) =>
-      val line: Int = if span.exists then span.startLine.lay(1)(_.n1) - added(text) else 1
+      val line: Int = if span.exists then span.startLine.lay(1)(_.n1) else 1
       val location: Block.Location = Block.Location(path, line.max(1))
       Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(explain(error, pointer))))
 
+  // The file as TEL, with the positions of its compounds; `Unset` if it is not TEL.
   private def parsed(text: Text): Optional[Tel] =
-    import strategies.throwUnsafely
     import parsing.trackPositions
+    safely(text.read[Tel])
 
-    try headed(text).read[Tel] catch case error: Tel.Error => Unset
-
-  // A run of prose as the file writes it: its text, the line (from 1) of its keyword, how
-  // many lines of the file it is with its keyword, and whether it is on the keyword's line.
-  case class Prose(text: Text, line: Int, extent: Int, inline: Boolean):
+  // A run of prose as the file writes it: its text, the line (from 1) of its keyword, and
+  // whether it is on the keyword's line rather than beneath it.
+  case class Prose(text: Text, line: Int, inline: Boolean):
     // The line its text begins on.
     def site: Int = if inline then line else line + 1
 
+  // The first `title` of a document read with its positions.
+  private def titled(tel: Tel): Optional[Tel.Compound] =
+    tel.childCompounds.to[List].seek(_.keyword == t"title")
+
+  // The title of a document read with its positions, as it is written, if there is one.
+  private def prose(tel: Tel): Optional[Prose] =
+    titled(tel).let: (compound: Tel.Compound) =>
+      val words: List[Text] = Compounds.inline(compound).filter(_ != t"")
+      val source: List[Text] = Compounds.source(compound).lay(Nil)(List(_)).filter(_ != t"")
+      val written: Text = (words + source).join(t" ")
+
+      if written == t"" then Unset
+      else Prose(written, Compounds.line(tel, List(t"title")), !words.nil)
+
   // The title as it is written, if there is one.
-  def title(text: Text): Optional[Prose] =
-    parsed(text).let: (tel: Tel) =>
-      tel.fields(t"title").to[List].head.let: (node: Tel) =>
-        val written: Text = node.atomTexts.to[List].filter(_ != t"").join(t" ")
-        val lines: sci.Vector[String] = Translation.split(text)
-        val index: Int = lines.indexWhere { line => line == "title" || line.startsWith("title ") }
-        val brief: Boolean = index >= 0 && lines(index).trim.nn != "title"
-
-        // Beneath its keyword, a title is every line until the next which is not indented.
-        val beneath: Int =
-          if brief || index < 0 then 0 else
-            val rest: sci.Vector[String] = lines.drop(index + 1)
-            val run: Int = rest.indexWhere { line => line.trim.nn != "" && !line.startsWith(" ") }
-            val taken: sci.Vector[String] = if run < 0 then rest else rest.take(run)
-            taken.reverse.dropWhile(_.trim.nn == "").size
-
-        if written == t"" || index < 0 then Unset
-        else Prose(written, index + 1, beneath + 1, brief)
+  def title(text: Text): Optional[Prose] = parsed(text).let(prose(_))
 
   // A section's file read from its text, with what the schema finds wrong with it;
   // or the diagnostic which says the text is not TEL.
   def read(path: Text, text: Text): (SectionFile, List[Block]) | Block.Diagnostic =
-    import strategies.throwUnsafely
     import parsing.trackPositions
 
-    try
-      val tel: Tel = headed(text).read[Tel]
-      (SectionFile(title(text).let(_.text)), checked(path, text, tel))
-    catch case error: Tel.Error =>
-      val raw: Block.Diagnostic = Block.Diagnostic.of(error, path, headed(text))
+    recover:
+      case error: Tel.Error => Block.Diagnostic.of(error, path, text)
 
-      val location: Optional[Block.Location] = raw.location.let: (place: Block.Location) =>
-        place.copy(line = place.line.let(_ - added(text)))
-
-      raw.copy(location = location)
+    . protect[(SectionFile, List[Block]) | Block.Diagnostic]:
+        val tel: Tel = text.read[Tel]
+        (SectionFile(prose(tel).let(_.text)), checked(path, tel))
 
   // What a reader of a translation's language is told: what the translation reads as, and
   // what the definitive file says where it says nothing.
@@ -172,26 +158,23 @@ object SectionFile:
 
     SectionFile(read.let { (text: Text) => if text == t"" then Unset else text }.or(definitive.title))
 
-  // The translation of a section's file: the definitive file, its title a `Translation` —
-  // that of the translation `old`, brought up to date, or one nobody has translated. `Unset`
-  // if the file is not TEL.
+  // The translation of a section's file: the definitive file as TEL reads it, its title a
+  // `Translation` — that of the translation `old`, brought up to date, or one nobody has
+  // translated — written as the title's source atom. `Unset` if the file is not TEL.
   def generate(definitive: Text, old: Optional[Text] = Unset): Optional[Text] =
-    if parsed(definitive).absent then Unset else
-      val lines: sci.Vector[String] = Translation.split(definitive)
-
-      title(definitive).lay(definitive): (prose: Prose) =>
+    parsed(definitive).let: (tel: Tel) =>
+      prose(tel).lay(definitive: Optional[Text]): (prose: Prose) =>
         val translation: Translation = old.let(title(_)).let(_.text) match
           case before: Text => Translation.update(Translation.parse(before), prose.text)
           case _            => Translation.skeleton(prose.text)
 
-        val marked: sci.Vector[String] = Translation.split(translation.serialize).map: line =>
-          if line == "" then "" else s"    $line"
+        val atoms: Array[Tel.Atom] = Array(Tel.Atom.Source(translation.serialize))
 
-        val written: sci.Vector[String] =
-          lines.take(prose.line - 1) ++ sci.Vector("title") ++ marked ++
-            lines.drop(prose.line - 1 + prose.extent)
+        val replacements: List[Mutation.Op] = titled(tel).lay(Nil): (compound: Tel.Compound) =>
+          val written: Tel.Compound = compound.copy(atoms = atoms)
+          List(Mutation.Op.Replace(Tel.Pointer.Empty / (t"title", 0), written))
 
-        Text(written.mkString("\n"))
+        safely(Mutation(tel, replacements).show)
 
   // What is wrong with the translation of a section's file, read from `text` at `path`, of
   // the definitive file `definitive`: what is wrong with it as one, and where its title

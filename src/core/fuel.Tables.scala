@@ -34,8 +34,6 @@ package fuel
 
 import soundness.*
 
-import scala.collection.immutable as sci
-
 import codepages.utf8Codepage
 import dysasymptotics.{linearAccess, linearSize}
 import errorDiagnostics.emptyDiagnostics
@@ -104,10 +102,9 @@ object Tables:
 
   // A cell which is a number: digits, perhaps signed, grouped, with a fraction, an exponent or
   // a percentage.
-  private val number: java.util.regex.Pattern =
-    java.util.regex.Pattern.compile("[-+−]?[0-9][0-9,_]*(\\.[0-9]+)?([eE][-+]?[0-9]+)?%?").nn
-
-  private def numeric(cell: Text): Boolean = number.matcher(cell.s).nn.matches
+  private def numeric(cell: Text): Boolean = cell match
+    case r"[-+−]?[0-9][0-9,_]*(\.[0-9]+)?([eE][-+]?[0-9]+)?%?" => true
+    case _                                                      => false
 
   private def alignment(word: Text): Optional[Block.Alignment] = word match
     case t"start" => Block.Alignment.Start
@@ -157,18 +154,20 @@ object Tables:
     import strategies.throwUnsafely
     import parsing.trackPositions
 
-    val (text, added) = pyrocosm.Tels.headed(content)
+    val parsed: Tel | Tel.Error =
+      recover:
+        case error: Tel.Error => error
 
-    val parsed: Tel | Tel.Error = try text.read[Tel] catch case error: Tel.Error => error
+      . protect[Tel | Tel.Error](content.read[Tel])
 
     parsed match
       case error: Tel.Error =>
         error
 
       case tel: Tel =>
-        // A position in the headed text, as a line and column of the content.
+        // A position in the content, as a line and column (from 1).
         def place(line: Int, column: Int, length: Optional[Int], message: Text): Fault =
-          Fault(message, line - added, column, length)
+          Fault(message, line, column, length)
 
         // At the compound a path names, or, where that is an atom rather than a compound, at
         // the nearest compound above it.

@@ -88,7 +88,7 @@ object Glossary:
 
   // Whether a name can be a term's: a term is written in brackets, so it cannot hold one.
   def nameable(name: Text): Boolean =
-    name != t"" && !name.s.contains("[") && !name.s.contains("]")
+    name != t"" && !name.contains(t"[") && !name.contains(t"]")
 
   val none: Glossary = Glossary(Nil)
 
@@ -213,7 +213,7 @@ object Glossary:
     recover:
       case error: Tel.Error => Block.Diagnostic.of(error, path, text)
 
-    . protect:
+    . protect[Glossary | Block.Diagnostic]:
         val tel: Tel = text.read[Tel]
 
         // A node, and the compound it wraps (whose atoms are the name), paired by order:

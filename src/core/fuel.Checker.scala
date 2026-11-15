@@ -39,6 +39,7 @@ import dotty.tools.dotc.core.Contexts
 import soundness.*
 
 import ambience.systems.javaBaseSystem
+import pyrocosm.Filing
 import strategies.throwUnsafely
 
 object Checker:
@@ -88,8 +89,8 @@ object Checking:
   // runs on this one thread: dotc pins a context base to the thread of its first run, and a
   // run from another thread overflows (`RecursionOverflow`, with no frames to say so). The
   // daemon serves each invocation on a connection thread of its own, so without this the
-  // first compile after a highlight would fail. The thread's stack is generous, since the
-  // compiler recurses deeply.
+  // first compile after a highlight would fail. Soundness has no thread of its own to which
+  // work is handed and awaited, as an executor's is, so this, and `exclusive`, are the JDK's.
   private val executor: juc.ExecutorService =
     juc.Executors.newSingleThreadExecutor: (runnable: Runnable | Null) =>
       val thread = Thread(null, runnable, "fuel-compiler", 0L)
@@ -163,22 +164,14 @@ object Checking:
       // What every entered unit compiled, by the path of its classfile, and the loader which
       // runs a fragment over it: parent-first over the session's classpath, on which nothing the
       // session compiles is found; one loader for the session, so that an earlier object's
-      // state outlives its fence, as the compiler's symbol for it does.
-      val entered: juc.ConcurrentHashMap[String, Data] = juc.ConcurrentHashMap()
+      // state outlives its fence, as the compiler's symbol for it does. Units are entered on
+      // the compiler's thread, and a fragment runs on a thread of its own.
+      @scala.caps.unsafe.untrackedCaptures @volatile
+      var entered: Map[Text, Data] = Map()
 
-      lazy val loader: ClassLoader =
-        val urls: scala.Array[java.net.URL | Null] =
-          classpath.entries.stdlib.map { (entry: Classpath.Entry) => entry.javaUrl }.toArray
-
-        val parent: ClassLoader = java.net.URLClassLoader(urls, ClassLoader.getPlatformClassLoader)
-
-        new ClassLoader(parent):
-          override def findClass(name: String | Null): Class[?] =
-            import scala.unsafeExceptions.canThrowAny
-            val data: Data | Null = entered.get(name.nn.replace('.', '/').nn + ".class")
-            if data == null then throw ClassNotFoundException(name)
-            val bytes: scala.Array[Byte] = Array.unsafeJvm(data)
-            defineClass(name, bytes, 0, bytes.length).nn
+      lazy val loader: Classloader =
+        val parent: Classloader = classpath.classloader(Classloader.Delegation.Deferential)
+        memory(parent, () => entered)
 
       // The checker captures the session, which `body` never outlives: it is vouched pure so
       // that `body` may take a plain `Checker`.
@@ -191,13 +184,13 @@ object Checking:
             // untyped, which harlequin visits (`UnAssignedTypeException`) — falls back to the
             // compiler's own word: the fragment typechecked as far as the typer, its errors
             // reported as any fragment's are, and its tokens highlighted without types.
-            def typed(highlight: => SourceCode): SourceCode =
-              try highlight
-              catch case scala.util.control.NonFatal(_) => stopped(frontend, code, context, "typer")
+            def typed(highlight: => SourceCode): SourceCode = caught(highlight) match
+              case source: SourceCode => source
+              case _                  => stopped(frontend, code, context, t"typer")
 
             mode match
               case Preamble.Mode.Typecheck => typed(harlequin.Scala.highlight(code, context))
-              case Preamble.Mode.Parse     => stopped(frontend, code, context, "parser")
+              case Preamble.Mode.Parse     => stopped(frontend, code, context, t"parser")
 
               case Preamble.Mode.Compile =>
                 typed(harlequin.Scala.highlight(code, context)(using compiled))
@@ -207,21 +200,17 @@ object Checking:
 
             if process.errors == 0 then
               process.classfiles.each: (path, data) =>
-                entered.put(path.encode.s, data)
-                ()
+                entered = entered + Map(path.encode -> data)
 
             process.errors == 0
 
-          def run(name: Text): Unit = Class.forName(name.s, true, loader)
+          def run(name: Text): Unit = loader.on(name)
 
           def build(sources: Map[Text, Text], output: Text): List[Notice] =
             val process = compilation.compile(sources)
-            val root = java.nio.file.Path.of(output.s).nn
 
             process.classfiles.each: (path, data) =>
-              val target = root.resolve(path.encode.s).nn
-              java.nio.file.Files.createDirectories(target.getParent.nn)
-              java.nio.file.Files.write(target, Array.unsafeJvm(data))
+              Filing.replace(t"$output/${path.encode}".as[Path on Linux], data)
               ()
 
             process.notices
@@ -231,6 +220,22 @@ object Checking:
 
       body(checker)
 
+  // Soundness has no classloader which defines classes from bytes held in memory, so this one
+  // is the JDK's: beneath `parent`, it finds a class by the path of its classfile in `classes`.
+  private def memory(parent: Classloader, classes: () => Map[Text, Data]): Classloader =
+    // It reads the classes of the session, which it does not outlive: it is vouched pure.
+    val loader: ClassLoader = scala.caps.unsafe.unsafeAssumePure:
+      new ClassLoader(parent.java):
+        override def findClass(name: String | Null): Class[?] =
+          import scala.unsafeExceptions.canThrowAny
+          val path: Text = t"${name.nn.tt.sub(t".", t"/")}.class"
+
+          classes().at(path).lay(throw ClassNotFoundException(name)): (data: Data) =>
+            val bytes: scala.Array[Byte] = Array.unsafeJvm(data)
+            defineClass(name, bytes, 0, bytes.length).nn
+
+    new Classloader(loader)
+
   // A fragment compiled in the session as far as a `phase` and no more — the parser, for a
   // fragment which is only parsed, or the typer — with its tokens highlighted without types:
   // the diagnostics of a run stopped after that phase.
@@ -238,7 +243,7 @@ object Checking:
     ( frontend: Scalac.Session.Frontend,
       code:     Text,
       context:  Optional[harlequin.Scala.Context],
-      phase:    String )
+      phase:    Text )
   :   SourceCode =
 
     import dotty.tools.dotc.interfaces.Diagnostic.{ERROR, WARNING}
@@ -267,9 +272,10 @@ object Checking:
 
     val base: Contexts.FreshContext = frontend.context.fresh
     base.setReporter(reporter)
-    base.setSetting(base.settings.YstopAfter, scala.collection.immutable.List(phase))
+    // The compiler's own API takes the standard library's lists.
+    base.setSetting(base.settings.YstopAfter, List(phase.s).stdlib)
     given Contexts.Context = base
     val source: SourceFile = SourceFile.virtual("<fuel>", text.s)
-    frontend.compiler.newRun.compileSources(scala.collection.immutable.List(source))
+    frontend.compiler.newRun.compileSources(List(source).stdlib)
 
     harlequin.Scala.highlight(code, context).copy(diagnostics = collected.reverse)

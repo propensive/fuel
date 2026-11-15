@@ -36,7 +36,6 @@ import soundness.*
 
 import codepages.utf8Codepage
 import dysasymptotics.linearSize
-import pyrocosm.Tels
 import pyrocosm.{Block, Inline}
 
 // The TEL preamble a fenced block may begin with, before a line holding `##` alone, when its
@@ -128,34 +127,27 @@ object Preamble:
     index.lay((Unset, content)): (index: Ordinal) =>
       (lines.keep(index.n0).join(t"\n"), lines.skip(index.n0 + 1).join(t"\n"))
 
-  // The `tel 1.0` line a preamble need not repeat, supplied when absent.
-  private def headed(text: Text): Text = Tels.headed(text)(0)
-
-  // The lines `headed` adds before the preamble's own.
-  private def added(text: Text): Int = Tels.headed(text)(1)
-
   // A preamble parsed from its text, or the TEL error if it is not TEL.
   def parse(text: Text): Preamble | Tel.Error =
-    import strategies.throwUnsafely
-    try read(text) catch case error: Tel.Error => error
+    recover:
+      case error: Tel.Error => error
+
+    . protect[Preamble | Tel.Error](of(text.read[Tel]))
 
   // A preamble's TEL error as a diagnostic at its place in the file: the preamble's text is
   // the excerpt, and its line is counted from `line`, where it begins in the file (from zero).
   def diagnostic(error: Tel.Error, path: Text, text: Text, line: Int): Block.Diagnostic =
-    val shift: Int = line - added(text)
-    val raw: Block.Diagnostic = Block.Diagnostic.of(error, path, headed(text))
+    val raw: Block.Diagnostic = Block.Diagnostic.of(error, path, text)
 
     val location: Optional[Block.Location] =
       raw.location.let: (location: Block.Location) =>
-        location.copy(line = location.line.let(_ + shift))
+        location.copy(line = location.line.let(_ + line))
 
     val excerpt: List[Block] = raw.excerpt.map:
-      case code: Block.Code => code.copy(start = code.start.let(_ + shift))
+      case code: Block.Code => code.copy(start = code.start.let(_ + line))
       case other            => other
 
     raw.copy(location = location, excerpt = excerpt)
-
-  private def read(text: Text): Preamble raises Tel.Error = of(headed(text).read[Tel])
 
   // A preamble read from a TEL node whose children are its keywords: the document above a
   // fence's `##`, or anything else which says what a fragment's preamble says — a slide's code.

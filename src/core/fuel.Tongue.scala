@@ -37,7 +37,6 @@ import soundness.*
 // A language a text is translated into, as it is written: an ISO 639 code of two or three
 // letters, perhaps with an ISO 3166 region after a hyphen, as `fr` or `pt-BR`.
 object Tongue:
-  private val pattern: java.util.regex.Pattern =
-    java.util.regex.Pattern.compile("[a-z]{2,3}(-[A-Z]{2})?").nn
-
-  def valid(text: Text): Boolean = pattern.matcher(text.s).nn.matches
+  def valid(text: Text): Boolean = text match
+    case r"[a-z]{2,3}(-[A-Z]{2})?" => true
+    case _                        => false

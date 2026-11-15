@@ -100,11 +100,6 @@ object Presentation:
 
   case class Slide(parts: List[Part], line: Int, transcript: Optional[Text] = Unset)
 
-  // The lines `headed` adds before the file's own.
-  private def headed(text: Text): Text = pyrocosm.Tels.headed(text)(0)
-
-  private def added(text: Text): Int = pyrocosm.Tels.headed(text)(1)
-
   // The faults the schema finds, as they are accrued: each TEL error, with the path of what it
   // concerns and where that is.
   private case class Faults(items: List[(Tel.Error, Text, Span)] = Nil)
@@ -151,13 +146,12 @@ object Presentation:
 
   // The diagnostics the schema raises against a presentation's TEL, each at its place in the
   // file: a fault without a place of its own (a missing member) at its parent's.
-  private def checked(path: Text, text: Text, tel: Tel): List[Block] =
+  private def checked(path: Text, tel: Tel): List[Block] =
     import strategies.throwUnsafely
 
     def at(pointer: List[Text]): Optional[Int] =
       if pointer.nil then Unset
-      else tel.locateKey(Telp(pointer)).lay(at(pointer.reverse.skip(1).reverse)):
-        (position: Tel.Error.Position) => position.line - added(text)
+      else tel.locateKey(Telp(pointer)).lay(at(pointer.reverse.skip(1).reverse))(_.line)
 
     val faults: Faults =
       validate[Tel.Focus](Faults()):
@@ -171,7 +165,7 @@ object Presentation:
       val message: Text = explain(error, pointer)
 
       val line: Optional[Int] =
-        if span.exists then span.startLine.lay(1)(_.n1) - added(text)
+        if span.exists then span.startLine.lay(1)(_.n1)
         else at(pointer.cut(t"/").filter(_ != t"").reverse.skip(1).reverse)
 
       val location: Block.Location = Block.Location(path, line.or(1))
@@ -183,22 +177,16 @@ object Presentation:
     import strategies.throwUnsafely
     import parsing.trackPositions
 
-    try
-      val tel: Tel = headed(text).read[Tel]
-      val (presentation, problems) = Reading(path, text, tel).presentation
-      (presentation, checked(path, text, tel) + problems)
-    catch case error: Tel.Error =>
-      val raw: Block.Diagnostic = Block.Diagnostic.of(error, path, headed(text))
+    recover:
+      case error: Tel.Error => Block.Diagnostic.of(error, path, text)
 
-      def shifted(location: Block.Location): Block.Location =
-        location.copy(line = location.line.let(_ - added(text)))
-
-      val location: Optional[Block.Location] = raw.location.let(shifted)
-
-      raw.copy(location = location)
+    . protect[(Presentation, List[Block]) | Block.Diagnostic]:
+        val tel: Tel = text.read[Tel]
+        val (presentation, problems) = Reading(path, tel).presentation
+        (presentation, checked(path, tel) + problems)
 
   // One reading of a presentation's TEL, gathering the problems it finds.
-  private class Reading(path: Text, text: Text, tel: Tel):
+  private class Reading(path: Text, tel: Tel):
     @scala.caps.unsafe.untrackedCaptures
     private var problems: List[Block] = Nil
 
@@ -207,17 +195,8 @@ object Presentation:
       val diagnostic = Block.Diagnostic(Tone.Warning, location, List(Block.paragraph(message)))
       problems = diagnostic :: problems
 
-    // Each slide's line, from one: the nth line beginning `slide` is the nth slide.
-    private def slideLine(line: Text): Boolean = line == t"slide" || line.starts(t"slide ")
-
-    private val lines: List[Int] =
-      text.cut(t"\n").indexed.filter { (line: Text, _) => slideLine(line) }.map(_(1).n1)
-
-    private def words(compound: Tel.Compound): List[Text] =
-      List.from(compound.atoms.stdlib.collect { case Tel.Atom.Inline(text, _) => text }.toList)
-
-    private def source(compound: Tel.Compound): Optional[Text] =
-      compound.atoms.stdlib.collectFirst { case Tel.Atom.Source(text) => text }.getOrElse(Unset)
+    private def words(compound: Tel.Compound): List[Text] = Compounds.inline(compound)
+    private def source(compound: Tel.Compound): Optional[Text] = Compounds.source(compound)
 
     // The text of a node's child: its atoms, inline then the source, joined.
     private def child(node: Tel, keyword: Text): Optional[Text] =
@@ -233,7 +212,7 @@ object Presentation:
       words(child).head match
         case language: Text =>
           node.let: (node: Tel) =>
-            if child.children.stdlib.forall(_.compounds.stdlib.isEmpty) then
+            if Compounds.children(child).nil then
               List(Part.Code(language, source(child).or(words(child).skip(1).join(t" "))))
             else
               val preamble: Preamble = Preamble.of(node)
@@ -261,10 +240,8 @@ object Presentation:
     // A slide, its compound giving the order of its parts and `node` the TEL of each `syntax`,
     // the nth `syntax` compound being the nth `syntax` field; and its transcript.
     private def slide(compound: Tel.Compound, node: Optional[Tel], index: Ordinal): Slide =
-      val line: Int = lines.at(index).or(1)
-
-      val children: List[Tel.Compound] =
-        List.from(compound.children.stdlib.toList.flatMap(_.compounds.stdlib.toList))
+      val line: Int = Compounds.line(tel, List(t"slide", index.n0.show))
+      val children: List[Tel.Compound] = Compounds.children(compound)
 
       val codes: List[Tel] = node.lay(Nil)(_.fields(t"syntax").to[List])
 
@@ -380,7 +357,7 @@ object Presentation:
 
       animated.reverse.head.let(_.slides.size - 1).or(0)
 
-    . stdlib.sum
+    . fold(0)(_ + _)
 
     frames + (deck.leaves.size - 1).max(0)
 

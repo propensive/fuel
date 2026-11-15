@@ -48,8 +48,9 @@ object Linker:
   // that a path (`.pyrocosm/fuel/config.tel`) or a selector is code as written, not a
   // reference.
   def kind(reference: Text): Optional[Kind] =
-    val pattern: String = "[A-Za-z_][\\w$]*(?:[.#][A-Za-z_][\\w$]*)*"
-    val named: Boolean = reference.length > 1 && reference.s.substring(1).nn.matches(pattern)
+    val named: Boolean = reference.length > 1 && reference.skip(1).match
+      case r"[A-Za-z_][\w\x24]*([.#][A-Za-z_][\w\x24]*)*" => true
+      case _                                             => false
 
     if !named then Unset
     else if reference.starts(t"#") then Kind.Type
