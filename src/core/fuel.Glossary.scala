@@ -213,7 +213,7 @@ object Glossary:
     recover:
       case error: Tel.Error => Block.Diagnostic.of(error, path, text)
 
-    . protect:
+    . protect[Glossary | Block.Diagnostic]:
         val tel: Tel = text.read[Tel]
 
         // A node, and the compound it wraps (whose atoms are the name), paired by order:
