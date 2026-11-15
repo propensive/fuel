@@ -32,13 +32,15 @@
                                                                                                   */
 package fuel
 
-import scala.collection.immutable as sci
-
 // Excluded from the umbrella: `Compilation`, anthology's, which would outrank fuel's own.
 import soundness.{Compilation as _, Format as _, Language as _, Token as _, Query as _, *}
 
+import collations.codepointCollation
 import dysasymptotics.{linearAccess, linearSize}
-import pyrocosm.{Block, Inline, Language, Purview, TerminalRenderer, Token, Tone}
+import filesystemBackends.javaBaseFilesystem
+import pyrocosm.{Block, Filing, Inline, Language, Purview, TerminalRenderer, Token, Tone}
+import soundness.collationComparable
+import sortingAlgorithms.timsort
 import systems.javaBaseSystem
 
 object Tests extends Suite(m"Fuel tests"):
@@ -58,6 +60,31 @@ make run
   // The suite's own classpath, from its classloader (so it is the same under fume, which runs
   // the suite in-process, as under plain java), carrying the Scala library the fragments need.
   val classpath: LocalClasspath = LocalClasspath.of(Classloader[Tests.type])
+
+  // The directory the suite runs in: fuel's own, with its documents and its build.
+  def here: Text = workingDirectories.javaBaseWorkingDirectory.directory()
+
+  // A fresh, empty directory of a test's own, in the temporary directory, named by `prefix` and
+  // a `Uuid`; it is left, as the system's other temporary files are, for the system to clear.
+  def scratch(prefix: Text): Text =
+    import temporaryDirectories.javaBaseTemporaryDirectory
+    import strategies.throwUnsafely
+
+    val directory: Path on Linux = temporaryDirectory[Path on Linux] / t"$prefix-${Uuid().show}"
+    directory.create[Directory]()
+    directory.encode
+
+  // A file's text, or nothing where it cannot be read; and a file written, its parents made.
+  def fileText(path: Text): Text = safely(path.as[Path on Linux]).let(Filing.text(_)).or(t"")
+
+  def writeFile(path: Text, text: Text): Unit =
+    safely(path.as[Path on Linux]).let(Filing.replace(_, text))
+
+  // The plain text of a table's cell, where the row has one at that index.
+  def cellText(row: Block.Row, index: Int): Text =
+    row.cells.at(Ordinal.zerary(index)).lay(t"") { (cell: Block.Cell) => Blocks.plain(cell.content) }
+
+  def contents(cell: Optional[Block.Cell]): List[Inline] = cell.lay(Nil)(_.content)
 
   // The sample's model, from the Inspection suite, for the Overlays suite to document.
   @scala.caps.unsafe.untrackedCaptures
@@ -827,7 +854,6 @@ error oops
         import tableStyles.thickTableStyle
         import palettes.solarizedDarkGaugePalette
 
-        val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
 
         Compilation.document(t"$here/doc/markdown.md").let: (doc: Doc) =>
           val renderer = TerminalRenderer(justify = true)
@@ -1111,7 +1137,7 @@ item []:
       . assert(_ == (t"osx-arm64", t"osx-64", t"linux-64", t"linux-aarch64", Unset, Unset))
 
       test(m"a recording is known by its extension or its first bytes; an alignment's text is not"):
-        def bytes(text: Text): Data = Array.unsafeFrozen(text.s.getBytes("US-ASCII").nn)
+        def bytes(text: Text): Data = text.sysData
         val m4a: Data = bytes(t"\u0000\u0000\u0000 ftypM4A ")
 
         ( Aligner.isAudio(t"talk.wav", Array.empty[Byte]), Aligner.isAudio(t"talk.FLAC", Array.empty[Byte]),
@@ -1288,9 +1314,7 @@ item []:
       . assert(_ == 1)
 
       test(m"a document compiled through a cache has the blocks it has without one"):
-        val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
-        val path = java.nio.file.Path.of(s"$here/doc/markdown.md")
-        val text: Text = Text(java.nio.file.Files.readString(path).nn)
+        val text: Text = fileText(t"$here/doc/markdown.md")
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           val plain: Doc = Doc.parse(t"markdown.md", text, checker, true)
@@ -1327,10 +1351,10 @@ item []:
         Output.Prose(List(Block.paragraph(t"prose"), Output.sentinel(0)), Nil)
 
       def directory(): Text =
-        Text(java.nio.file.Files.createTempDirectory("fuel-output").nn.toString)
+        scratch(t"fuel-output")
 
       def objects(output: Text): Int =
-        java.nio.file.Files.list(java.nio.file.Path.of(output.s, "objects")).nn.count.toInt
+        safely((output.as[Path on Linux] / "objects").children.to[List].size).or(0)
 
       test(m"what a compile keeps, the next reads back"):
         val output = directory()
@@ -1381,7 +1405,6 @@ item []:
 
     suite(m"Output"):
       test(m"a compiled document's blocks round-trip through BinTEL as a fragment's output"):
-        val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
 
         Compilation.document(t"$here/doc/markdown.md").lay(t"unreadable"): (doc: Doc) =>
           val fragment: Output.Fragment =
@@ -1421,7 +1444,7 @@ object Util:
 """
 
       val output: Text =
-        Text(java.nio.file.Files.createTempDirectory("fuel-api").nn.toString)
+        scratch(t"fuel-api")
 
       val entries: List[Text] = classpath().cut(t":").filter(_ != t"")
 
@@ -1448,11 +1471,8 @@ object Util:
 
       test(m"the inspection yields a model"):
         api match
-          case api: Api => t"${api.entities.size.toString} entities"
-
-          case error: Throwable =>
-            val frames = error.getStackTrace.nn.take(6).map(_.toString)
-            t"${error.toString}: ${java.lang.String.join("; ", frames*).nn}"
+          case api: Api         => t"${api.entities.size.show} entities"
+          case error: Throwable => error.toString.tt
 
       . assert(_.ends(t"entities"))
 
@@ -1556,7 +1576,6 @@ object Util:
       . assert(_ == (Api.Kind.Given, Api.Kind.Val))
 
       test(m"a dependency jar is walked through the session's symbol table"):
-        val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
         val jar: Text = t"$here/out/fuel/launcher/assembly.dest/out.jar"
 
         val result: Api | Throwable =
@@ -1576,7 +1595,7 @@ object Util:
               mapped.let(_.definition.let(_.result.let(_.qualified))) )
 
           case error: Throwable =>
-            error.toString
+            error.toString.tt
 
       . assert(_ == (true, false, Api.Kind.Class, true, t"scala.Option[B]"))
 
@@ -1609,7 +1628,7 @@ object Util:
               deprecated.has(t"java") && deprecated.has(t"annotation") )
 
           case error: Throwable =>
-            error.toString
+            error.toString.tt
 
       . assert(_ == (true, true, false, t"/api/java.lang.String~getBytes", Unset, true, true))
 
@@ -1632,12 +1651,10 @@ object Util:
         ( m"a dependency jar is walked before a build, in a session on " +
           m"that jar under the project's options" ):
 
-        val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
         val jar: Text = t"$here/out/fuel/launcher/assembly.dest/out.jar"
-        val out: Text = Text(java.nio.file.Files.createTempDirectory("fuel-probe").nn.toString)
+        val out: Text = scratch(t"fuel-probe")
 
-        val path = java.nio.file.Path.of(s"$here/.pyrocosm/fuel/config.tel")
-        val config: Text = Text(java.nio.file.Files.readString(path).nn)
+        val config: Text = fileText(t"$here/.pyrocosm/fuel/config.tel")
 
         val options: List[Text] =
           config.cut(t"\n").filter(_.starts(t"scalac-option ")).map(_.skip(14).trim)
@@ -1709,7 +1726,7 @@ extension (doc: Doc) def titled: String = doc.title
 
       lazy val decorated: Api =
         val output2: Text =
-          Text(java.nio.file.Files.createTempDirectory("fuel-api2").nn.toString)
+          scratch(t"fuel-api2")
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           checker.build(Map(t"Extended.scala" -> extended), output2)
@@ -1771,7 +1788,7 @@ object Exports:
 
       lazy val exported: Api =
         val output3: Text =
-          Text(java.nio.file.Files.createTempDirectory("fuel-api3").nn.toString)
+          scratch(t"fuel-api3")
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           checker.build(Map(t"Exporting.scala" -> exporting), output3)
@@ -1845,7 +1862,7 @@ object Exports:
           api(key).lay(Nil: List[Text]): (entity: Api.Entity) =>
             ApiPages.page(api, entity, Resolver(api, scope), scope, Nil).bind:
               case Block.Table(_, rows, _) =>
-                rows.map { row => Blocks.plain(row.cells.stdlib(1).content) }
+                rows.map(cellText(_, 1))
 
               case _ =>
                 Nil
@@ -1872,7 +1889,7 @@ class Logger() uses Io.out initially, Io.out:
 
       test(m"a uses clause is recorded and written, marking what is used initially"):
         val output4: Text =
-          Text(java.nio.file.Files.createTempDirectory("fuel-api4").nn.toString)
+          scratch(t"fuel-api4")
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           checker.build(Map(t"Capturing.scala" -> capturing), output4)
@@ -2015,7 +2032,7 @@ class Logger() uses Io.out initially, Io.out:
           val scope: Scope = Scope.of(util, Nil)
           val page: List[Block] = ApiPages.page(api0, util, Resolver(api0, scope), scope, Nil)
 
-          def cell(row: Block.Row, index: Int): Text = Blocks.plain(row.cells.stdlib(index).content)
+          def cell(row: Block.Row, index: Int): Text = cellText(row, index)
 
           page.bind:
             case Block.Table(_, rows, _) =>
@@ -2038,7 +2055,7 @@ class Logger() uses Io.out initially, Io.out:
 
             val kinds: List[Text] =
               ApiPages.rows(entity, true, exported, scope, resolver).map: (row: Block.Row) =>
-                Blocks.plain(row.cells.stdlib.head.content)
+                Blocks.plain(contents(row.cells.head))
 
             val signatures: List[Text] =
               ApiPages.page(exported, entity, resolver, scope, Nil).bind:
@@ -2158,7 +2175,6 @@ class Logger() uses Io.out initially, Io.out:
       // The sample with its dependencies, as the daemon models a project: the standard library
       // gives `String` its alias and `List` its subtypes.
       val full: Api =
-        val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
         val jar: Text = t"$here/out/fuel/launcher/assembly.dest/out.jar"
 
         val dependencies: Api | Throwable =
@@ -2172,11 +2188,10 @@ class Logger() uses Io.out initially, Io.out:
 
       // The keys of the sample's hits, in order, each once.
       def keys(text: Text): List[Text] =
-        val hits = full.search(query(text)).hits.stdlib
-        List.from(hits.map(_.entity.key).filter(_.starts(t"sample.")).distinct)
+        full.search(query(text)).hits.map(_.entity.key).filter(_.starts(t"sample.")).distinct
 
       def count(text: Text): Int =
-        full.search(query(text)).hits.stdlib.count(_.entity.key.starts(t"sample."))
+        full.search(query(text)).hits.filter(_.entity.key.starts(t"sample.")).size
 
       suite(m"Parsing"):
         test(m"+List"):
@@ -2299,7 +2314,7 @@ class Logger() uses Io.out initially, Io.out:
         test(m"case class is one keyword; case alone is a case"):
           (query(t"case class").kinds, query(t"case").kinds)
 
-        . assert(_ == (sci.Set(Kind.CaseClass), sci.Set(Kind.Case)))
+        . assert(_ == (Set(Kind.CaseClass), Set(Kind.Case)))
 
         test(m"a modifier keyword"):
           query(t"inline def")
@@ -2309,12 +2324,12 @@ class Logger() uses Io.out initially, Io.out:
         test(m"? is given and ~ is extension"):
           (query(t"?").kinds, query(t"given").kinds, query(t"~").kinds)
 
-        . assert(_ == (sci.Set(Kind.Given), sci.Set(Kind.Given), sci.Set(Kind.Extension)))
+        . assert(_ == (Set(Kind.Given), Set(Kind.Given), Set(Kind.Extension)))
 
         test(m"type is a type or a type parameter"):
           query(t"type").kinds
 
-        . assert(_ == sci.Set(Kind.Type, Kind.TypeParam))
+        . assert(_ == Set(Kind.Type, Kind.TypeParam))
 
         test(m"private warns"):
           query(t"private").warnings.size
@@ -2419,15 +2434,16 @@ class Logger() uses Io.out initially, Io.out:
         import Hierarchy.{Edge, Graph, Node, Role}
 
         def node(key: Text, role: Role): Node =
-          val name: Text = Text(key.s.substring(key.s.lastIndexOf('.') + 1).nn)
-          val prefix: Text = Text(key.s.substring(0, (key.s.length - name.s.length - 1).max(0)).nn)
+          val name: Text = key.cut(t".").last
+          val prefix: Text = key.keep((key.length - name.length - 1).max(0))
           Node(key, name, prefix, key, role)
 
         def laid(graph: Graph): Hierarchy.Layout =
           Hierarchy.layout(graph).or(Hierarchy.Layout(Nil, Nil, Nil, 0, 0))
 
+        // A box the layout must have, which a test fails without.
         def box(layout: Hierarchy.Layout, key: Text): Hierarchy.Box =
-          layout.boxes.stdlib.find(_.node.key == key).get
+          layout.boxes.seek(_.node.key == key).or(panic(m"the layout has no box for $key"))
 
         val chain: Graph =
           val nodes: List[Node] =
@@ -2496,10 +2512,9 @@ class Logger() uses Io.out initially, Io.out:
         test(m"a type with three parents sits beneath their middle"):
           val layout: Hierarchy.Layout = laid(traits)
 
-          val parents: scala.List[Hierarchy.Box] =
-            scala.List(t"t.P", t"t.Q", t"t.R").map(box(layout, _))
+          val parents: List[Hierarchy.Box] = List(t"t.P", t"t.Q", t"t.R").map(box(layout, _))
 
-          val mean: Int = parents.map(_.centre).sum/3
+          val mean: Int = parents.map(_.centre).fold(0)(_ + _)/3
 
           ( parents.map(_.y).distinct.size,
             (box(layout, t"t.T").centre - mean).abs <= 1,
@@ -2521,10 +2536,13 @@ class Logger() uses Io.out initially, Io.out:
 
         test(m"a long edge passes its intermediate layer clear of the box there"):
           val layout: Hierarchy.Layout = laid(skipping)
-          val long: Hierarchy.Route = layout.routes.stdlib.find(_.edge == Edge(t"s.A", t"s.C")).get
           val b: Hierarchy.Box = box(layout, t"s.B")
-          val through: Int = long.points.stdlib(2)._1
-          (long.points.size >= 5, through < b.x || through > b.x + b.w)
+
+          layout.routes.seek(_.edge == Edge(t"s.A", t"s.C")).let: (long: Hierarchy.Route) =>
+            val clear: Boolean = long.points.at(Ordinal.zerary(2)).lay(false): (through, _) =>
+              through < b.x || through > b.x + b.w
+
+            (long.points.size >= 5, clear)
 
         . assert(_ == (true, true))
 
@@ -2536,23 +2554,21 @@ class Logger() uses Io.out initially, Io.out:
             val top: stenography.Designator = stenography.Designator.Top(t"p")
             Api.Entity(top, name, true, template = template, bases = parent.let(List(_)).or(Nil))
 
-          val children: scala.List[Api.Entity] =
-            scala.List(t"C1", t"C2", t"C3", t"C4", t"C5").map(entity(_, t"p.P"))
+          val children: List[Api.Entity] =
+            List(t"C1", t"C2", t"C3", t"C4", t"C5").map(entity(_, t"p.P"))
 
-          val all: scala.List[Api.Entity] =
-            entity(t"P", Unset) :: entity(t"Lone", Unset) :: children
-
-          Api(Map.from(all.map { e => e.key -> e }))
+          val all: List[Api.Entity] = List(entity(t"P", Unset), entity(t"Lone", Unset)) + children
+          Api(all.map { e => e.key -> e }.to[Map])
 
         val sibling: Optional[Graph] = family(t"p.C1").let: (e: Api.Entity) =>
           Hierarchy.of(family, e, Scope.document(Nil))
 
         test(m"three peers are drawn, and the rest noted"):
           sibling.let: (g: Graph) =>
-            ( g.nodes.stdlib.count(_.role == Role.Peer),
-              g.nodes.stdlib.filter(_.role == Role.More).map(_.name) )
+            ( g.nodes.filter(_.role == Role.Peer).size,
+              g.nodes.filter(_.role == Role.More).map(_.name) )
 
-        . assert(_ == (3, scala.List(t"…and 1 more")))
+        . assert(_ == (3, List(t"…and 1 more")))
 
         test(m"the parent's children are peers under it, and the drawing says so"):
           sibling.let(Hierarchy.alt(_))
@@ -2561,7 +2577,9 @@ class Logger() uses Io.out initially, Io.out:
 
         test(m"the SVG links each box in-app, by a relative path, with nothing honeycomb rejects"):
           val svg: Text = sibling.let(Hierarchy.layout(_)).let(Hierarchy.svg(_)).or(t"")
-          val digits: Boolean = svg.s.matches("(?s).*\\s[A-Za-z-]*[0-9][A-Za-z0-9-]*=\".*")
+          // An attribute whose name has a digit in it.
+          val attribute: Text = t"""[ \t\n\r\f][A-Za-z-]*[0-9][A-Za-z0-9-]*=""""
+          val digits: Boolean = unsafely(Regex(attribute)).seek(svg).present
 
           ( svg.contains(t"pyro-locate"),
             svg.contains(t"""href="p.C2""""),
@@ -2574,11 +2592,11 @@ class Logger() uses Io.out initially, Io.out:
 
         test(m"the note of how many more is no box, but ends its parent's line on the right"):
           val layout: Hierarchy.Layout = sibling.let(Hierarchy.layout(_)).or(laid(chain))
-          val right: Int = layout.boxes.stdlib.map { b => b.x + b.w }.max
+          val right: Int = layout.boxes.map { b => b.x + b.w }.fold(0)(_.max(_))
 
-          ( layout.boxes.stdlib.exists(_.node.role == Role.More),
+          ( layout.boxes.exists(_.node.role == Role.More),
             layout.remainders.map(_.text),
-            layout.remainders.stdlib.forall(_.to > right),
+            layout.remainders.all(_.to > right),
             layout.width > right )
 
         . assert(_ == (false, List(t"…and 1 more"), true, true))
@@ -2631,11 +2649,12 @@ class Logger() uses Io.out initially, Io.out:
           api0(t"sample.Doc").let: (entity: Api.Entity) =>
             val scope: Scope = Scope.of(entity, Nil)
             val page: List[Block] = ApiPages.page(api0, entity, Resolver(api0, scope), scope, Nil)
-            val at: Int = page.stdlib.indexWhere { case _: Block.Figure => true; case _ => false }
+            val at: Optional[Ordinal] =
+              page.where { case _: Block.Figure => true; case _ => false }
 
-            val after: Boolean = page.stdlib.lift(at - 1) match
-              case Some(_: Block.Code) => true
-              case _                   => false
+            val after: Boolean = at.let { (at: Ordinal) => page.at(at - 1) }.lay(false):
+              case _: Block.Code => true
+              case _             => false
 
             (after, figures(t"sample.Doc").map { f => Blocks.plain(f.figure.alt) })
 
@@ -2799,10 +2818,11 @@ class Logger() uses Io.out initially, Io.out:
         . assert(_ == cell)
 
         test(m"no signature in the model carries a compiler-made parameter name"):
-          full.entities.values.stdlib.filter(_.own).flatMap(_.declarations.stdlib)
-          . flatMap(_.clauses.stdlib)
+          full.entities.values.filter(_.own).bind(_.declarations)
+          . bind(_.clauses)
           . map(_.qualified)
-          . count(_.contains(t"$$"))
+          . filter(_.contains(t"$$"))
+          . size
 
         . assert(_ == 0)
 
@@ -2836,7 +2856,7 @@ class Logger() uses Io.out initially, Io.out:
 
           def kinds(entity: Api.Entity): List[Text] =
             ApiPages.rows(entity, true, api, scope, Resolver(api, scope)).map: row =>
-              Blocks.plain(row.cells.stdlib.head.content)
+              Blocks.plain(contents(row.cells.head))
 
           (kinds(exported), kinds(paired))
 
@@ -2853,7 +2873,7 @@ class Logger() uses Io.out initially, Io.out:
           val resolver: Resolver = Resolver(api, scope)
 
           ApiPages.rows(entity, true, api, scope, resolver).bind: row =>
-            row.cells.stdlib.head.content.bind:
+            contents(row.cells.head).bind:
               case Inline.Icon(_, alt) => List(alt)
               case _                   => Nil
 
@@ -2869,7 +2889,7 @@ class Logger() uses Io.out initially, Io.out:
           val resolver: Resolver = Resolver(api, scope)
           val row: Block.Row = ApiPages.row(entity, declaration, true, api, scope, resolver)
 
-          val first: Optional[Inline] = row.cells.stdlib.head.content.head
+          val first: Optional[Inline] = contents(row.cells.head).head
 
           first match
             case Inline.Icon(source, alt) => (source.starts(t"<svg"), alt)
@@ -3052,8 +3072,8 @@ class Logger() uses Io.out initially, Io.out:
         . assert(_ == List(t"sample.Doc.parse"))
 
         test(m"a name differing in case is exact"):
-          full.search(query(t"Parse")).hits.stdlib.filter(_.entity.key.starts(t"sample."))
-          . forall(_.exact)
+          full.search(query(t"Parse")).hits.filter(_.entity.key.starts(t"sample."))
+          . all(_.exact)
 
         . assert(_ == true)
 
@@ -3094,9 +3114,9 @@ class Logger() uses Io.out initially, Io.out:
         . assert(_ == List(t"sample.Doc#size", t"sample.Doc#title", t"sample.Util.limit"))
 
         test(m"the search builds quickly and widely"):
-          val start: Long = java.lang.System.nanoTime
+          val start: Instant over Monotonic = monotonic()
           val count: Int = full.search(query(t"+Any")).hits.size
-          ((java.lang.System.nanoTime - start)/1000000L < 2000L, count > 1000)
+          ((monotonic() - start).value < 2.0, count > 1000)
 
         . assert(_ == (true, true))
 
@@ -3108,29 +3128,31 @@ class Logger() uses Io.out initially, Io.out:
         case _                => Nil
 
       test(m"a plain excerpt numbers the line and its neighbours, underlining the span"):
-        val code: Block.Code =
-          codes(Excerpts.plain(text, 3, Block.Note.Style.Erroneous, 5, 11)).stdlib.head
-
-        (code.start, code.lines.size, code.notes.map { n => (n.line, n.start, n.end) })
+        codes(Excerpts.plain(text, 3, Block.Note.Style.Erroneous, 5, 11)).head.let:
+          (code: Block.Code) =>
+            (code.start, code.lines.size, code.notes.map { n => (n.line, n.start, n.end) })
 
       . assert(_ == (2, 3, List((1, 4, 15))))
 
       test(m"an excerpt at a target underlines its occurrence, or the whole line without one"):
-        val found: Block.Code =
-          codes(Excerpts.plainAt(text, 3, t"other.md", Block.Note.Style.Caution)).stdlib.head
+        def spans(code: Optional[Block.Code]): List[(Int, Int)] =
+          code.lay(Nil)(_.notes.map { n => (n.start, n.end) })
 
-        val whole: Block.Code =
-          codes(Excerpts.plainAt(text, 3, t"nowhere", Block.Note.Style.Caution)).stdlib.head
+        val found: Optional[Block.Code] =
+          codes(Excerpts.plainAt(text, 3, t"other.md", Block.Note.Style.Caution)).head
 
-        (found.notes.map { n => (n.start, n.end) }, whole.notes.map { n => (n.start, n.end) })
+        val whole: Optional[Block.Code] =
+          codes(Excerpts.plainAt(text, 3, t"nowhere", Block.Note.Style.Caution)).head
+
+        (spans(found), spans(whole))
 
       . assert(_ == (List((16, 24)), List((0, 31))))
 
       test(m"a Scala excerpt is highlighted and placed by line and column"):
         val source: Text = t"object A:\n  val x: Int = \"no\"\n"
         val (place, blocks) = Excerpts.scala(source, 25, 29, Block.Note.Style.Erroneous)
-        val lines = codes(blocks).stdlib.head.lines.stdlib
-        (place, lines.exists(_.tokens.stdlib.exists(_.accent == Token.Accent.Keyword)))
+        val lines = codes(blocks).head.lay(Nil)(_.lines)
+        (place, lines.exists(_.tokens.exists(_.accent == Token.Accent.Keyword)))
 
       . assert(_ == ((2, 16), true))
 
@@ -3259,7 +3281,7 @@ entry .nowhere   nothing of the sort
         merged.lay(Nil: List[Block]) { (m: (Api, List[Block])) => m(1) }.bind:
           case Block.Diagnostic(tone0, location, message, _, _) if tone0 == tone =>
             val path: Text = location.let(_.path).or(t"?")
-            List(t"$path:${location.let(_.line).or(0).toString}: ${plain(message)}")
+            List(t"$path:${location.let(_.line).or(0).show}: ${plain(message)}")
 
           case _ =>
             Nil
@@ -3333,12 +3355,12 @@ entry .nowhere   nothing of the sort
         case overlay: Overlay =>
           val lines: List[Text] = overlay.problems.bind:
             case Block.Diagnostic(_, location, message, _, _) =>
-              List(t"${location.let(_.line).or(0).toString}: ${plain(message)}")
+              List(t"${location.let(_.line).or(0).show}: ${plain(message)}")
 
             case _ =>
               Nil
 
-          List.from(lines.stdlib.sortBy(_.cut(t":").head.s.toInt))
+          lines.order { (line: Text) => safely(line.cut(t":").head.as[Int]).or(0) }
 
         case diagnostic: Block.Diagnostic => List(t"unread")
 
@@ -3692,14 +3714,24 @@ entry .Doc   a document
             case Inline.Link(Inline.Destination.External(_), _) => true
             case _                                               => false
 
-          val top: Optional[Text] = shown.stdlib.lift(2).collect { case Block.Paragraph(content) => Blocks.plain(content) }.getOrElse(Unset)
-          val links: Int = shown.stdlib.lift(2).collect { case Block.Paragraph(content) => content.stdlib.count(external) }.getOrElse(0)
+          val third: Optional[Block] = shown.at(Ordinal.zerary(2))
+
+          val top: Optional[Text] = third.let:
+            case Block.Paragraph(content) => Blocks.plain(content)
+            case _                        => Unset
+
+          val links: Int = third.lay(0):
+            case Block.Paragraph(content) => content.filter(external).size
+            case _                        => 0
+
           val foot: List[Text] = shown.reverse.keep(2).reverse.map:
             case Block.Heading(3, content, _) => Blocks.plain(content)
             case Block.Listing(_, items)      => t"listing of ${items.size.show}"
             case _                            => t"?"
 
-          (shown.head == page.head, shown.stdlib.lift(1) == page.stdlib.lift(1), top, links, foot, ApiPages.withIssues(page, Nil) == page)
+          val second: Ordinal = Ordinal.zerary(1)
+          val unchanged: Boolean = ApiPages.withIssues(page, Nil) == page
+          (shown.head == page.head, shown.at(second) == page.at(second), top, links, foot, unchanged)
 
       . assert(_ == (true, true, t"Open issues: #12 #15", 2, List(t"Issues", t"listing of 2"), true))
 
@@ -4132,39 +4164,47 @@ define  user interface
       . assert(_ == (List((Tone.Failure, 3)), 2))
 
     suite(m"Latest"):
-      import java.util.concurrent as juc
-      import scala.jdk.CollectionConverters.*
+      import threads.virtualThreads
 
-      // The requests done, in order, with a latch for each request a test waits on; the
-      // first request is held, once begun, until `release` opens.
+      // Whether a promise is kept within ten seconds.
+      def kept(promise: Promise[Unit]): Boolean =
+        safely(supervise(promise.await(10.0*Second))).present
+
+      // The requests done, in order, with a promise for each request a test waits on; the
+      // first request is held, once begun, until `release` is kept.
       final class Recorder(held: Text):
-        val done: juc.ConcurrentLinkedQueue[Text] = juc.ConcurrentLinkedQueue()
-        val begun: juc.CountDownLatch = juc.CountDownLatch(1)
-        val release: juc.CountDownLatch = juc.CountDownLatch(1)
-        val latches: juc.ConcurrentHashMap[Text, juc.CountDownLatch] = juc.ConcurrentHashMap()
+        val done: Atomic.Ref[List[Text]] = Atomic.Ref(Nil)
+        val begun: Promise[Unit] = Promise()
+        val release: Promise[Unit] = Promise()
+        val latches: Atomic.Ref[Map[Text, Promise[Unit]]] = Atomic.Ref(Map())
 
-        def latch(request: Text): juc.CountDownLatch =
-          latches.computeIfAbsent(request, _ => juc.CountDownLatch(1)).nn
+        def latch(request: Text): Promise[Unit] =
+          val fresh: Promise[Unit] = Promise()
+
+          val all: Map[Text, Promise[Unit]] = latches.revise: (all: Map[Text, Promise[Unit]]) =>
+            if all.at(request).present then all else all.define(request, fresh)
+
+          all.at(request).or(fresh)
 
         val latest: Latest[Text] = Latest: (request: Text) =>
           if request == held then
-            begun.countDown()
-            release.await(10, juc.TimeUnit.SECONDS)
+            begun.offer(())
+            kept(release)
 
           // A request which fails, as a search might: the number is not one.
-          if request == t"fail" then java.lang.Integer.parseInt("fail")
-          done.add(request)
-          latch(request).countDown()
+          if request == t"fail" then unsafely(request.as[Int])
+          done.since(_ + List(request))
+          latch(request).offer(())
 
-        def await(request: Text): Boolean = latch(request).await(10, juc.TimeUnit.SECONDS)
-        def list: List[Text] = List.from(done.asScala)
+        def await(request: Text): Boolean = kept(latch(request))
+        def list: List[Text] = done()
 
       test(m"keystrokes made during a search are searched for once, as the last of them"):
         val recorder = Recorder(t"a")
         recorder.latest(t"a")
-        recorder.begun.await(10, juc.TimeUnit.SECONDS)
+        kept(recorder.begun)
         List(t"ab", t"abc", t"abcd", t"abcde").each(recorder.latest(_))
-        recorder.release.countDown()
+        recorder.release.offer(())
         recorder.await(t"abcde")
         recorder.list
 
@@ -4328,11 +4368,10 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
 
     suite(m"Sections"):
       test(m"a fixture is found by the document's section and path before its file name"):
-        val directory = java.nio.file.Files.createTempDirectory("fuel-fixtures").nn
-        val nested = java.nio.file.Files.createDirectories(directory.resolve("modules")).nn
-        java.nio.file.Files.writeString(directory.resolve("logging.scala"), "val shared = 1")
-        java.nio.file.Files.writeString(nested.resolve("logging.scala"), "val own = 1")
-        val regime = Compilation.Regime(fixtures = directory.toString.nn.tt)
+        val directory: Text = scratch(t"fuel-fixtures")
+        writeFile(t"$directory/logging.scala", t"val shared = 1")
+        writeFile(t"$directory/modules/logging.scala", t"val own = 1")
+        val regime = Compilation.Regime(fixtures = directory)
 
         val own: Optional[Text] =
           Compilation.fixture(regime, t"modules", t"logging.md").let(_(1))
@@ -4399,10 +4438,8 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
       . assert(_ == t"modules")
 
       test(m"a section is named as the regime names its directory, and its documents with it"):
-        val directory = java.nio.file.Files.createTempDirectory("fuel-sections").nn
-        val root: Text = directory.resolve("en").nn.toString.nn.tt
-        java.nio.file.Files.createDirectories(directory.resolve("en"))
-        java.nio.file.Files.writeString(directory.resolve("en/intro.md"), "# Intro\n")
+        val root: Text = t"${scratch(t"fuel-sections")}/en"
+        writeFile(t"$root/intro.md", t"# Intro\n")
         val regime = Compilation.Regime(sections = List((t"guide", root)))
         val corpus: Corpus = Compilation.corpus(List(root), Checker.tokenized, regime)
 
@@ -4599,7 +4636,7 @@ document
         case _                                      => Unset
 
       test(m"a schema's definitions, their members and its document's fields are its entities"):
-        (problems.size, List.from(api.entities.keys.stdlib.toList.sortBy(_.s)))
+        (problems.size, api.entities.keys.to[List].sort)
 
       . assert: result =>
           result ==
@@ -4724,7 +4761,7 @@ entry .Channel
       test(m"a search knows a schema's words: a kind, a modifier, and what a field holds"):
         def keys(text: Text): List[Text] = Query.read(text, TelsFormat.vocabulary) match
           case query: Query =>
-            List.from(api.search(query).hits.map(_.entity.key).stdlib.toList.sortBy(_.s))
+            api.search(query).hits.map(_.entity.key).sort
 
           case _            => Nil
 
@@ -4749,7 +4786,7 @@ entry .Channel
         val rows: List[(Optional[Text], Text)] = page.bind:
           case Block.Table(_, rows, _) =>
             rows.map: (row: Block.Row) =>
-              (row.id, Blocks.plain(row.cells.stdlib.last.content))
+              (row.id, Blocks.plain(contents(row.cells.last)))
 
           case _ =>
             Nil
@@ -4820,7 +4857,7 @@ entry .Channel
 
       test(m"the index has every documented entity's key and info, as plain text"):
         Server.publish(Corpus(Nil), api)
-        List.from(fuel.Help.index().entries.stdlib.sortBy(_.key.s).map { entry => (entry.key, entry.info) })
+        fuel.Help.index().entries.order(_.key).map { entry => (entry.key, entry.info) }
 
       . assert(_ == List
           ( (t"sample.Doc", t"one Markdown document, as Doc keeps it"),
@@ -5043,18 +5080,14 @@ entry .Channel
       . assert(_ == (true, true, false))
 
       test(m"a corpus is read in a language: translated where it is, as written where not"):
-        val root: java.nio.file.Path = java.nio.file.Files.createTempDirectory("fuel-tongue").nn
+        val root: Text = scratch(t"fuel-tongue")
+        def write(path: Text, text: Text): Unit = writeFile(t"$root/$path", text)
 
-        def write(path: String, text: String): Unit =
-          val file: java.nio.file.Path = root.resolve(path).nn
-          java.nio.file.Files.createDirectories(file.getParent)
-          java.nio.file.Files.writeString(file, text)
+        write(t"en/intro.md", t"# Getting started\n\nSee [below](#getting-started).\n")
+        write(t"en/other.md", t"# Other\n")
+        write(t"fr/intro.md", t"- # Getting started\n+ # Pour commencer\n\n- See [below](#getting-started).\n+ Voir [plus bas](#getting-started).\n")
 
-        write("en/intro.md", "# Getting started\n\nSee [below](#getting-started).\n")
-        write("en/other.md", "# Other\n")
-        write("fr/intro.md", "- # Getting started\n+ # Pour commencer\n\n- See [below](#getting-started).\n+ Voir [plus bas](#getting-started).\n")
-
-        val base: Text = Text(root.toString)
+        val base: Text = root
 
         val targets: List[Translations.Target] =
           List
@@ -5198,7 +5231,7 @@ entry .Channel
 
       test(m"a translated term has its own name, keywords and definition, and its origin's anchor"):
         glossaire.terms.map: (term: Glossary.Term) =>
-          (term.name, term.slug, term.keywords, term.definition.cut(t"\n").stdlib.head)
+          (term.name, term.slug, term.keywords, term.definition.cut(t"\n").head)
 
       . assert: found =>
           found == List
@@ -5236,7 +5269,7 @@ entry .Channel
       . assert(_ == (List(t"apple", t"interface", t"library"), List(t"library", t"apple", t"interface")))
 
       test(m"a term the translation has no entry for is the term as it is defined"):
-        val partial: Text = glossed.cut(t"define interface").stdlib.head
+        val partial: Text = glossed.cut(t"define interface").head
         GlossaryTranslations.foreign(t"fr/glossary.tel", partial, defined).terms.map(_.name)
 
       . assert(_ == List(t"bibliothèque", t"interface", t"apple"))
