@@ -74,6 +74,8 @@ object Mirror:
     import soundness.collationComparable
     import collations.codepointCollation
 
+    // The Markdown tree holds a node's children as varargs, a standard `Seq`, which only
+    // `List.from` reads as a Soundness list; so too in `pair`.
     def recur(node: Prose): List[Text] = node match
       case Prose.Code(code)                       => List(t"`$code`")
       case Prose.Emphasis(children*)              => List.from(children).bind(recur)

@@ -47,10 +47,10 @@ import stenography.Designator
 object Locator:
   def apply(text: Text): Locator =
     def recur(index: Int, start: Int, parent: Optional[Locator]): Locator =
-      def next: Text = text.s.substring(start, index).nn.tt
+      def next: Text = text.skip(start).keep(index - start)
 
-      if index >= text.s.length then Locator(parent, next)
-      else text.s.charAt(index) match
+      if index >= text.length then Locator(parent, next)
+      else text.at(Ordinal.zerary(index)) match
         case '.' => recur(index + 1, index + 1, Locator(parent, next, false))
         case '#' => recur(index + 1, index + 1, Locator(parent, next, true))
         case _   => recur(index + 1, start, parent)

@@ -189,6 +189,7 @@ object Translation:
 
   // The edits which turn one sequence of lines into another, as runs.
   private[fuel] def hunks(left: List[Text], right: List[Text]): List[Run] =
+    // dissonance's `Diff` holds its edits as varargs, a standard `Seq`, read by `List.from`.
     val edits: List[Edit[Text]] = List.from(diff(left.to[Sequence], right.to[Sequence]).edits)
 
     // `removed` and `added` are the change being gathered, and `done` the runs before it, each

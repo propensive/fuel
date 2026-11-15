@@ -121,6 +121,7 @@ object Inspection:
 
       . protect:
         reading:
+          // The inspector, the compiler's, takes the standard library's lists of strings.
           sti.TastyInspector.inspectAllTastyFiles
             ( tastyFiles.stdlib.map(_.s), jars.stdlib.map(_.s), classpath.stdlib.map(_.s) )
             ( inspector )
@@ -326,6 +327,7 @@ object Inspection:
 
       safely:
         reading:
+          // The compiler's trees hold an optional right-hand side as the standard `Option`.
           symbol.tree match
             case DefDef(_, _, _, Some(rhs)) => target(rhs).let(designator(_))
             case ValDef(_, _, Some(rhs))    => target(rhs).let(designator(_))
