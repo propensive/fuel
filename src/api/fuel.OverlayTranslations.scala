@@ -161,18 +161,18 @@ object OverlayTranslations:
             val depth: Int = indent(head)
             val pad: String = spaces(depth)
 
-            def beneath(run: Prose, first: sci.Vector[String], last: sci.Vector[String])
+            def beneath(run: Prose, first: sci.Vector[String], indent: Int = depth + 4)
             :   sci.List[(Int, sci.Vector[String])] =
 
               val count: Int = Translation.split(run.text).size
-              val body: sci.Vector[String] = first ++ set(marked(run), depth + 4) ++ last
+              val body: sci.Vector[String] = first ++ set(marked(run), indent)
 
               (site -> body) :: (1 until count).toList.map: (offset: Int) =>
                 (site + offset) -> sci.Vector[String]()
 
             runs.find(_.own) match
               case Some(run) =>
-                if !run.inline then beneath(run, sci.Vector(), sci.Vector())
+                if !run.inline then beneath(run, sci.Vector())
                 else
                   sci.List
                     ( (site - 1) ->
@@ -189,9 +189,18 @@ object OverlayTranslations:
                 val entry: sci.Vector[String] =
                   if info.isEmpty then sci.Vector(head) else sci.Vector(s"${pad}entry $name")
 
+                // A detail written beneath the entry's line stays there unless the entry's
+                // `info` moves beneath it too, when the detail follows it, beneath `detail`:
+                // nothing may follow a source atom in its compound.
                 detail match
-                  case Some(run) => ((site - 1) -> entry) :: beneath(run, sci.Vector(), block)
-                  case None      => sci.List((site - 1) -> (entry ++ block))
+                  case Some(run) =>
+                    if info.isEmpty then ((site - 1) -> entry) :: beneath(run, sci.Vector())
+                    else
+                      ((site - 1) -> (entry ++ block)) ::
+                        beneath(run, sci.Vector(s"$pad  detail"), depth + 6)
+
+                  case None =>
+                    sci.List((site - 1) -> (entry ++ block))
 
         sci.Map.from(written)
 

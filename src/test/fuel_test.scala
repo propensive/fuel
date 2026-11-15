@@ -5300,10 +5300,22 @@ entry .Channel
 
       . assert(_ == List((t"fr/glossary.tel", 3, Tone.Warning)))
 
+      val beside: Text = t"base sample\n\nentry .Text   a summary\n    Markdown about `Text`.\nentry .size   its size\n"
+
       test(m"an overlay's translation is the overlay, its prose to be translated"):
         OverlayTranslations.generate(overlay)
 
       . assert(_ == untranslated)
+
+      test(m"an entry's info on its line and its detail beneath it are each beneath a keyword"):
+        OverlayTranslations.generate(beside)
+
+      . assert(_ == t"base sample\n\nentry .Text\n  info\n      - a summary\n  detail\n      - Markdown about `Text`.\nentry .size\n  info\n      - its size\n")
+
+      test(m"the translation of an entry with its info on its line is an overlay"):
+        OverlayTranslations.generate(beside).let { (text: Text) => places(OverlayTranslations.check(t"sample.fr.tel", text, beside)) }
+
+      . assert(_ == List((t"sample.fr.tel", 5, Tone.Warning)))
 
       test(m"an overlay's translation which nobody has translated is one caution"):
         places(OverlayTranslations.check(t"sample.fr.tel", untranslated, overlay))
