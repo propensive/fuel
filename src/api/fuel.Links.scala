@@ -133,19 +133,42 @@ object Links:
         if apis.isEmpty then report(Tone.Warning, message) else failure(message)
 
   // A URL fetched: what is wrong with it, or nothing. Only HTTP is fetched; a `mailto:` or
-  // another scheme is taken as it is. Redirects are followed, as far as telekinesis follows
-  // them; telekinesis sets no limit on how long a server may take to answer.
+  // another scheme is taken as it is. Telekinesis sets no limit on how long a server may take to
+  // answer, so the fetch runs as a task which is awaited for twenty seconds at most, and
+  // cancelled if it has not answered by then.
   private def fetch(url: Text): Optional[Text] =
     if !url.starts(t"http://") && !url.starts(t"https://") then Unset else
-      import errorDiagnostics.emptyDiagnostics
-      import httpBackends.javaNetHttp
-      import internetAccess.online
-      import logging.silentLogging
+      import probates.cancelProbate
+      import threads.virtualThreads
 
+      val late: Text = t"`$url` did not answer within 20 seconds."
+
+      // An `Async.Error` the supervision raises itself is taken, as the await's is, as lateness.
       recover:
-        case error: Url.Error     => t"`$url` is not a valid URL."
-        case error: Connect.Error => t"`$url` could not be fetched: ${error.message}"
+        case error: Async.Error => late
 
       . protect:
-        val code: Int = url.as[HttpUrl].fetch().status.code
-        if code < 400 then Unset else t"`$url` answered ${code.show}."
+        supervise:
+          val task = async(answer(url))
+
+          recover:
+            case error: Async.Error =>
+              task.cancel()
+              late
+
+          . protect(task.await(20.0*Second))
+
+  // What is wrong with an HTTP URL, as its answer says, or nothing. Redirects are followed, as
+  // far as telekinesis follows them.
+  private def answer(url: Text): Optional[Text] =
+    import httpBackends.javaNetHttp
+    import internetAccess.online
+    import logging.silentLogging
+
+    recover:
+      case error: Url.Error     => t"`$url` is not a valid URL."
+      case error: Connect.Error => t"`$url` could not be fetched: ${error.message}"
+
+    . protect:
+      val code: Int = url.as[HttpUrl].fetch().status.code
+      if code < 400 then Unset else t"`$url` answered ${code.show}."
