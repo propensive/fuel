@@ -145,7 +145,7 @@ object Lattice:
     def heads(shapes: scala.List[Api.Shape]): Unit =
       shapes.foreach: shape => head(api.expand(shape)).let(id(_))
 
-    val entities: scala.List[Api.Entity] = api.entities.values.toList
+    val entities: scala.List[Api.Entity] = api.entities.values.stdlib
 
     // Each template's direct parents, as written, by the id of the type; `java.lang.Object` is
     // `AnyRef`.

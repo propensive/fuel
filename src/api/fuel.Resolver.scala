@@ -199,7 +199,7 @@ extends Linker:
     val keys: sci.Set[Text] = reachable
 
     def exported: Boolean =
-      api.exporters.get(applicable.key).exists: (forwarders: List[Api.Entity]) =>
+      api.exporters.stdlib.get(applicable.key).exists: (forwarders: List[Api.Entity]) =>
         forwarders.exists(_.parent.lay(false) { (p: Locator) => keys.contains(Api.key(p)) })
 
     api.implicitly(applicable) || applicable.importFrom.lay(false)(keys.contains(_)) || exported
@@ -227,13 +227,13 @@ extends Linker:
     if designator.parent.present then Nil else
       val keys: sci.Set[Text] = reachable
 
-      api.byName.getOrElse(designator.name, Nil).filter: (entity: Api.Entity) =>
+      api.byName.stdlib.getOrElse(designator.name, Nil).filter: (entity: Api.Entity) =>
         val extension: Boolean = entity.declarations.exists(_.kind == Api.Kind.Extension)
 
         val inScope: Boolean =
           entity.parent.lay(false) { (p: Locator) => keys.contains(Api.key(p)) }
 
-        extension && (api.unimported.contains(entity.key) || inScope)
+        extension && (api.unimported.stdlib.contains(entity.key) || inScope)
 
   // A locator rebased under a prefix: its first segment becomes a child of the prefix.
   private def under(prefix: Locator, designator: Locator): Locator =

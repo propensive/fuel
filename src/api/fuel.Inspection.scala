@@ -88,10 +88,10 @@ object Inspection:
     clashes0.clear()
     result
 
-  // The entities collected, as a standard map.
-  private def gathered(map: juc.ConcurrentHashMap[Text, Api.Entity]): sci.Map[Text, Api.Entity] =
+  // The entities collected, as a map.
+  private def gathered(map: juc.ConcurrentHashMap[Text, Api.Entity]): Map[Text, Api.Entity] =
     val entries = map.entrySet.nn.iterator.nn.asScala
-    sci.Map.from(entries.map { entry => (entry.getKey.nn, entry.getValue.nn) })
+    Map.from(entries.map { entry => (entry.getKey.nn, entry.getValue.nn) })
 
   // The entities of every `.tasty` beneath the `directories` (the project's own, marked so)
   // and of every `jars` entry.

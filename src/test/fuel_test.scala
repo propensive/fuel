@@ -2108,7 +2108,7 @@ class Logger() uses Io.out initially, Io.out:
 
         val scala: Api.Entity = named(t"scala", t"Double")
         val java: Api.Entity = named(t"java.lang", t"Double")
-        val api: Api = Api(sci.Map(scala.key -> scala, java.key -> java))
+        val api: Api = Api(Map(scala.key -> scala, java.key -> java))
         destination(api, Nil, t"#Double")
 
       . assert(_ == t"/api/scala.Double")
@@ -2523,8 +2523,8 @@ class Logger() uses Io.out initially, Io.out:
           val layout: Hierarchy.Layout = laid(skipping)
           val long: Hierarchy.Route = layout.routes.stdlib.find(_.edge == Edge(t"s.A", t"s.C")).get
           val b: Hierarchy.Box = box(layout, t"s.B")
-          val through: Int = long.points(2)._1
-          (long.points.length >= 5, through < b.x || through > b.x + b.w)
+          val through: Int = long.points.stdlib(2)._1
+          (long.points.size >= 5, through < b.x || through > b.x + b.w)
 
         . assert(_ == (true, true))
 
@@ -2542,7 +2542,7 @@ class Logger() uses Io.out initially, Io.out:
           val all: scala.List[Api.Entity] =
             entity(t"P", Unset) :: entity(t"Lone", Unset) :: children
 
-          Api(all.map { e => e.key -> e }.toMap)
+          Api(Map.from(all.map { e => e.key -> e }))
 
         val sibling: Optional[Graph] = family(t"p.C1").let: (e: Api.Entity) =>
           Hierarchy.of(family, e, Scope.document(Nil))
@@ -2799,7 +2799,7 @@ class Logger() uses Io.out initially, Io.out:
         . assert(_ == cell)
 
         test(m"no signature in the model carries a compiler-made parameter name"):
-          full.entities.values.toList.filter(_.own).flatMap(_.declarations.stdlib)
+          full.entities.values.stdlib.filter(_.own).flatMap(_.declarations.stdlib)
           . flatMap(_.clauses.stdlib)
           . map(_.qualified)
           . count(_.contains(t"$$"))
@@ -2832,7 +2832,7 @@ class Logger() uses Io.out initially, Io.out:
                 template = Api.Declaration(Api.Kind.CaseClass),
                 overloads = List(Api.Declaration(Api.Kind.Object)) )
 
-          val api: Api = Api(sci.Map(exported.key -> exported, paired.key -> paired))
+          val api: Api = Api(Map(exported.key -> exported, paired.key -> paired))
 
           def kinds(entity: Api.Entity): List[Text] =
             ApiPages.rows(entity, true, api, scope, Resolver(api, scope)).map: row =>
@@ -2849,7 +2849,7 @@ class Logger() uses Io.out initially, Io.out:
           val entity: Api.Entity =
             Api.Entity(Designator.Top(t"p"), t"Doc", true, term, template)
 
-          val api: Api = Api(sci.Map(entity.key -> entity))
+          val api: Api = Api(Map(entity.key -> entity))
           val resolver: Resolver = Resolver(api, scope)
 
           ApiPages.rows(entity, true, api, scope, resolver).bind: row =>
@@ -2865,7 +2865,7 @@ class Logger() uses Io.out initially, Io.out:
           val entity: Api.Entity =
             Api.Entity(Designator.Top(t"p"), t"Doc", true, template = declaration)
 
-          val api: Api = Api(sci.Map(entity.key -> entity))
+          val api: Api = Api(Map(entity.key -> entity))
           val resolver: Resolver = Resolver(api, scope)
           val row: Block.Row = ApiPages.row(entity, declaration, true, api, scope, resolver)
 
@@ -4456,7 +4456,7 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
             format = t"toy" )
 
       val commands: Api =
-        Api(sci.Map(tool.key -> tool, compile.key -> compile, force.key -> force), Commands)
+        Api(Map(tool.key -> tool, compile.key -> compile, force.key -> force), Commands)
         . relinked
 
       // Scala's own: a package named as the format is, and a method named `/` in it.
@@ -4465,7 +4465,7 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
       val slash: Api.Entity =
         Api.Entity(Designator.Top(t"toy"), t"/", true, Api.Declaration(Api.Kind.Def))
 
-      val scala: Api = Api(sci.Map(pack.key -> pack, slash.key -> slash)).relinked
+      val scala: Api = Api(Map(pack.key -> pack, slash.key -> slash)).relinked
       val apis: Apis = Apis(List(scala, commands))
 
       def path(destination: Optional[Inline.Destination]): Optional[Text] = destination.let:
@@ -4599,7 +4599,7 @@ document
         case _                                      => Unset
 
       test(m"a schema's definitions, their members and its document's fields are its entities"):
-        (problems.size, List.from(api.entities.keys.toList.sortBy(_.s)))
+        (problems.size, List.from(api.entities.keys.stdlib.toList.sortBy(_.s)))
 
       . assert: result =>
           result ==
@@ -4816,7 +4816,7 @@ entry .Channel
         Api.Entity(Designator.Top(t"sample"), t"Quiet", true, Api.Declaration(Api.Kind.Object))
 
       val api: Api =
-        Api(sci.Map(documented.key -> documented, member.key -> member, silent.key -> silent))
+        Api(Map(documented.key -> documented, member.key -> member, silent.key -> silent))
 
       test(m"the index has every documented entity's key and info, as plain text"):
         Server.publish(Corpus(Nil), api)
@@ -4829,7 +4829,7 @@ entry .Channel
       test(m"the index is made again for a new edition"):
         Server.publish(Corpus(Nil), api)
         val before: Long = fuel.Help.index().edition
-        Server.publish(Corpus(Nil), Api(sci.Map(documented.key -> documented)))
+        Server.publish(Corpus(Nil), Api(Map(documented.key -> documented)))
         val after: fuel.Help.Message.Index = fuel.Help.index()
         (after.edition > before, after.entries.map(_.key))
 

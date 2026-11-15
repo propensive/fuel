@@ -32,6 +32,7 @@
                                                                                                   */
 package fuel
 
+// `Query.Word` holds its kinds in a standard set, which is its own to change.
 import scala.collection.immutable as sci
 
 import soundness.{Format as _, Language as _, Query as _, Token as _, *}
@@ -77,17 +78,17 @@ object TelsFormat extends Format:
   private val modifiers: List[Text] =
     List(t"optional", t"required", t"repeatable", t"irrepeatable", t"key")
 
-  override val vocabulary: sci.Map[Text, Query.Word] =
+  override val vocabulary: Map[Text, Query.Word] =
     val kinds: List[Kind] =
       List
         ( Kind.Schema, Kind.Document, Kind.Record, Kind.Select, Kind.Scalar, Kind.Field,
           Kind.Variant )
 
-    val words: scala.List[(Text, Query.Word)] =
-      kinds.stdlib.toList.map { (kind: Kind) => (kind.keyword, Query.Word(sci.Set(kind))) }
-      ++ modifiers.stdlib.toList.map { (word: Text) => (word, Query.Word(modifier = word)) }
+    val words: List[(Text, Query.Word)] =
+      kinds.map { (kind: Kind) => (kind.keyword, Query.Word(sci.Set(kind))) }
+      + modifiers.map { (word: Text) => (word, Query.Word(modifier = word)) }
 
-    sci.Map.from(words)
+    words.to[Map]
 
   // The glyph of the Scala keyword a kind is most like, until it has a drawing of its own: a
   // schema's is a package's, a record's a class's, a select's an enum's, a variant's a case's,
@@ -125,48 +126,35 @@ object TelsFormat extends Format:
   // A schema is documented by its overlay's own `info` and `detail`, as a package is.
   override def documentable(entity: Api.Entity): Boolean = entity.parent.present
 
-  // The line each definition, and each member of one, is declared on, found by reading the
-  // file's lines: a definition's is the unindented line which declares it, and a member's the
-  // first line beneath it, one level in, which declares a field or a variant of its keyword;
-  // the document's fields are those beneath `document`.
-  private class Lines(text: Text):
-    private val definitions: scala.collection.mutable.HashMap[Text, Int] =
-      scala.collection.mutable.HashMap()
+  // The line each definition, and each member of one, is declared on, as the schema's TEL,
+  // read with its positions, places it: a definition's is that of the first `record`, `select`
+  // or `scalar` which names it (and the document's, named by nothing, that of `document`), and
+  // a member's that of the first `field` or `variant` of its name beneath its definition.
+  private case class Lines(definitions: Map[Text, Int], members: Map[(Text, Text), Int]):
+    def definition(name: Text): Optional[Int] = definitions.at(name)
+    def member(owner: Text, name: Text): Optional[Int] = members.at((owner, name))
 
-    private val members: scala.collection.mutable.HashMap[(Text, Text), Int] =
-      scala.collection.mutable.HashMap()
+  private object Lines:
+    def apply(tel: Tel): Lines =
+      def named(compound: Tel.Compound): Text = Compounds.inline(compound).head.or(t"")
 
-    locally:
-      var owner: Optional[Text] = Unset
+      // Each definition: its name, its compound and its path.
+      val owners: List[(Text, Tel.Compound, List[Text])] =
+        Compounds.paths(Nil, tel.childCompounds.to[List]).bind: (compound, path) =>
+          compound.keyword match
+            case t"record" | t"select" | t"scalar" => List((named(compound), compound, path))
+            case t"document"                       => List((t"", compound, path))
+            case _                                 => Nil
 
-      text.cut(t"\n").indexed.each: (line: Text, index: Ordinal) =>
-        val words: List[Text] = line.trim.cut(t" ").filter(_ != t"")
-        val keyword: Text = words.head.or(t"")
-        val name: Text = words.skip(1).head.or(t"")
+      val members: List[((Text, Text), Int)] = owners.bind: (owner, compound, path) =>
+        Compounds.paths(path, Compounds.children(compound)).bind: (member, at) =>
+          if member.keyword != t"field" && member.keyword != t"variant" then Nil
+          else List(((owner, named(member)), Compounds.line(tel, at)))
 
-        if !line.starts(t" ") then
-          keyword match
-            case t"record" | t"select" | t"scalar" =>
-              owner = name
-              if !definitions.contains(name) then definitions(name) = index.n1
+      val definitions: List[(Text, Int)] =
+        owners.map { (name, _, path) => (name, Compounds.line(tel, path)) }
 
-            case t"document" =>
-              owner = t""
-              if !definitions.contains(t"") then definitions(t"") = index.n1
-
-            case t"" =>
-              ()
-
-            case _ =>
-              owner = Unset
-
-        else if line.starts(t"  ") && !line.starts(t"   ") then
-          owner.let: (owner: Text) =>
-            if (keyword == t"field" || keyword == t"variant") && !members.contains((owner, name))
-            then members((owner, name)) = index.n1
-
-    def definition(name: Text): Optional[Int] = definitions.get(name).getOrElse(Unset)
-    def member(owner: Text, name: Text): Optional[Int] = members.get((owner, name)).getOrElse(Unset)
+      Lines(definitions.deduplicate(_(0)).to[Map], members.deduplicate(_(0)).to[Map])
 
   // What a description says, as documentation: its first sentence — of its first paragraph, as
   // one line — and the whole of it, where it says more than that.
@@ -179,8 +167,9 @@ object TelsFormat extends Format:
 
         val paragraph: Text = first.cut(t"\n").map(_.trim).filter(_ != t"").join(t" ")
 
-        val end: Int = paragraph.s.indexOf(". ")
-        val sentence: Text = if end < 0 then paragraph else paragraph.keep(end + 1)
+        val sentence: Text = paragraph.cut(t". ") match
+          case first :: _ :: _ => t"$first."
+          case _               => paragraph
         val whole: Boolean = sentence == paragraph && paragraph == text
         val detail: Optional[Text] = if whole then Unset else text
         Api.Entry(info = sentence, detail = detail, file = path, line = line)
@@ -192,43 +181,45 @@ object TelsFormat extends Format:
 
   // A schema read from its file: its API, or what is wrong with it.
   def read(path: Text, text: Text): (Optional[Api], List[Block]) =
-    import strategies.throwUnsafely
     import parsing.trackPositions
 
-    try
-      val tel: Tel = text.read[Tel]
-
-      val faults: Faults =
-        validate[Tel.Focus](Faults()):
-          case error: Tel.Error => accrual + (error, prior.lay(Span.empty)(_.span))
-
-        . protect(Tel.Type.assign(tel, Tels.Axiom.tels))
-
-      if !faults.items.nil then
-        val problems: List[Block] = faults.items.map: (error, span) =>
-          Block.Diagnostic.of(error, path, text, if span.exists then span else Unset)
-
+    recover:
+      case error: Tel.Error =>
         val none: Optional[Api] = Unset
-        (none, problems)
-      else
-        val api: Api = model(path, text, Tels.Validation.validate(tel.as[Tels]))
-        val none: List[Block] = Nil
-        (api, none)
+        (none, List(Block.Diagnostic.of(error, path, text)))
 
-    catch case error: Tel.Error =>
-      val problem: List[Block] = List(Block.Diagnostic.of(error, path, text))
-      (Unset, problem)
+    . protect:
+        val tel: Tel = text.read[Tel]
+
+        val faults: Faults =
+          validate[Tel.Focus](Faults()):
+            case error: Tel.Error => accrual + (error, prior.lay(Span.empty)(_.span))
+
+          . protect(Tel.Type.assign(tel, Tels.Axiom.tels))
+
+        if !faults.items.nil then
+          val problems: List[Block] = faults.items.map: (error, span) =>
+            Block.Diagnostic.of(error, path, text, if span.exists then span else Unset)
+
+          val none: Optional[Api] = Unset
+          (none, problems)
+        else
+          val api: Api = model(path, tel, Tels.Validation.validate(tel.as[Tels]))
+          val none: List[Block] = Nil
+          (api, none)
 
   // The types every schema has, which no schema declares.
   private val builtins: List[Text] =
     List(t"String", t"Identifier", t"TypeName", t"Sigil", t"Flag")
 
-  // A schema as an API.
-  def model(path: Text, text: Text, schema: Tels): Api =
-    val lines: Lines = Lines(text)
+  // A schema as an API, from its TEL as it was read, with its positions.
+  def model(path: Text, tel: Tel, schema: Tels): Api =
+    val lines: Lines = Lines(tel)
     val root: Locator = Locator(Unset, schema.name)
     val scalars: List[Tels.ScalarDefinition] =
-      schema.scalars.to[List].filter { (scalar: Tels.ScalarDefinition) => !builtins.has(scalar.name) }
+      schema.scalars.to[List].filter: (scalar: Tels.ScalarDefinition) =>
+        !builtins.has(scalar.name)
+
     val records: List[Tels.RecordDefinition] = schema.records.to[List]
     val selects: List[Tels.SelectDefinition] = schema.selects.to[List]
     val named: List[Text] = records.map(_.name) + selects.map(_.name) + scalars.map(_.name)
@@ -413,14 +404,14 @@ object TelsFormat extends Format:
           format     = id )
 
     val all: List[Api.Entity] = top :: definitions + fields
-    Api(sci.Map.from(all.stdlib.toList.map { (entity: Api.Entity) => (entity.key, entity) }), this)
+    Api(all.map { (entity: Api.Entity) => (entity.key, entity) }.to[Map], this)
 
   // Several schemas' APIs as one, in the order they were read; a schema named as an earlier
   // one is, is left out, and named for the caller to report.
   def combine(apis: List[Api]): (Api, List[Text]) =
-    apis.stdlib.foldLeft((Api(sci.Map(), this), Nil: List[Text])): (state, api) =>
+    apis.fold((Api(Map(), this), List[Text]())): (state: (Api, List[Text]), api: Api) =>
       val (whole, clashes) = state
-      val repeated: List[Text] = api.roots.map(_.key).filter(whole.entities.contains(_))
+      val repeated: List[Text] = api.roots.map(_.key).filter(whole.entities.at(_).present)
 
-      if repeated.nil then (whole.copy(entities = whole.entities ++ api.entities), clashes)
+      if repeated.nil then (whole.copy(entities = whole.entities + api.entities), clashes)
       else (whole, clashes + repeated)

@@ -89,7 +89,7 @@ object Help:
 
       // Every format's entities, each by its address.
       val entries: List[Entry] = apis.all.bind: (api: Api) =>
-        api.entities.values.to(List).bind: (entity: Api.Entity) =>
+        api.entities.values.bind: (entity: Api.Entity) =>
           entity.doc.let(_.info).lay(Nil: List[Entry]): (info: Text) =>
             val standard: List[Locator] = api.format.standard(Server.standard)
             val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Nil), standard)

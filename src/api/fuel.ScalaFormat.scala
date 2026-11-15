@@ -115,10 +115,10 @@ object ScalaFormat extends Format:
           val these: List[(Api.Entity, Api.Declaration)] =
             extended.filter: pair => clauses(pair(1)) == key
 
-          val first: Api.Declaration = these.stdlib.head(1)
-          val clause: Block = Signatures.line(Signatures.group(first.group, api, scope))
-          val entries: List[Block.Row] = these.map: (m, d) => row(m, d, true)
-          clause :: ApiPages.table(Phrases.name(), Phrases.signature(), entries)
+          these.head.lay(List[Block]()): (first: (Api.Entity, Api.Declaration)) =>
+            val clause: Block = Signatures.line(Signatures.group(first(1).group, api, scope))
+            val entries: List[Block.Row] = these.map: (m, d) => row(m, d, true)
+            clause :: ApiPages.table(Phrases.name(), Phrases.signature(), entries)
 
       ApiPages.section(page, declaration, ofType, plain, hierarchy, groups)
 
@@ -196,9 +196,8 @@ object ScalaFormat extends Format:
           runs(entity.extensions).bind: (first: Api.Applicable, run: List[Api.Applicable]) =>
             val these: List[Block.Row] = run.bind: (e: Api.Applicable) =>
               api(e.key).lay(Nil: List[Block.Row]): (member: Api.Entity) =>
-                member.declarations.stdlib.lift(e.index) match
-                  case Some(d) => List(row(member, d, false))
-                  case None    => Nil
+                member.declarations.skip(e.index).head.lay(List[Block.Row]()):
+                  (d: Api.Declaration) => List(row(member, d, false))
 
             source(first) + ApiPages.table(Phrases.name(), Phrases.signature(), these)
 
@@ -259,7 +258,7 @@ private object Syntax0:
     // A given object's type is its first parent.
     val provided: List[stenography.Syntax] =
       if declaration.kind == Api.Kind.Given && declaration.result.absent && !declaration.parents.nil
-      then List(stenography.Syntax.Symbolic(t": "), declaration.parents.stdlib.head)
+      then List(stenography.Syntax.Symbolic(t": ")) + declaration.parents.keep(1)
       else Nil
 
     stenography.Syntax.Compound(declaration.clauses + result + provided)

@@ -345,7 +345,7 @@ final class Dashboard(audience: Audience = Audience()):
         val here: Optional[Text] = current.let: (entity: Api.Entity) =>
           if entity.format == api.format.id then entity.key else Unset
 
-        if api.entities.isEmpty then Nil
+        if api.entities.nil then Nil
         else
           List
             ( Block.Heading(3, Inline.text(api.format.title())), ApiPages.tree(api, here, locale) )

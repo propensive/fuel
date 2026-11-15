@@ -447,7 +447,7 @@ private def sync
       val count: Text = t"${state.issues.size.show} open issues, ${affecting.size.show} affect the API"
       Out.println(t"fuel: ${state.target}: $count")
 
-    if Server.api.entities.isEmpty then
+    if Server.api.entities.nil then
       Out.println(t"fuel: no API has been compiled; the issues are attached by the next fuel compile")
 
     unresolved.each: (number: Int, name: Text) =>
@@ -617,7 +617,7 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
     // entities the API has, which decides what links.
     def environment(sources: Text, apis: Apis): Text =
       val addresses: scala.List[Text] =
-        apis.all.stdlib.toList.flatMap(_.entities.values.map(_.address)).sortBy(_.s)
+        apis.all.stdlib.toList.flatMap(_.entities.values.map(_.address).stdlib).sortBy(_.s)
 
       val entities: Text = Digests.of(List.from(addresses).join(t"\n"))
       val mode: Text = if config.session then t"session" else t"single"
@@ -768,7 +768,7 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
       val output: Text = config.output.or(t"")
       Out.println(t"fuel: wrote $output: ${kept.show} kept, ${compiled.show} compiled")
 
-    if !api.entities.isEmpty then
+    if !api.entities.nil then
       val own: Int = api.entities.values.count(_.own)
       val documented: Int = api.entities.values.count: e => e.own && e.doc.present
       val counts: Text = t"${own.show} of the project's own, ${documented.show} documented"
@@ -1096,7 +1096,7 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
   val hashed: Text =
     Digests.of((sources + schemaTexts).bind { (path: Text, text: Text) => List(path, text) }*)
 
-  val others: List[Api] = if schemas.entities.isEmpty then Nil else List(schemas)
+  val others: List[Api] = if schemas.entities.nil then Nil else List(schemas)
 
   // The API as each language reads it: every overlay which has a translation — the language's
   // own or a fallback's — read as that says, and merged as the overlays were. What is wrong
@@ -1119,7 +1119,7 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
 
       val scala: Api = ScalaFormat.decorate(documentedIn(inspected))
       val tels: Api = TelsFormat.decorate(documentedIn(combined))
-      val schemas: List[Api] = if tels.entities.isEmpty then Nil else List(tels)
+      val schemas: List[Api] = if tels.entities.nil then Nil else List(tels)
       (tongue, Apis(scala :: schemas))
 
   (Apis(api :: others), hashed, spoken)
@@ -1157,7 +1157,7 @@ private def rendered
 
   // Every format's own entities, Scala's first, each kept by its address.
   val own: scala.List[Api.Entity] = apis.all.stdlib.toList.flatMap: (api: Api) =>
-    api.entities.values.filter(_.own).toList.sortBy(_.key.s)
+    api.entities.values.filter(_.own).stdlib.sortBy(_.key.s)
 
   progress.plan(Progress.Phase.Pages, own.size)
 

@@ -130,12 +130,12 @@ object Query:
   extends soundness.Error(reason.message)
 
   // A query, or what is wrong with it.
-  def read(text: Text, vocabulary: sci.Map[Text, Word] = sci.Map()): Query | Error =
+  def read(text: Text, vocabulary: Map[Text, Word] = Map()): Query | Error =
     try parse(text, vocabulary) catch case error: Error => error
 
   // The text as tokens, for a field to show it coloured as it is typed: sigils as symbols,
   // keywords as keywords, types as types, names as terms.
-  def tokens(text: Text, vocabulary: sci.Map[Text, Word] = sci.Map()): List[Token] =
+  def tokens(text: Text, vocabulary: Map[Text, Word] = Map()): List[Token] =
     val s: String = text.s
     val length: Int = s.length
     val tokens: scm.ListBuffer[Token] = scm.ListBuffer()
@@ -205,7 +205,7 @@ object Query:
           case char if char.isLetterOrDigit || char == '_' =>
             val end: Int = word(index, false)
             val text: Text = s.substring(index, end).nn.tt
-            val keyword: Boolean = Keyword.parse(text).present || vocabulary.contains(text)
+            val keyword: Boolean = Keyword.parse(text).present || vocabulary.at(text).present
             add(index, end, if keyword then Token.Accent.Keyword else Token.Accent.Term)
             recur(end)
 
@@ -217,7 +217,7 @@ object Query:
     recur(0)
     List.from(tokens)
 
-  private def parse(text: Text, vocabulary: sci.Map[Text, Word])(using CanThrow[Error]): Query =
+  private def parse(text: Text, vocabulary: Map[Text, Word])(using CanThrow[Error]): Query =
     import errorDiagnostics.emptyDiagnostics
     val s: String = text.s
     val length: Int = s.length
@@ -385,14 +385,14 @@ object Query:
               val named: Query = query.copy(names = query.names + List(Name(text, false)))
 
               // A word of another format's, where it is none of Scala's.
-              def foreign: Query = vocabulary.get(text) match
-                case Some(word) =>
+              def foreign: Query = vocabulary.at(text) match
+                case word: Word =>
                   val modifiers: sci.Set[Text] =
                     word.modifier.lay(query.modifiers)(query.modifiers + _)
 
                   recur(end, query.copy(kinds = query.kinds ++ word.kinds, modifiers = modifiers))
 
-                case None =>
+                case _ =>
                   recur(end, named)
 
               Keyword.parse(text).lay(foreign): keyword =>

@@ -95,7 +95,7 @@ final class Search private (api: Api, lattice: Lattice):
 
   private val entries: scala.Array[Entry] =
     val sorted: scala.List[Api.Entity] =
-      api.entities.values.toList.filter { e => !e.hidden && !e.isParameter }.sortBy(_.key.s)
+      api.entities.values.stdlib.filter { e => !e.hidden && !e.isParameter }.sortBy(_.key.s)
 
     sorted.flatMap: entity =>
       entity.declarations.stdlib.map: declaration =>
@@ -134,17 +134,17 @@ final class Search private (api: Api, lattice: Lattice):
 
   // The entities a name finds exactly: those of the name, and those with it as a keyword.
   private def exactly(name: Text): scala.List[Api.Entity] =
-    val named: scala.List[Api.Entity] = api.byName.get(name).map(_.stdlib).getOrElse(scala.Nil)
-    val keyed: scala.List[Api.Entity] = api.byKeyword.get(name.lower).map(_.stdlib).getOrElse(scala.Nil)
+    val named: scala.List[Api.Entity] = api.byName.stdlib.get(name).map(_.stdlib).getOrElse(scala.Nil)
+    val keyed: scala.List[Api.Entity] = api.byKeyword.stdlib.get(name.lower).map(_.stdlib).getOrElse(scala.Nil)
     (named ++ keyed).distinct
 
   // Built with the index, so that the daemon's warm-up pays for it rather than the first
   // keystroke which searches by name. A keyword is in it as a name is.
   private val lexicon: Lexicon[List[Api.Entity]] =
     Lexicon[List[Api.Entity]]().tap: lexicon =>
-      api.byName.foreach: (name, entities) => lexicon(name) = entities
-      api.byKeyword.foreach: (keyword, entities) =>
-        val named: List[Api.Entity] = api.byName.get(keyword).getOrElse(Nil)
+      api.byName.stdlib.foreach: (name, entities) => lexicon(name) = entities
+      api.byKeyword.stdlib.foreach: (keyword, entities) =>
+        val named: List[Api.Entity] = api.byName.stdlib.get(keyword).getOrElse(Nil)
         lexicon(keyword) = named + entities
 
   // The entities a name finds: exactly, or at the smallest radius which finds any.
@@ -173,7 +173,7 @@ final class Search private (api: Api, lattice: Lattice):
         val dotted: Boolean = name.contains('.')
 
         val entities: scala.List[Text] =
-          api.byName.get(simple).map(_.stdlib).getOrElse(scala.Nil)
+          api.byName.stdlib.get(simple).map(_.stdlib).getOrElse(scala.Nil)
           . filter(isType)
           . map(_.key)
           . filter: key => !dotted || key.sub(t"#", t".") == name
@@ -241,10 +241,10 @@ final class Search private (api: Api, lattice: Lattice):
     case _ => false
 
   // Every simple name, sorted, for completion by prefix; and every name a type has.
-  private val names: scala.List[Text] = api.byName.keys.toList.sortBy(_.s)
+  private val names: scala.List[Text] = api.byName.stdlib.keys.toList.sortBy(_.s)
 
   private val typeNames: sci.Set[Text] =
-    val named: sci.Set[Text] = api.byName.filter { (_, entities) => entities.exists(isType) }.keySet
+    val named: sci.Set[Text] = api.byName.stdlib.filter { (_, entities) => entities.exists(isType) }.keySet
     named ++ universal.keySet ++ Lattice.primitives.map: key => Text(key.s.substring(6).nn)
 
   // What may complete the word before the caret: after `+` or `-`, or within the type there, a
@@ -278,17 +278,17 @@ final class Search private (api: Api, lattice: Lattice):
         case '+' | '-' =>
           ranked(typeNames.toList.filter(prefixed)).map: name =>
             val entity: Option[Api.Entity] =
-              api.byName.get(name).flatMap(_.stdlib.find(_.template.present))
+              api.byName.stdlib.get(name).flatMap(_.stdlib.find(_.template.present))
 
             val key: Text = entity.map(_.key).getOrElse(universal.getOrElse(name, t"scala.$name"))
             Control.Field.Completion(name, t"type", key)
 
         case '/' =>
-          def holds(name: Text): Boolean = api.byName.get(name).exists(_.stdlib.exists(container))
+          def holds(name: Text): Boolean = api.byName.stdlib.get(name).exists(_.stdlib.exists(container))
 
           ranked(names.filter { name => prefixed(name) && holds(name) }).map: name =>
             val key: Text =
-              api.byName.get(name).flatMap(_.stdlib.find(container)).map(_.key).getOrElse(name)
+              api.byName.stdlib.get(name).flatMap(_.stdlib.find(container)).map(_.key).getOrElse(name)
 
             Control.Field.Completion(name, t"package", key)
 
@@ -299,7 +299,7 @@ final class Search private (api: Api, lattice: Lattice):
 
           val entities: scala.List[Control.Field.Completion] =
             ranked(names.filter(prefixed)).map: name =>
-              val first: Option[Api.Entity] = api.byName.get(name).flatMap(_.stdlib.headOption)
+              val first: Option[Api.Entity] = api.byName.stdlib.get(name).flatMap(_.stdlib.headOption)
 
               val kind: Text =
                 first.flatMap(_.declarations.stdlib.headOption).map(_.kind.keyword).getOrElse(t"")

@@ -34,7 +34,7 @@ package fuel
 
 import soundness.*
 
-import scala.collection.immutable as sci
+import soundness.sortingAlgorithms.timsort
 
 import codepages.utf8Codepage
 import dysasymptotics.{linearAccess, linearSize}
@@ -82,50 +82,40 @@ object OverlayTranslations:
   private def sigilled(name: Text): Text =
     if name.starts(t".") || name.starts(t"#") then name else t".$name"
 
-  private def parsed(text: Text): Optional[(Tel, Overlay.Lines)] =
-    import strategies.throwUnsafely
-
-    try
-      val tel: Tel = Overlay.headed(text).read[Tel]
-      (tel, Overlay.Lines(text, tel.childCompounds.to[List]))
-    catch case error: Tel.Error => Unset
-
   // Every run of prose of an overlay, in the order of the file; none if it is not TEL.
   def prose(text: Text): List[Prose] =
-    parsed(text).lay(List[Prose]()): (tel: Tel, lines: Overlay.Lines) =>
-      def walk(compounds: sci.List[Tel.Compound], path: sci.List[Text]): sci.List[Prose] =
-        compounds.flatMap: (compound: Tel.Compound) =>
+    import parsing.trackPositions
+
+    safely(text.read[Tel]).lay(List[Prose]()): (tel: Tel) =>
+      def walk(compounds: List[(Tel.Compound, List[Text])], path: List[Text]): List[Prose] =
+        compounds.bind: (compound: Tel.Compound, at: List[Text]) =>
           val keyword: Text = compound.keyword
-          val line: Int = lines(compound)
-          val inline: sci.List[Text] = Overlay.inlineAtoms(compound).stdlib
-          val source: Optional[Text] = Overlay.sourceAtom(compound)
-          val entry: List[Text] = List.from(path)
+          val line: Int = Compounds.line(tel, at)
+          val inline: List[Text] = Compounds.inline(compound)
+          val source: Optional[Text] = Compounds.source(compound)
 
           if keyword == t"info" || keyword == t"detail" then
-            val joined: Text = Text(inline.map(_.s).mkString(" "))
+            val run: List[Prose] =
+              if inline.nil then Nil
+              else List(Prose(path, keyword, inline.join(t" "), line, line, true, true))
 
-            source.lay
-              ( if inline.isEmpty then sci.Nil
-                else sci.List(Prose(entry, keyword, joined, line, line, true, true)) ):
-              (text: Text) => sci.List(Prose(entry, keyword, text, line + 1, line, true, false))
+            source.lay(run): (text: Text) =>
+              List(Prose(path, keyword, text, line + 1, line, true, false))
           else if keyword == t"entry" then
-            inline.headOption.toList.flatMap: (name: Text) =>
-              val here: sci.List[Text] = path :+ sigilled(name)
-              val entry: List[Text] = List.from(here)
+            inline.head.lay(List[Prose]()): (name: Text) =>
+              val here: List[Text] = path + List(sigilled(name))
 
-              val info: sci.List[Prose] =
-                if inline.size < 2 then sci.Nil
-                else
-                  val text: Text = Text(inline.drop(1).map(_.s).mkString(" "))
-                  sci.List(Prose(entry, t"info", text, line, line, false, true))
+              val info: List[Prose] =
+                if inline.size < 2 then Nil
+                else List(Prose(here, t"info", inline.skip(1).join(t" "), line, line, false, true))
 
-              val detail: sci.List[Prose] = source.lay(sci.List[Prose]()): (text: Text) =>
-                sci.List(Prose(entry, t"detail", text, line + 1, line, false, false))
+              val detail: List[Prose] = source.lay(List[Prose]()): (text: Text) =>
+                List(Prose(here, t"detail", text, line + 1, line, false, false))
 
-              info ++ detail ++ walk(Overlay.childrenOf(compound).stdlib, here)
-          else sci.Nil
+              info + detail + walk(Compounds.paths(at, Compounds.children(compound)), here)
+          else Nil
 
-      List.from(walk(tel.childCompounds.to[List].stdlib, sci.Nil))
+      walk(Compounds.paths(Nil, tel.childCompounds.to[List]), Nil)
 
   // The translation of a definitive overlay: the overlay as TEL reads it, each run of its prose
   // a `Translation` of it — that of the translation `old`, brought up to date, where it has the
@@ -153,8 +143,8 @@ object OverlayTranslations:
 
     // A compound as the translation writes it, within the entry `path`.
     def written(path: List[Text])(compound: Tel.Compound): Tel.Compound =
-      val inline: List[Text] = Overlay.inlineAtoms(compound)
-      val source: Optional[Text] = Overlay.sourceAtom(compound)
+      val inline: List[Text] = Compounds.inline(compound)
+      val source: Optional[Text] = Compounds.source(compound)
 
       compound.keyword match
         case t"info" | t"detail" =>
@@ -165,11 +155,15 @@ object OverlayTranslations:
 
         case t"entry" =>
           inline.head.lay(compound): (name: Text) =>
-            val here: List[Text] = path :+ sigilled(name)
+            val here: List[Text] = path + List(sigilled(name))
             val info: Optional[Text] = if inline.size < 2 then Unset else inline.skip(1).join(t" ")
 
             val named: List[Tel.Atom] =
-              compound.atoms.to[List].filter(_.isInstanceOf[Tel.Atom.Inline]).keep(1)
+              compound.atoms.to[List].filter:
+                case Tel.Atom.Inline(_, _) => true
+                case _                     => false
+
+              . keep(1)
 
             val children: Array[Tel.Block] = compound.children.map: (block: Tel.Block) =>
               block.copy(compounds = block.compounds.map(written(here)))
@@ -180,13 +174,14 @@ object OverlayTranslations:
                     children = children ) ):
               (info: Text) =>
                 val moved: List[Tel.Compound] =
-                  beneath(t"info", translated(here, t"info", info)) ::
-                    source.lay(List[Tel.Compound]()): (detail: Text) =>
+                  List(beneath(t"info", translated(here, t"info", info)))
+                  + source.lay(List[Tel.Compound]()): (detail: Text) =>
                       List(beneath(t"detail", translated(here, t"detail", detail)))
 
                 val block: Tel.Block = Tel.Block(Array.empty, Unset, moved.to[Array], 0)
 
-                compound.copy(atoms = named.to[Array], children = Array.concat(Array(block), children))
+                val all: List[Tel.Block] = List(block) + children.to[List]
+                compound.copy(atoms = named.to[Array], children = all.to[Array])
 
         case _ =>
           compound
@@ -199,17 +194,18 @@ object OverlayTranslations:
           val occurrence: Int =
             tel.childCompounds.to[List].keep(index.n0).count(_.keyword == compound.keyword)
 
-          Mutation.Op.Replace(Tel.Pointer.Empty / (compound.keyword, occurrence), written(Nil)(compound))
+          val pointer: Tel.Pointer = Tel.Pointer.Empty / (compound.keyword, occurrence)
+          Mutation.Op.Replace(pointer, written(Nil)(compound))
 
       Mutation(tel, replacements).show
 
   // The runs of a translation which someone has translated and the definitive overlay no
   // longer has: what making the translation again leaves out.
   def lost(definitive: Text, old: Text): List[Prose] =
-    val kept: sci.Set[(List[Text], Text)] = prose(definitive).stdlib.map(_.key).toSet
+    val kept: List[(List[Text], Text)] = prose(definitive).map(_.key)
 
     prose(old).filter: (run: Prose) =>
-      !kept.contains(run.key) && !Translation.parse(run.text).passages.filter(!_.foreign.nil).nil
+      !kept.has(run.key) && !Translation.parse(run.text).passages.filter(!_.foreign.nil).nil
 
   // An overlay's prose as its translation reads: what `Overlay.read` is given to read a
   // translation as the overlay it is in its own language.
@@ -226,112 +222,117 @@ object OverlayTranslations:
         List(diagnostic)
 
       case overlay: Overlay =>
-        val theirs: sci.List[Prose] = prose(text).stdlib
-        val ours: sci.List[Prose] = prose(definitive).stdlib
+        val theirs: List[Prose] = prose(text)
+        val ours: List[Prose] = prose(definitive)
         val remedy: Text = t"`fuel translate --update` makes the translation again"
 
-        type Path = sci.List[Text]
+        type Path = List[Text]
 
-        def paths(entries: List[Overlay.Entry], prefix: Path): sci.Map[Path, Overlay.Entry] =
-          sci.Map.from:
-            entries.stdlib.flatMap: (entry: Overlay.Entry) =>
-              val here: Path = prefix :+ t"${if entry.isType then t"#" else t"."}${entry.name}"
-              (here -> entry) :: paths(entry.entries, here).toList
+        def paths(entries: List[Overlay.Entry], prefix: Path): List[(Path, Overlay.Entry)] =
+          entries.bind: (entry: Overlay.Entry) =>
+            val here: Path = prefix + List(t"${if entry.isType then t"#" else t"."}${entry.name}")
+            List((here, entry)) + paths(entry.entries, here)
 
-        val translated: sci.Map[Path, Overlay.Entry] = paths(overlay.entries, sci.Nil)
+        // Each entry by its path, a later one of a path over an earlier; and the entries so
+        // kept, in the order of their lines.
+        def byPath(entries: List[Overlay.Entry]): Map[Path, Overlay.Entry] =
+          paths(entries, Nil).to[Map]
+
+        def inOrder(entries: Map[Path, Overlay.Entry]): List[(Path, Overlay.Entry)] =
+          entries.keys.to[List].bind: (path: Path) =>
+            entries.at(path).lay(List[(Path, Overlay.Entry)]()) { entry => List((path, entry)) }
+
+          . order(_(1).line)
+
+        val translated: Map[Path, Overlay.Entry] = byPath(overlay.entries)
 
         val original: Optional[Overlay] = Overlay.read(path, definitive) match
           case overlay: Overlay => overlay
           case _                => Unset
 
-        val defined: sci.Map[Path, Overlay.Entry] =
-          original.lay(sci.Map[Path, Overlay.Entry]()): (overlay: Overlay) =>
-            paths(overlay.entries, sci.Nil)
+        val defined: Map[Path, Overlay.Entry] =
+          original.lay(Map[Path, Overlay.Entry]()) { (overlay: Overlay) => byPath(overlay.entries) }
 
-        def written(path: Path): Text = Text(path.map(_.s).mkString)
+        def written(path: Path): Text = path.join
 
-        val runs: sci.List[Translation.Finding] = ours.flatMap: (run: Prose) =>
-          theirs.find(_.key == run.key) match
-            case Some(found) =>
-              (Translation.findings(found.text, run.text) + Mirror.findings(found.text)).stdlib
+        val runs: List[Translation.Finding] = ours.bind: (run: Prose) =>
+          theirs.seek(_.key == run.key) match
+            case found: Prose =>
+              (Translation.findings(found.text, run.text) + Mirror.findings(found.text))
               . map(_.shifted(found.line - 1))
 
-            case None =>
-              val entry: Path = run.entry.stdlib
+            case _ =>
+              val entry: Path = run.entry
 
-              if !entry.isEmpty && !translated.contains(entry) then sci.Nil else
-                val line: Int = translated.get(entry).map(_.line).getOrElse(1)
+              if !entry.nil && translated.at(entry).absent then Nil else
+                val line: Int = translated.at(entry).lay(1)(_.line)
                 val message: Text = t"This lacks ${run.title}, which is not translated: $remedy."
-                sci.List(Translation.Finding(Tone.Warning, line, message))
+                List(Translation.Finding(Tone.Warning, line, message))
 
-        val gone: sci.List[Translation.Finding] = theirs.flatMap: (run: Prose) =>
-          val entry: Path = run.entry.stdlib
+        val gone: List[Translation.Finding] = theirs.bind: (run: Prose) =>
+          val entry: Path = run.entry
 
-          if ours.exists(_.key == run.key) || (!entry.isEmpty && !defined.contains(entry))
-          then sci.Nil
+          if ours.exists(_.key == run.key) || (!entry.nil && defined.at(entry).absent) then Nil
           else
             val message: Text = t"The text this translates has gone: $remedy."
-            sci.List(Translation.Finding(Tone.Warning, run.line, message))
+            List(Translation.Finding(Tone.Warning, run.line, message))
 
-        val entries: sci.List[Translation.Finding] =
-          if original.absent then sci.Nil else
-            val absent: sci.List[Translation.Finding] =
-              defined.toList.sortBy(_(1).line).flatMap: (path, entry) =>
-                if translated.contains(path) then sci.Nil else
-                  val line: Int = translated.get(path.dropRight(1)).map(_.line).getOrElse(1)
+        val entries: List[Translation.Finding] =
+          if original.absent then Nil else
+            val absent: List[Translation.Finding] =
+              inOrder(defined).bind: (path: Path, entry: Overlay.Entry) =>
+                if translated.at(path).present then Nil else
+                  val line: Int = translated.at(path.skip(1, Rtl)).lay(1)(_.line)
                   val message: Text = t"This has no entry for `${written(path)}`: $remedy."
-                  sci.List(Translation.Finding(Tone.Warning, line, message))
+                  List(Translation.Finding(Tone.Warning, line, message))
 
-            val extra: sci.List[Translation.Finding] =
-              translated.toList.sortBy(_(1).line).flatMap: (path, entry) =>
-                defined.get(path) match
-                  case None =>
-                    val message: Text =
-                      t"The overlay this translates has no entry for `${written(path)}`: $remedy."
-
-                    sci.List(Translation.Finding(Tone.Warning, entry.line, message))
-
-                  case Some(other) =>
+            val extra: List[Translation.Finding] =
+              inOrder(translated).bind: (path: Path, entry: Overlay.Entry) =>
+                defined.at(path) match
+                  case other: Overlay.Entry =>
                     val same: Boolean =
                       entry.doc.hidden == other.doc.hidden && entry.doc.until == other.doc.until &&
                         entry.doc.refer == other.doc.refer && entry.doc.imports == other.doc.imports
 
-                    if same then sci.Nil else
+                    if same then Nil else
                       val message: Text =
                         t"This entry's `hidden`, `until`, `refer` and `import` are not those of " +
                           t"the entry it translates, and they are the same in every language: " +
                           t"$remedy."
 
-                      sci.List(Translation.Finding(Tone.Failure, entry.line, message))
+                      List(Translation.Finding(Tone.Failure, entry.line, message))
 
-            val heading: sci.List[Translation.Finding] =
-              original.lay(sci.List[Translation.Finding]()): (other: Overlay) =>
-                if other.base == overlay.base && other.format == overlay.format then sci.Nil else
+                  case _ =>
+                    val message: Text =
+                      t"The overlay this translates has no entry for `${written(path)}`: $remedy."
+
+                    List(Translation.Finding(Tone.Warning, entry.line, message))
+
+            val heading: List[Translation.Finding] =
+              original.lay(List[Translation.Finding]()): (other: Overlay) =>
+                if other.base == overlay.base && other.format == overlay.format then Nil else
                   val message: Text =
                     t"This is of `${overlay.base}`, and the overlay it translates of " +
                       t"`${other.base}`."
 
-                  sci.List(Translation.Finding(Tone.Failure, 1, message))
+                  List(Translation.Finding(Tone.Failure, 1, message))
 
-            heading ++ absent ++ extra
+            heading + absent + extra
 
         val diagnostics: List[Block.Diagnostic] =
-          Translation.report(path, text, List.from(runs ++ gone ++ entries))
+          Translation.report(path, text, runs + gone + entries)
 
         overlay.problems + diagnostics.map { (diagnostic: Block.Diagnostic) => diagnostic: Block }
 
   // How much of an overlay's translation is done: the sum over its runs of prose, a run the
   // translation lacks being one more change to make.
   def progress(text: Text, definitive: Text): Translation.Progress =
-    val theirs: sci.List[Prose] = prose(text).stdlib
+    val theirs: List[Prose] = prose(text)
 
-    prose(definitive).stdlib.foldLeft(Translation.Progress(0, 0, 0, 0, 0)):
+    prose(definitive).fold(Translation.Progress(0, 0, 0, 0, 0)):
       (total: Translation.Progress, run: Prose) =>
-        theirs.find(_.key == run.key) match
-          case None =>
-            total.copy(stale = total.stale + 1)
-
-          case Some(found) =>
+        theirs.seek(_.key == run.key).lay(total.copy(stale = total.stale + 1)):
+          (found: Prose) =>
             val progress: Translation.Progress =
               Translation.progress(Translation.parse(found.text), run.text)
 
