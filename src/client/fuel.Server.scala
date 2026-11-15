@@ -106,20 +106,20 @@ object Server:
 
   @scala.caps.unsafe.untrackedCaptures
   @volatile
-  private var issues0: sci.Map[Text, List[Issue]] = sci.Map()
+  private var issues0: Map[Text, List[Issue]] = Map()
 
   @scala.caps.unsafe.untrackedCaptures
   @volatile
   private var notices0: List[Text] = Nil
 
   def syncs: List[Sync.State] = syncs0
-  def issues(key: Text): List[Issue] = issues0.get(key).getOrElse(Nil)
+  def issues(key: Text): List[Issue] = issues0.at(key).or(Nil)
 
   // What the refresher could not do, for the next `fuel sync` to say; said once.
   def notice(text: Text): Unit = notices0 = notices0 + List(text)
   def notices(): List[Text] = notices0.tap { _ => notices0 = Nil }
 
-  def publishIssues(states: List[Sync.State], index: sci.Map[Text, List[Issue]]): Unit =
+  def publishIssues(states: List[Sync.State], index: Map[Text, List[Issue]]): Unit =
     syncs0 = states
     issues0 = index
     edition0.incrementAndGet()

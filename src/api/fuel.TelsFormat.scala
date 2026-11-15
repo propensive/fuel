@@ -32,9 +32,6 @@
                                                                                                   */
 package fuel
 
-// `Query.Word` holds its kinds in a standard set, which is its own to change.
-import scala.collection.immutable as sci
-
 import soundness.{Format as _, Language as _, Query as _, Token as _, *}
 
 import codepages.utf8Codepage
@@ -85,7 +82,7 @@ object TelsFormat extends Format:
           Kind.Variant )
 
     val words: List[(Text, Query.Word)] =
-      kinds.map { (kind: Kind) => (kind.keyword, Query.Word(sci.Set(kind))) }
+      kinds.map { (kind: Kind) => (kind.keyword, Query.Word(Set(kind))) }
       + modifiers.map { (word: Text) => (word, Query.Word(modifier = word)) }
 
     words.to[Map]

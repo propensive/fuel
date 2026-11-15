@@ -34,6 +34,7 @@ package fuel
 
 import soundness.*
 
+import dysasymptotics.linearSize
 import pyrocosm.Inline
 
 // The glyph beside a member's name: a drawing of its keyword, on the 14-unit grid of the
@@ -87,24 +88,40 @@ object Icons:
       copy(elements = List(open) + elements + List(close))
 
     def markup: Text =
-      val box: Text = t"""viewBox="${num(left)} 0 ${num(right - left)} ${grid.toString.tt}""""
+      val box: Text = t"""viewBox="${num(left)} 0 ${num(right - left)} ${grid.show}""""
       t"""<svg xmlns="http://www.w3.org/2000/svg" $box>${elements.join}</svg>"""
 
+  // A coordinate to two decimal places, without the zeros a fraction ends with, nor a point
+  // with nothing after it; a negative one which rounds to nothing is `-0`. A half is rounded away
+  // from zero as the coordinate's shortest decimal form writes it, as the drawings were first
+  // measured: `Decimalizer` rounds the binary value, which falls just short of the half written
+  // as `8.805`, so it is given the coordinate already rounded, in hundredths.
+  private val decimalizer: Decimalizer = Decimalizer(decimalPlaces = 2, exponentThreshold = Unset)
+
   private def num(value: Double): Text =
-    val boxed: java.lang.Double = java.lang.Double.valueOf(value).nn
-    val text: String = java.lang.String.format(java.util.Locale.ROOT, "%.2f", boxed).nn
+    val rounded: Long = hundredths(value.abs)
 
-    val trimmed: String =
-      if text.indexOf('.') >= 0 then text.replaceAll("0+$", "").nn.replaceAll("\\.$", "").nn
-      else text
+    if rounded == 0 then (if value < 0 then t"-0" else t"0") else
+      val text: Text = decimalizer.decimalize((if value < 0 then -rounded else rounded)/100.0)
+      if !text.contains('.') then text else text.skip(_ == '0', Rtl).skip(_ == '.', Rtl)
 
-    trimmed.tt
+  // A magnitude in hundredths, rounded half up from its shortest decimal form, which is written
+  // without an exponent from a thousandth up to ten million, beyond any drawing's measure.
+  private def hundredths(magnitude: Double): Long =
+    import decimalConverters.javaDecimalConverter
+
+    if magnitude < 0.001 then 0L else
+      val written: List[Text] = magnitude.show.cut(t".")
+      val fraction: Text = written.skip(1).join + t"00"
+      val kept: Text = written.head.or(t"0") + fraction.keep(2)
+      val up: Boolean = fraction.at(2.z).let(_ >= '5').or(false)
+      kept.fold(0L) { (sum, digit) => sum*10 + (digit - '0') } + (if up then 1 else 0)
 
   // A point on a circle about the centre, by its radius and its angle in degrees, clockwise from
   // the right (the page's `y` grows downward).
   private def point(radius: Double, degrees: Double): Text =
-    val radians: Double = degrees*scala.math.Pi/180
-    t"${num(c + radius*scala.math.cos(radians))} ${num(c + radius*scala.math.sin(radians))}"
+    val radians: Double = degrees*π/180
+    t"${num(c + radius*cos(radians).double)} ${num(c + radius*sin(radians).double)}"
 
   private def disc(radius: Double, x: Double = c, y: Double = c): Text =
     t"""<circle cx="${num(x)}" cy="${num(y)}" r="${num(radius)}"/>"""
@@ -139,7 +156,7 @@ object Icons:
 
   // The part of a ring to the right of a vertical line, its ends flat.
   private def half(outer: Double, inner: Double, x: Double): Text =
-    def dy(r: Double): Double = scala.math.sqrt((r*r - (x - c)*(x - c)).max(0.0))
+    def dy(r: Double): Double = (r*r - (x - c)*(x - c)).max(0.0).sqrt
     val o: Text = num(outer)
     val i: Text = num(inner)
     val top = t"${num(x)} ${num(c - dy(outer))}"
@@ -172,8 +189,8 @@ object Icons:
 
     case Api.Kind.Enum =>
       val discs: List[Text] = List(0, 1, 2, 3, 4).map: (n: Int) =>
-        val radians: Double = (n*72 - 90)*scala.math.Pi/180
-        disc(1.4, c + 2.38*scala.math.cos(radians), c + 2.38*scala.math.sin(radians))
+        val radians: Double = (n*72 - 90)*π/180
+        disc(1.4, c + 2.38*cos(radians).double, c + 2.38*sin(radians).double)
 
       Drawing(discs)
 
@@ -302,9 +319,9 @@ object Icons:
       val r: Double = 1.4
 
       def spoke(degrees: Double): Text =
-        val radians: Double = degrees*scala.math.Pi/180
-        val dx: Double = r*scala.math.cos(radians)
-        val dy: Double = r*scala.math.sin(radians)
+        val radians: Double = degrees*π/180
+        val dx: Double = r*cos(radians).double
+        val dy: Double = r*sin(radians).double
         t"M ${num(x - dx)} ${num(y - dy)} L ${num(x + dx)} ${num(y + dy)}"
 
       def spokes(angles: Double*): Text = stroked(angles.map(spoke).join(t" "), 0.6)

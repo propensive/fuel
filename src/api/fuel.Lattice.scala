@@ -32,10 +32,12 @@
                                                                                                   */
 package fuel
 
-import scala.collection.immutable as sci
-import scala.collection.mutable as scm
-
 import soundness.*
+
+import soundness.collations.codepointCollation
+import dysasymptotics.{linearAccess, linearSize}
+import soundness.collationComparable
+import soundness.sortingAlgorithms.timsort
 
 // The subtyping of every named type the model knows, for search to ask quickly whether one type is
 // beneath another: each type's key has a dense id, and `supers(id)` is the sorted ids of every
@@ -58,12 +60,12 @@ object Lattice:
   val nothing: Text = t"scala.Nothing"
   val nul: Text = t"scala.Null"
 
-  val tops: sci.Set[Text] = sci.Set(any, matchable, anyRef, obj, anyVal)
-  val bottoms: sci.Set[Text] = sci.Set(nothing, nul)
-  val universal: sci.Set[Text] = tops ++ bottoms
+  val tops: Set[Text] = Set(any, matchable, anyRef, obj, anyVal)
+  val bottoms: Set[Text] = Set(nothing, nul)
+  val universal: List[Text] = List(any, matchable, anyRef, obj, anyVal, nothing, nul)
 
-  val primitives: sci.Set[Text] =
-    sci.Set
+  val primitives: List[Text] =
+    List
       ( t"scala.Int",
         t"scala.Long",
         t"scala.Short",
@@ -74,9 +76,11 @@ object Lattice:
         t"scala.Boolean",
         t"scala.Unit" )
 
+  private val primitive: Set[Text] = primitives.to[Set]
+
   // The supertypes of the Java classes which Scala signatures commonly name, each row written
   // out transitively. This is the whole of what is known of Java's hierarchy.
-  val javaTypes: sci.Map[Text, sci.List[Text]] =
+  val javaTypes: List[(Text, List[Text])] =
     val serializable = t"java.io.Serializable"
     val comparable = t"java.lang.Comparable"
     val constable = t"java.lang.constant.Constable"
@@ -88,8 +92,8 @@ object Lattice:
     val collection = t"java.util.Collection"
     val constantDesc = t"java.lang.constant.ConstantDesc"
 
-    val boxed: sci.List[Text] =
-      sci.List
+    val boxed: List[Text] =
+      List
         ( t"java.lang.Integer",
           t"java.lang.Long",
           t"java.lang.Double",
@@ -97,30 +101,33 @@ object Lattice:
           t"java.lang.Short",
           t"java.lang.Byte" )
 
-    val stringSupers: sci.List[Text] =
-      sci.List(charSequence, comparable, serializable, constable, constantDesc)
+    val stringSupers: List[Text] =
+      List(charSequence, comparable, serializable, constable, constantDesc)
 
-    val builderSupers: sci.List[Text] =
-      sci.List(charSequence, comparable, serializable, t"java.lang.Appendable")
+    val builderSupers: List[Text] =
+      List(charSequence, comparable, serializable, t"java.lang.Appendable")
 
-    val listed: sci.Map[Text, sci.List[Text]] =
-      sci.Map
-        ( t"java.lang.String"         -> stringSupers,
-          t"java.lang.StringBuilder"  -> builderSupers,
-          throwable                   -> sci.List(serializable),
-          exception                   -> sci.List(throwable, serializable),
-          t"java.lang.RuntimeException" -> sci.List(exception, throwable, serializable),
-          t"java.lang.Error"          -> sci.List(throwable, serializable),
-          number                      -> sci.List(serializable),
-          t"java.lang.Character"      -> sci.List(comparable, serializable, constable),
-          t"java.lang.Boolean"        -> sci.List(comparable, serializable, constable),
-          collection                  -> sci.List(iterable),
-          t"java.util.List"           -> sci.List(collection, iterable),
-          t"java.util.Set"            -> sci.List(collection, iterable),
-          t"java.util.Queue"          -> sci.List(collection, iterable),
-          t"java.util.Deque"          -> sci.List(t"java.util.Queue", collection, iterable) )
+    val listed: List[(Text, List[Text])] =
+      List
+        ( t"java.lang.String"           -> stringSupers,
+          t"java.lang.StringBuilder"    -> builderSupers,
+          throwable                     -> List(serializable),
+          exception                     -> List(throwable, serializable),
+          t"java.lang.RuntimeException" -> List(exception, throwable, serializable),
+          t"java.lang.Error"            -> List(throwable, serializable),
+          number                        -> List(serializable),
+          t"java.lang.Character"        -> List(comparable, serializable, constable),
+          t"java.lang.Boolean"          -> List(comparable, serializable, constable),
+          collection                    -> List(iterable),
+          t"java.util.List"             -> List(collection, iterable),
+          t"java.util.Set"              -> List(collection, iterable),
+          t"java.util.Queue"            -> List(collection, iterable),
+          t"java.util.Deque"            -> List(t"java.util.Queue", collection, iterable) )
 
-    listed ++ boxed.map: key => key -> sci.List(number, comparable, serializable, constable)
+    listed + boxed.map { key => (key, List(number, comparable, serializable, constable)) }
+
+  // Every Java key the lattice knows: those with rows, and those the rows name.
+  val javaKeys: List[Text] = javaTypes.bind { (key, supers) => key :: supers }.distinct
 
   // The key a shape is headed by: a named type's own, a type parameter's upper bound's (`Any`
   // when it has none), and nothing for a shape which names no type.
@@ -129,151 +136,138 @@ object Lattice:
     case Api.Shape.Param(_, upper)  => upper.lay(any)(head(_).or(any))
     case Api.Shape.Other            => Unset
 
+  // Soundness has no binary search (soundness#2501), so a sorted row is searched by the JDK's:
+  // the index of the value in the row, or a negative number where it is not there.
+  private[fuel] def search(row: Array[Int], value: Int): Int =
+    java.util.Arrays.binarySearch(Array.unsafeJvm(row), value)
+
   def build(api: Api): Lattice =
-    val ids: scm.HashMap[Text, Int] = scm.HashMap()
-    val keys: scm.ArrayBuffer[Text] = scm.ArrayBuffer()
+    val entities: List[Api.Entity] = api.entities.values
 
-    def id(key: Text): Int = ids.getOrElseUpdate(key, { keys += key; keys.length - 1 })
+    def heads(shapes: List[Api.Shape]): List[Text] =
+      shapes.bind { shape => head(api.expand(shape)).lay(Nil)(List(_)) }
 
-    universal.foreach(id)
-    primitives.foreach(id)
-
-    javaTypes.foreach: (key, supers) =>
-      id(key)
-      supers.foreach(id)
-
-    def heads(shapes: scala.List[Api.Shape]): Unit =
-      shapes.foreach: shape => head(api.expand(shape)).let(id(_))
-
-    val entities: scala.List[Api.Entity] = api.entities.values.stdlib
-
-    // Each template's direct parents, as written, by the id of the type; `java.lang.Object` is
+    // A template's direct parents, as written, by the key of each type; `java.lang.Object` is
     // `AnyRef`.
-    val written: scm.HashMap[Int, scala.List[Int]] = scm.HashMap()
+    def written(entity: Api.Entity): List[Text] = entity.template.lay(Nil): template =>
+      heads(template.parentShapes).map { key => if key == obj then anyRef else key }.distinct
 
-    entities.foreach: entity =>
-      if entity.template.present || entity.declarations.exists(_.kind.isType) then id(entity.key)
-      entity.bases.stdlib.foreach(id)
+    // Every key, in the order it is first met, which is the order of the ids.
+    val met: List[Text] =
+      val named: List[Text] = entities.bind: entity =>
+        val own: List[Text] =
+          if entity.template.present || entity.declarations.exists(_.kind.isType)
+          then List(entity.key)
+          else Nil
 
-      entity.declarations.stdlib.foreach: declaration =>
-        heads(declaration.returns.let(scala.List(_)).or(scala.Nil))
-        heads(declaration.accepts.stdlib)
-        heads(declaration.parentShapes.stdlib)
+        val declared: List[Text] = entity.declarations.bind: declaration =>
+          heads(declaration.returns.lay(Nil)(List(_))) + heads(declaration.accepts) +
+            heads(declaration.parentShapes)
 
-      entity.template.let: template =>
-        def named(shape: Api.Shape): scala.List[Text] =
-          head(api.expand(shape)).let(scala.List(_)).or(scala.Nil)
+        own + entity.bases + declared + written(entity)
 
-        val parents: scala.List[Int] =
-          template.parentShapes.stdlib.flatMap(named)
-          . map: key => if key == obj then anyRef else key
-          . map(id)
-          . distinct
+      universal + primitives + javaKeys + named
 
-        if parents.nonEmpty then written(id(entity.key)) = parents
-
+    val keys: Array[Text] = met.distinct.to[Array]
     val size: Int = keys.length
-    val supers: scala.Array[scala.Array[Int]] = new scala.Array(size)
-    val distances: scala.Array[scala.Array[Int]] = new scala.Array(size)
+    val ids: Map[Text, Int] = keys.to[List].indexed.map { (key, index) => (key, index.n0) }.to[Map]
+    def id(key: Text): Int = ids.at(key).or(-1)
+
+    // Each type's bases, nearest first: its entity's linearisation, or what `javaTypes` says.
+    val bases: Map[Int, List[Text]] =
+      val java: List[(Int, List[Text])] = javaTypes.map { (key, supers) => (id(key), supers) }
+
+      val modelled: List[(Int, List[Text])] =
+        entities.filter(!_.bases.nil).map { entity => (id(entity.key), entity.bases) }
+
+      (java + modelled).filter(_(0) >= 0).to[Map]
 
     // A row of bases, nearest first, as ids sorted for searching, each with its distance (its
     // place in the row, from 1) alongside.
-    def row(own: Int, bases: scala.List[Text]): Unit =
-      val pairs: scala.List[(Int, Int)] =
-        bases.map(id).zipWithIndex.distinctBy(_(0)).map { (base, i) => (base, i + 1) }.sortBy(_(0))
+    def row(own: Int): List[(Int, Int)] = bases.at(own).lay(Nil): (bases: List[Text]) =>
+      bases.map(id).indexed.deduplicate(_(0)).map { (base, index) => (base, index.n1) }
+      . order(_(0))
 
-      supers(own) = pairs.map(_(0)).toArray
-      distances(own) = pairs.map(_(1)).toArray
+    val rows: List[List[(Int, Int)]] = List.range(0, size).map(row)
+    val supers: Array[Array[Int]] = rows.map(_.map(_(0)).to[Array]).to[Array]
+    val distances: Array[Array[Int]] = rows.map(_.map(_(1)).to[Array]).to[Array]
 
-    entities.foreach: entity =>
-      if !entity.bases.nil then ids.get(entity.key).foreach: own => row(own, entity.bases.stdlib)
+    val parents: Map[Int, List[Int]] =
+      entities.map { entity => (id(entity.key), written(entity).map(id)) }
+      . filter { (own, parents) => own >= 0 && !parents.nil }
+      . to[Map]
 
-    javaTypes.foreach: (key, parents) =>
-      val own: Int = id(key)
-      if supers(own) == null then row(own, parents)
+    val directSupers: List[List[Int]] = List.range(0, size).map(parents.at(_).or(Nil))
 
-    var index: Int = 0
+    // An inversion: for each type, the types whose rows name it, in order.
+    def invert(rows: List[List[Int]]): List[List[Int]] =
+      val pairs: List[(Int, Int)] =
+        rows.indexed.bind { (row, index) => row.map { base => (base, index.n0) } }
 
-    while index < size do
-      if supers(index) == null then
-        supers(index) = scala.Array.empty[Int]
-        distances(index) = scala.Array.empty[Int]
+      val inverted: Map[Int, List[Int]] = pairs.group(_(0)).map(_.map(_(1)))
+      List.range(0, size).map(inverted.at(_).or(Nil))
 
-      index += 1
+    val subs: List[List[Int]] = invert(rows.map(_.map(_(0))))
 
-    // An inversion, by counting each type's subtypes before placing them.
-    def invert(rows: scala.Array[scala.Array[Int]]): scala.Array[scala.Array[Int]] =
-      val counts: scala.Array[Int] = new scala.Array(size)
-      rows.foreach(_.foreach { base => counts(base) += 1 })
-
-      val inverted: scala.Array[scala.Array[Int]] =
-        scala.Array.tabulate(size): base => new scala.Array[Int](counts(base))
-
-      val filled: scala.Array[Int] = new scala.Array(size)
-      var index: Int = 0
-
-      while index < size do
-        rows(index).foreach: base =>
-          inverted(base)(filled(base)) = index
-          filled(base) += 1
-
-        index += 1
-
-      inverted
-
-    val subs: scala.Array[scala.Array[Int]] = invert(supers)
-
-    val directSupers: scala.Array[scala.Array[Int]] =
-      scala.Array.tabulate(size): i =>
-        written.get(i).map(_.toArray).getOrElse(scala.Array.empty[Int])
-
-    val directSubs: scala.Array[scala.Array[Int]] = invert(directSupers).map(_.sortBy(keys(_).s))
+    val directSubs: List[List[Int]] =
+      invert(directSupers).map(_.order(keys.readUnchecked(_)))
 
     val anyValId: Int = id(anyVal)
 
-    val value: scala.Array[Boolean] = scala.Array.tabulate(size): i =>
-      primitives.contains(keys(i)) || _root_.java.util.Arrays.binarySearch(supers(i), anyValId) >= 0
+    val value: List[Boolean] = List.range(0, size).map: index =>
+      primitive.has(keys.readUnchecked(index)) || search(supers.readUnchecked(index), anyValId) >= 0
 
-    new Lattice(ids.toMap, keys.toArray, supers, distances, subs, directSupers, directSubs, value)
+    def array(rows: List[List[Int]]): Array[Array[Int]] = rows.map(_.to[Array]).to[Array]
 
+    new Lattice
+      ( ids,
+        keys,
+        supers,
+        distances,
+        array(subs),
+        array(directSupers),
+        array(directSubs),
+        value.to[Array] )
+
+// Each row is read with `readUnchecked`, by an id, which is always below `size`, or by an index a
+// search of the row found.
 final class Lattice private
-  ( ids:    sci.Map[Text, Int],
-    keys:   scala.Array[Text],
-    supers:    scala.Array[scala.Array[Int]],
-    distances:    scala.Array[scala.Array[Int]],
-    subs:         scala.Array[scala.Array[Int]],
-    directSupers: scala.Array[scala.Array[Int]],
-    directSubs:   scala.Array[scala.Array[Int]],
-    value:        scala.Array[Boolean] ):
+  ( ids:          Map[Text, Int],
+    keys:         Array[Text],
+    supers:       Array[Array[Int]],
+    distances:    Array[Array[Int]],
+    subs:         Array[Array[Int]],
+    directSupers: Array[Array[Int]],
+    directSubs:   Array[Array[Int]],
+    value:        Array[Boolean] ):
 
-  private val anyId: Int = ids(Lattice.any)
-  private val matchableId: Int = ids(Lattice.matchable)
-  private val anyRefId: Int = ids(Lattice.anyRef)
-  private val objectId: Int = ids(Lattice.obj)
-  private val anyValId: Int = ids(Lattice.anyVal)
-  private val nothingId: Int = ids(Lattice.nothing)
-  private val nullId: Int = ids(Lattice.nul)
+  private val anyId: Int = ids.at(Lattice.any).or(-1)
+  private val matchableId: Int = ids.at(Lattice.matchable).or(-1)
+  private val anyRefId: Int = ids.at(Lattice.anyRef).or(-1)
+  private val objectId: Int = ids.at(Lattice.obj).or(-1)
+  private val anyValId: Int = ids.at(Lattice.anyVal).or(-1)
+  private val nothingId: Int = ids.at(Lattice.nothing).or(-1)
+  private val nullId: Int = ids.at(Lattice.nul).or(-1)
 
   def size: Int = keys.length
 
   // A type's direct parents, as written, and the types which name it as one; the universal
   // types are nobody's written parent.
-  def parents(id: Int): scala.List[Int] = directSupers(id).iterator.toList
-  def children(id: Int): scala.List[Int] = directSubs(id).iterator.toList
+  def parents(id: Int): List[Int] = directSupers.readUnchecked(id).to[List]
+  def children(id: Int): List[Int] = directSubs.readUnchecked(id).to[List]
+  def primaryParent(id: Int): Optional[Int] = parents(id).head
 
-  def primaryParent(id: Int): Optional[Int] =
-    directSupers(id).iterator.nextOption().getOrElse(Unset)
-
-  def id(key: Text): Optional[Int] = ids.get(key).getOrElse(Unset)
-  def key(id: Int): Text = keys(id)
+  def id(key: Text): Optional[Int] = ids.at(key)
+  def key(id: Int): Text = keys.readUnchecked(id)
 
   def isTop(id: Int): Boolean = id == anyId || id == matchableId
   def isRefTop(id: Int): Boolean = id == anyRefId || id == objectId
   def isValTop(id: Int): Boolean = id == anyValId
-  def isValue(id: Int): Boolean = value(id)
+  def isValue(id: Int): Boolean = value.readUnchecked(id)
 
   // Whether a type is a reference type: not a value type, and not above them all.
-  def isReference(id: Int): Boolean = !value(id) && !isValTop(id) && !isTop(id) && id != nothingId
+  def isReference(id: Int): Boolean =
+    !isValue(id) && !isValTop(id) && !isTop(id) && id != nothingId
 
   // A reference type, or `AnyRef` (or `java.lang.Object`) itself: the types `Null` is beneath.
   private def isReferable(id: Int): Boolean = isReference(id) || isRefTop(id)
@@ -284,8 +278,8 @@ final class Lattice private
       sub == nothingId ||
       (sub == nullId && isReferable(sup)) ||
       (isRefTop(sup) && isReferable(sub)) ||
-      (isValTop(sup) && value(sub)) ||
-      _root_.java.util.Arrays.binarySearch(supers(sub), sup) >= 0
+      (isValTop(sup) && isValue(sub)) ||
+      Lattice.search(supers.readUnchecked(sub), sup) >= 0
 
   // How far a type is beneath another: 0 for itself, the base's place in its linearisation
   // (nearest first, from 1) for a base, beyond every base for a universal type, and -1 where it
@@ -293,36 +287,35 @@ final class Lattice private
   def distance(sub: Int, sup: Int): Int =
     if sub == sup then 0
     else
-      val found: Int = _root_.java.util.Arrays.binarySearch(supers(sub), sup)
+      val row: Array[Int] = supers.readUnchecked(sub)
+      val found: Int = Lattice.search(row, sup)
 
-      if found >= 0 then distances(sub)(found)
-      else if isSubtype(sub, sup) then supers(sub).length + 1
+      if found >= 0 then distances.readUnchecked(sub).readUnchecked(found)
+      else if isSubtype(sub, sup) then row.length + 1
       else -1
 
-  // The standard library's iterators: these are walked lazily and joined, which Soundness's
-  // one-shot `Iterator` (the bare name, since 0.75.0) does not offer.
-  private def all: scala.collection.Iterator[Int] = scala.collection.Iterator.range(0, size)
+  private def all: List[Int] = List.range(0, size)
 
   // Every type beneath a type, itself included — but not `Nothing` or `Null`, which are beneath
   // every type and would make every `throw` a result of any type asked for; they are found only
   // by asking for them.
-  def beneath(id: Int): scala.collection.Iterator[Int] =
+  def beneath(id: Int): List[Int] =
     if isTop(id) then all.filter: i => i != nothingId && i != nullId
     else if isRefTop(id) then all.filter(isReferable(_))
-    else if isValTop(id) then all.filter(value(_)) ++ scala.collection.Iterator(anyValId)
-    else if id == nothingId then scala.collection.Iterator(nothingId)
-    else if id == nullId then scala.collection.Iterator(nullId)
-    else scala.collection.Iterator(id) ++ subs(id).iterator
+    else if isValTop(id) then all.filter(isValue(_)) + List(anyValId)
+    else if id == nothingId then List(nothingId)
+    else if id == nullId then List(nullId)
+    else id :: subs.readUnchecked(id).to[List]
 
   // Every type above a type, itself included, the universal ones among them.
-  def above(id: Int): scala.collection.Iterator[Int] =
-    if isTop(id) then scala.collection.Iterator(anyId, matchableId)
+  def above(id: Int): List[Int] =
+    if isTop(id) then List(anyId, matchableId)
     else if id == nothingId then all
     else if id == nullId then all.filter: i => isReferable(i) || isTop(i) || i == nullId
     else
-      val tops: scala.collection.Iterator[Int] =
-        if isValTop(id) then scala.collection.Iterator(anyId, matchableId)
-        else if value(id) then scala.collection.Iterator(anyValId, anyId, matchableId)
-        else scala.collection.Iterator(anyRefId, objectId, anyId, matchableId)
+      val tops: List[Int] =
+        if isValTop(id) then List(anyId, matchableId)
+        else if isValue(id) then List(anyValId, anyId, matchableId)
+        else List(anyRefId, objectId, anyId, matchableId)
 
-      scala.collection.Iterator(id) ++ supers(id).iterator ++ tops
+      (id :: supers.readUnchecked(id).to[List]) + tops

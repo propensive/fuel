@@ -616,10 +616,9 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
     // are sessions and fragments checked, the imports references resolve through, and which
     // entities the API has, which decides what links.
     def environment(sources: Text, apis: Apis): Text =
-      val addresses: scala.List[Text] =
-        apis.all.stdlib.toList.flatMap(_.entities.values.map(_.address).stdlib).sortBy(_.s)
-
-      val entities: Text = Digests.of(List.from(addresses).join(t"\n"))
+      import soundness.sortingAlgorithms.timsort
+      val addresses: List[Text] = apis.all.bind(_.entities.values.map(_.address)).order(_.s)
+      val entities: Text = Digests.of(addresses.join(t"\n"))
       val mode: Text = if config.session then t"session" else t"single"
       val checking: Text = if checked then t"checked" else t"tokenized"
 
@@ -773,8 +772,8 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
       val documented: Int = api.entities.values.count: e => e.own && e.doc.present
       val counts: Text = t"${own.show} of the project's own, ${documented.show} documented"
       Out.println(t"api: ${api.entities.size.show} entities, $counts")
-      val unrendered: Int = Inspection.unrendered.getAndSet(0)
-      val rendered: Int = Inspection.rendered.getAndSet(0)
+      val unrendered: Int = Inspection.unrendered.swap(0)
+      val rendered: Int = Inspection.rendered.swap(0)
       val shown: Text = t"${unrendered.show} of ${rendered.show} types"
       if unrendered > 0 then Out.println(t"api: $shown could not be rendered, and are shown as `?`")
 

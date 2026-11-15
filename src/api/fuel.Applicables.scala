@@ -74,7 +74,7 @@ object Applicables:
   val any: Text = Lattice.any
 
   // The types every value has: a receiver of one extends everything.
-  val universal: Set[Text] = Set.from(Lattice.tops)
+  val universal: Set[Text] = Lattice.tops
 
   private val depth: Int = 3
 
@@ -103,7 +103,7 @@ object Applicables:
   private def keyOf(locator: Optional[Locator]): Optional[Text] = locator.let(Api.key(_))
 
   // The ids of the types beneath a type, as the lattice gives them.
-  private def beneathIds(lattice: Lattice, id: Int): List[Int] = List.from(lattice.beneath(id))
+  private def beneathIds(lattice: Lattice, id: Int): List[Int] = lattice.beneath(id)
 
   def decorate(api: Api): Api =
     val entities: List[Api.Entity] = api.entities.values

@@ -115,8 +115,8 @@ object Hierarchy:
     key == Lattice.any || key == Lattice.anyRef || key == Lattice.anyVal
 
   // The ids of a type's written parents, and of its known children, as the lattice gives them.
-  private def parentIds(lattice: Lattice, id: Int): List[Int] = List.from(lattice.parents(id))
-  private def childIds(lattice: Lattice, id: Int): List[Int] = List.from(lattice.children(id))
+  private def parentIds(lattice: Lattice, id: Int): List[Int] = lattice.parents(id)
+  private def childIds(lattice: Lattice, id: Int): List[Int] = lattice.children(id)
 
   // acyclicity's `Layering` gives its layers, the links between them and each node's layer as
   // standard collections, which are read here, once each, as Soundness's.
