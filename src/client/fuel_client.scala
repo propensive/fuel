@@ -773,8 +773,8 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
       val documented: Int = api.entities.values.count: e => e.own && e.doc.present
       val counts: Text = t"${own.show} of the project's own, ${documented.show} documented"
       Out.println(t"api: ${api.entities.size.show} entities, $counts")
-      val unrendered: Int = Inspection.unrendered.getAndSet(0)
-      val rendered: Int = Inspection.rendered.getAndSet(0)
+      val unrendered: Int = Inspection.unrendered.swap(0)
+      val rendered: Int = Inspection.rendered.swap(0)
       val shown: Text = t"${unrendered.show} of ${rendered.show} types"
       if unrendered > 0 then Out.println(t"api: $shown could not be rendered, and are shown as `?`")
 

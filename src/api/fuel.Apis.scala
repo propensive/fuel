@@ -58,9 +58,8 @@ case class Apis(all: List[Api]):
   def of(entity: Api.Entity): Api = apply(entity.format).or(primary)
 
   // Every format's own words of a search, together.
-  def vocabulary: sci.Map[Text, Query.Word] =
-    all.stdlib.foldLeft(sci.Map[Text, Query.Word]()): (words, api) =>
-      words ++ api.format.vocabulary
+  def vocabulary: Map[Text, Query.Word] =
+    all.bind(_.format.vocabulary.to[List]).to[Map]
 
   // A search of every format's API, Scala's hits first: each format answers for itself, and
   // what one has to say of the query is kept only where it found something, or — when none

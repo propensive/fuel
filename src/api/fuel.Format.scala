@@ -119,4 +119,4 @@ trait Format:
 
   // The bare words of a search which say a kind or a modifier of this format's, besides
   // Scala's, which every search knows.
-  def vocabulary: sci.Map[Text, Query.Word] = sci.Map()
+  def vocabulary: Map[Text, Query.Word] = Map()

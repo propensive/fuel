@@ -1620,11 +1620,11 @@ object Util:
         ( m"every type of a dependency renders, all but a few through stenography " +
           m"whole and almost none as `?`" ):
 
-        val rendered: Int = Inspection.rendered.get
+        val rendered: Int = Inspection.rendered()
 
         ( rendered > 10000,
-          Inspection.fallbacks.get * 1000 < rendered,
-          Inspection.unrendered.get * 10000 < rendered )
+          Inspection.fallbacks() * 1000 < rendered,
+          Inspection.unrendered() * 10000 < rendered )
 
       . assert(_ == (true, true, true))
 
@@ -2294,7 +2294,7 @@ class Logger() uses Io.out initially, Io.out:
         test(m"a kind keyword"):
           query(t"def parse")
 
-        . assert(_ == Query(kinds = sci.Set(Kind.Def), names = List(Name(t"parse", false))))
+        . assert(_ == Query(kinds = Set(Kind.Def), names = List(Name(t"parse", false))))
 
         test(m"case class is one keyword; case alone is a case"):
           (query(t"case class").kinds, query(t"case").kinds)
@@ -2304,7 +2304,7 @@ class Logger() uses Io.out initially, Io.out:
         test(m"a modifier keyword"):
           query(t"inline def")
 
-        . assert(_ == Query(kinds = sci.Set(Kind.Def), modifiers = sci.Set(t"inline")))
+        . assert(_ == Query(kinds = Set(Kind.Def), modifiers = Set(t"inline")))
 
         test(m"? is given and ~ is extension"):
           (query(t"?").kinds, query(t"given").kinds, query(t"~").kinds)
@@ -2409,11 +2409,11 @@ class Logger() uses Io.out initially, Io.out:
           val shape: Int = lattice.id(t"sample.Shape").or(-1)
 
           ( lattice.parents(doc),
-            lattice.children(shape).contains(doc),
+            lattice.children(shape).has(doc),
             lattice.primaryParent(doc),
             lattice.parents(shape) )
 
-        . assert(_ == (scala.List(shapeId), true, shapeId, scala.Nil))
+        . assert(_ == (List(shapeId), true, shapeId, Nil))
 
       suite(m"Hierarchy"):
         import Hierarchy.{Edge, Graph, Node, Role}
@@ -3627,9 +3627,9 @@ entry .Doc   a document
               issue(13, t"closed", open = false, names = List(t"sample.Doc")) )
 
         val (index, unresolved) = Issue.index(issues, api0, Scope.document(Nil))
-        (index.get(t"sample.Doc").map(_.map(_.number)), unresolved)
+        (index.at(t"sample.Doc").let(_.map(_.number)), unresolved)
 
-      . assert(_ == (Some(List(12, 14)), List((12, t"sample.Gone"))))
+      . assert(_ == (List(12, 14), List((12, t"sample.Gone"))))
 
       test(m"a GitHub payload decodes to issues, pull requests left out"):
         val json: Text = t"""[

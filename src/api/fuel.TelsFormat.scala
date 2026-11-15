@@ -77,17 +77,17 @@ object TelsFormat extends Format:
   private val modifiers: List[Text] =
     List(t"optional", t"required", t"repeatable", t"irrepeatable", t"key")
 
-  override val vocabulary: sci.Map[Text, Query.Word] =
+  override val vocabulary: Map[Text, Query.Word] =
     val kinds: List[Kind] =
       List
         ( Kind.Schema, Kind.Document, Kind.Record, Kind.Select, Kind.Scalar, Kind.Field,
           Kind.Variant )
 
-    val words: scala.List[(Text, Query.Word)] =
-      kinds.stdlib.toList.map { (kind: Kind) => (kind.keyword, Query.Word(sci.Set(kind))) }
-      ++ modifiers.stdlib.toList.map { (word: Text) => (word, Query.Word(modifier = word)) }
+    val words: List[(Text, Query.Word)] =
+      kinds.map { (kind: Kind) => (kind.keyword, Query.Word(Set(kind))) }
+      + modifiers.map { (word: Text) => (word, Query.Word(modifier = word)) }
 
-    sci.Map.from(words)
+    words.to[Map]
 
   // The glyph of the Scala keyword a kind is most like, until it has a drawing of its own: a
   // schema's is a package's, a record's a class's, a select's an enum's, a variant's a case's,

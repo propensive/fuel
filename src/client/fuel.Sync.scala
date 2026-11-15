@@ -155,7 +155,7 @@ object Sync:
   def publish(states: List[State]): List[(Int, Text)] =
     val scope: Scope = Scope.document(Server.imports, Server.standard)
     val (index, unresolved) = Issue.index(states.bind(_.issues), Server.apis, scope)
-    Server.publishIssues(states, index)
+    Server.publishIssues(states, index.stdlib)
     unresolved
 
   // One poll of every attached target, from the state the daemon holds: what changed is merged,

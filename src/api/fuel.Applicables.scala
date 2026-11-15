@@ -74,7 +74,7 @@ object Applicables:
   val any: Text = Lattice.any
 
   // The types every value has: a receiver of one extends everything.
-  val universal: sci.Set[Text] = Lattice.tops
+  val universal: sci.Set[Text] = Lattice.tops.stdlib
 
   private val depth: Int = 3
 
@@ -153,7 +153,7 @@ object Applicables:
     // The type and every subtype beneath it, each with its distance, as entities.
     def beneath(key: Text): scala.List[(Api.Entity, Int)] =
       lattice.id(key).lay(scala.Nil): (sup: Int) =>
-        lattice.beneath(sup).toList.flatMap: sub =>
+        lattice.beneath(sup).stdlib.flatMap: sub =>
           def distance: Int = lattice.distance(sub, sup)
           api(lattice.key(sub)).let { (e: Api.Entity) => scala.List((e, distance)) }.or(scala.Nil)
 

@@ -83,8 +83,6 @@ object Links:
 
     def failure(message: Text): Block = report(Tone.Failure, message)
 
-    def decode(text: Text): Text = Text(java.net.URLDecoder.decode(text.s, "UTF-8").nn)
-
     // A document, and a place on it when the link names one.
     def document(section: Text, path: Text, fragment: Optional[Text]): Optional[Block] =
       corpus.doc(section, path) match
@@ -106,7 +104,7 @@ object Links:
 
       case Linkage.Target.Site(path, fragment) =>
         if path.starts(t"/doc/") then
-          val rest: List[Text] = path.skip(5).cut(t"/").map(decode)
+          val rest: List[Text] = path.skip(5).cut(t"/").map(_.urlDecode)
           document(rest.head.or(t""), rest.skip(1).join(t"/"), fragment)
         else if path.starts(t"/api/") then
           apis.locate(path.skip(5)) match
@@ -134,25 +132,20 @@ object Links:
         val message: Text = t"`$reference` names no $what in scope."
         if apis.isEmpty then report(Tone.Warning, message) else failure(message)
 
-  // A URL fetched, with a short patience: what is wrong with it, or nothing. Only HTTP is
-  // fetched; a `mailto:` or another scheme is taken as it is.
+  // A URL fetched: what is wrong with it, or nothing. Only HTTP is fetched; a `mailto:` or
+  // another scheme is taken as it is. Redirects are followed, as far as telekinesis follows
+  // them; telekinesis sets no limit on how long a server may take to answer.
   private def fetch(url: Text): Optional[Text] =
     if !url.starts(t"http://") && !url.starts(t"https://") then Unset else
-      try
-        val client: java.net.http.HttpClient =
-          java.net.http.HttpClient.newBuilder.nn
-          . connectTimeout(java.time.Duration.ofSeconds(10)).nn
-          . followRedirects(java.net.http.HttpClient.Redirect.NORMAL).nn
-          . build.nn
+      import errorDiagnostics.emptyDiagnostics
+      import httpBackends.javaNetHttp
+      import internetAccess.online
+      import logging.silentLogging
 
-        val request: java.net.http.HttpRequest =
-          java.net.http.HttpRequest.newBuilder(java.net.URI.create(url.s)).nn
-          . timeout(java.time.Duration.ofSeconds(20)).nn
-          . GET.nn
-          . build.nn
+      recover:
+        case error: Url.Error     => t"`$url` is not a valid URL."
+        case error: Connect.Error => t"`$url` could not be fetched: ${error.message}"
 
-        val status: Int =
-          client.send(request, java.net.http.HttpResponse.BodyHandlers.discarding).nn.statusCode
-
-        if status < 400 then Unset else t"`$url` answered ${status.show}."
-      catch case error: Exception => t"`$url` could not be fetched: ${error.toString.tt}"
+      . protect:
+        val code: Int = url.as[HttpUrl].fetch().status.code
+        if code < 400 then Unset else t"`$url` answered ${code.show}."

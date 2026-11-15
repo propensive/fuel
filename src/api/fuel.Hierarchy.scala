@@ -150,7 +150,7 @@ object Hierarchy:
         val visited: scm.HashSet[Int] = scm.HashSet()
 
         def ancestors(from: Int, depth: Int): Unit = if depth < 32 && visited.add(from) then
-          val written: scala.List[Int] = lattice.parents(from)
+          val written: scala.List[Int] = lattice.parents(from).stdlib
 
           val above: scala.List[Int] =
             if written.nonEmpty then written
@@ -185,13 +185,13 @@ object Hierarchy:
 
           more.max(0)
 
-        val children: scala.List[Api.Entity] = shown(lattice.children(id))
+        val children: scala.List[Api.Entity] = shown(lattice.children(id).stdlib)
         group(children, childLimit, Role.Child, entity.key)
 
         // Peers: the other types under the first parent as written.
         val peers: scala.List[Api.Entity] =
           lattice.primaryParent(id).lay(scala.Nil): (parent: Int) =>
-            shown(lattice.children(parent).filter(_ != id))
+            shown(lattice.children(parent).stdlib.filter(_ != id))
 
         lattice.primaryParent(id).let: (parent: Int) =>
           group(peers, peerLimit, Role.Peer, lattice.key(parent))
