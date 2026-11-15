@@ -32,8 +32,6 @@
                                                                                                   */
 package fuel
 
-import java.nio.file as jnf
-
 import soundness.*
 
 import dysasymptotics.{linearAccess, linearSize}
@@ -47,13 +45,6 @@ import textMetrics.uniformMetric
 // interface of one panel, served until stopped.
 object Presenter:
   val port: Int = 8061
-
-  private def exists(entry: Text): Boolean =
-    java.nio.file.Files.exists(java.nio.file.Path.of(entry.s))
-
-  private def read(path: Text): Optional[Text] =
-    try Text(java.nio.file.Files.readString(java.nio.file.Path.of(path.s)).nn)
-    catch case _: Exception => Unset
 
   // How often a step lands when a presentation plays itself, in seconds: a stand-in for the
   // timings a presentation will read from a file.
@@ -85,7 +76,7 @@ object Presenter:
     def print(blocks: List[Block]): Unit =
       renderer.blocks(blocks, width).each(Out.println(_))
 
-    read(path).lay[(Text, Block) | Problem](Problem.Unreadable): (text: Text) =>
+    readText(path).lay[(Text, Block) | Problem](Problem.Unreadable): (text: Text) =>
       Presentation.read(path, text) match
         case diagnostic: Block.Diagnostic =>
           print(List(diagnostic))
@@ -114,10 +105,10 @@ object Presenter:
     (using Stdio, Environment)
   :   Text | Problem =
 
-    if !jnf.Files.exists(jnf.Path.of(file.s)) then
+    if !onDisk(file) then
       Out.println(t"fuel: $file could not be read")
       Problem.Unreadable
-    else if !Aligner.isAudio(file) then read(file).or(Problem.Unreadable)
+    else if !Aligner.isAudio(file) then readText(file).or(Problem.Unreadable)
     else Aligner.home match
       case home: Aligner.Home =>
         Aligner.ensure(home) match
@@ -155,7 +146,7 @@ object Presenter:
     deck match
       case deck: Block.Deck =>
         val steps: Int = Presentation.steps(deck)
-        val count: Text = steps.toString.tt
+        val count: Text = steps.show
 
         align match
           case file: Text => alignment(config, presentation, file) match
@@ -172,22 +163,23 @@ object Presenter:
                     Problem.Misaligned
 
                   case ForcedAlignment.Outcome.Timed(schedule, comparison) =>
-                    val spoken: Text = words.size.toString.tt
+                    val spoken: Text = words.size.show
                     Out.println(t"fuel: autoplaying $count steps, timed by $spoken words of $file")
 
                     if comparison.differing > 0 then
-                      val differ: Text = comparison.differing.toString.tt
+                      val differ: Text = comparison.differing.show
                       Out.println(t"fuel: the transcript and the alignment differ in $differ words:")
                       comparison.shown.each { (hunk: Text) => Out.println(t"fuel:   $hunk") }
 
-                    val times: Text = schedule.size.toString.tt
+                    val times: Text = schedule.size.show
                     if schedule.size != steps
                     then Out.println(t"fuel: the deck has $count steps but the slides give $times times")
 
                     Presentation.scheduled(deck, schedule)
 
           case _ =>
-            val seconds: Text = interval.toString.tt
+            val decimalizer = Decimalizer(decimalPlaces = 1, exponentThreshold = Unset)
+            val seconds: Text = decimalizer.decimalize(interval)
             Out.println(t"fuel: autoplaying $count steps, one every $seconds s")
             Presentation.scheduled(deck, Presentation.regular(steps, interval))
 
@@ -203,12 +195,11 @@ object Presenter:
       val deck: Block = Presentation.deck(presentation, scala, Linker.none, tables)
       (deck, scala.problems + tables.problems)
 
-    val checked: Boolean = !config.classpath.nil && config.classpath.all(exists(_))
+    val checked: Boolean = !config.classpath.nil && config.classpath.all(onDisk(_))
 
     if !checked then build(Checker.tokenized)
-    else
-      try Checking.session(config.classpath, config.options)(build)
-      catch case error: Throwable => build(Checker.tokenized)
+    else sheltered(Checking.session(config.classpath, config.options)(build)): _ =>
+      build(Checker.tokenized)
 
   // The deck's interface: its title, and the deck as the one panel.
   def interface(title: Text, deck: Block): Interface =

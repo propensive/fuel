@@ -81,51 +81,62 @@ object GitHubIssues:
   // The issues of `target` which changed since `state` saw them, or all its open ones where
   // the state has seen none; `Unchanged` when the tracker says nothing has.
   def poll(target: Sync.Target, token: Optional[Text], state: State): Outcome =
-    import strategies.throwUnsafely
-
     val (owner, repository) = target match
       case Sync.Target.Github(owner, repository) => (owner, repository)
 
-    def fetch(url: HttpUrl, etag: Optional[Text]): Http.Response = (token, etag) match
-      case (token: Text, etag: Text) =>
-        url.fetch(accept = jsonMedia, authorization = Auth.Bearer(token), ifNoneMatch = etag)
-
-      case (token: Text, _) => url.fetch(accept = jsonMedia, authorization = Auth.Bearer(token))
-      case (_, etag: Text)  => url.fetch(accept = jsonMedia, ifNoneMatch = etag)
-      case _                => url.fetch(accept = jsonMedia)
-
     val filter: Text = state.since.lay(t"state=open"): (since: Text) => t"state=all&since=$since"
 
-    def url(page: Int): HttpUrl =
-      t"https://api.github.com/repos/$owner/$repository/issues?$filter&per_page=${pageSize.show}&page=${page.show}"
-      . as[HttpUrl]
+    // Any other failure is said only to have happened; nothing is raised.
+    safely:
+      recover:
+        case error: Http.Error       => Outcome.Failed(t"HTTP ${error.status.show}")
+        case error: Connect.Error    => Outcome.Failed(t"api.github.com could not be reached")
+        case error: Json.Error       =>
+          Outcome.Failed(t"the issues were not in the expected format")
 
-    // The first page carries the ETag, and may be answered that nothing changed; the pages
-    // follow until one is empty.
-    def pages(page: Int, etag: Optional[Text]): Outcome =
-      val response: Http.Response = fetch(url(page), if page == 1 then state.etag else Unset)
+        case error: Parse.Error      => Outcome.Failed(t"the issues were not valid JSON")
+        case error: Truncation.Error => Outcome.Failed(t"the issues were cut short")
+        case error: Url.Error        => Outcome.Failed(t"the issues URL is not valid")
 
-      if response.status == Http.Status.NotModified then Outcome.Unchanged
-      else
-        // The header by its name: telekinesis's `headers.eTag` would look for `e-tag`.
-        val tag: Optional[Text] =
-          if page == 1 then response.textHeaders.filter(_.key.lower == t"etag").map(_.value).head
-          else etag
-        val payloads: List[Payload] = mute[Http.Event](response.receive[Json]).as[List[Payload]]
-        val issues: List[Issue] = payloads.bind { payload => issue(payload).let(List(_)).or(Nil) }
+      . protect:
+          def fetch(url: HttpUrl, etag: Optional[Text]): Http.Response = (token, etag) match
+            case (token: Text, etag: Text) =>
+              url.fetch(accept = jsonMedia, authorization = Auth.Bearer(token), ifNoneMatch = etag)
 
-        if payloads.nil then Outcome.Changed(Nil, tag)
-        else pages(page + 1, tag) match
-          case Outcome.Changed(rest, _) => Outcome.Changed(issues + rest, tag)
-          case other                    => other
+            case (token: Text, _) =>
+              url.fetch(accept = jsonMedia, authorization = Auth.Bearer(token))
 
-    try pages(1, Unset) catch
-      case error: Http.Error      => Outcome.Failed(t"HTTP ${error.status.toString.tt}")
-      case error: Connect.Error   => Outcome.Failed(t"api.github.com could not be reached")
-      case error: Json.Error      => Outcome.Failed(t"the issues were not in the expected format")
-      case error: Parse.Error     => Outcome.Failed(t"the issues were not valid JSON")
-      case error: Truncation.Error => Outcome.Failed(t"the issues were cut short")
-      case error: Url.Error       => Outcome.Failed(t"the issues URL is not valid")
-      case error: Exception       => Outcome.Failed(error.toString.tt)
+            case (_, etag: Text) => url.fetch(accept = jsonMedia, ifNoneMatch = etag)
+            case _               => url.fetch(accept = jsonMedia)
+
+          def url(page: Int): HttpUrl =
+            val query: Text = t"$filter&per_page=${pageSize.show}&page=${page.show}"
+            t"https://api.github.com/repos/$owner/$repository/issues?$query".as[HttpUrl]
+
+          // The first page carries the ETag, and may be answered that nothing changed; the
+          // pages follow until one is empty.
+          def pages(page: Int, etag: Optional[Text]): Outcome =
+            val response: Http.Response = fetch(url(page), if page == 1 then state.etag else Unset)
+
+            if response.status == Http.Status.NotModified then Outcome.Unchanged
+            else
+              // The header by its name: telekinesis's `headers.eTag` would look for `e-tag`.
+              val tag: Optional[Text] =
+                if page != 1 then etag
+                else response.textHeaders.filter(_.key.lower == t"etag").map(_.value).head
+
+              val payloads: List[Payload] =
+                mute[Http.Event](response.receive[Json]).as[List[Payload]]
+
+              val issues: List[Issue] = payloads.bind(issue(_).lay(Nil)(List(_)))
+
+              if payloads.nil then Outcome.Changed(Nil, tag)
+              else pages(page + 1, tag) match
+                case Outcome.Changed(rest, _) => Outcome.Changed(issues + rest, tag)
+                case other                    => other
+
+          pages(1, Unset)
+
+    . or(Outcome.Failed(t"the issues could not be fetched"))
 
   type State = Sync.State

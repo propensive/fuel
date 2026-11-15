@@ -34,13 +34,14 @@ package fuel
 
 import soundness.*
 
-import java.util.concurrent as juc
-import scala.collection.immutable as sci
-
 import codepages.utf8Codepage
-
+import collations.codepointCollation
 import dysasymptotics.{linearAccess, linearSize}
+import filesystemBackends.javaBaseFilesystem
 import probates.cancelProbate
+import pyrocosm.Filing
+import soundness.collationComparable
+import sortingAlgorithms.timsort
 
 // What the API documentation is attached to: a tracker whose issues the pages show, attached by
 // `fuel sync github owner/repo` or a `sync github owner/repo` line of the configuration, and
@@ -62,9 +63,9 @@ object Sync:
 
   object Target:
     // The words of a `sync` line or command: the kind, then what it names.
-    def parse(words: List[Text]): Optional[Target] = words.stdlib.toList match
-      case scala.::(kind, scala.::(name, scala.Nil)) if kind == t"github" => name.cut(t"/").stdlib.toList match
-        case scala.::(owner, scala.::(repository, scala.Nil)) if owner != t"" && repository != t"" =>
+    def parse(words: List[Text]): Optional[Target] = words match
+      case List(kind, name) if kind == t"github" => name.cut(t"/") match
+        case List(owner, repository) if owner != t"" && repository != t"" =>
           Github(owner, repository)
 
         case _ => Unset
@@ -83,7 +84,7 @@ object Sync:
   object State:
     import Output.derivation.throwing
 
-    def encode(state: State): Text = t"tel 1.0\n\n${state.tel.show}"
+    def encode(state: State): Text = state.tel.show
     def decode(text: Text): Optional[State] = safely(text.read[Tel].as[State])
 
   // The project's sync directory: within its cache, or beside its `.fuel/classes` where there
@@ -95,43 +96,35 @@ object Sync:
   def file(directory: Text, target: Target): Text = t"$directory/${target.slug}.tel"
 
   def load(file: Text): Optional[State] =
-    val path: java.nio.file.Path = java.nio.file.Path.of(file.s).nn
-    if !java.nio.file.Files.exists(path) then Unset
-    else safely(java.nio.file.Files.readString(path).nn.tt).let(State.decode(_))
+    safely(file.as[Path on Linux]).let(Filing.text(_)).let(State.decode(_))
 
+  // Kept whole, its directory made if there is none; a state which cannot be kept is fetched
+  // again by the next poll.
   def save(file: Text, state: State): Unit =
-    val path: java.nio.file.Path = java.nio.file.Path.of(file.s).nn
-    java.nio.file.Files.createDirectories(path.getParent.nn)
-    java.nio.file.Files.writeString(path, State.encode(state).s)
+    safely(file.as[Path on Linux]).let(Filing.replace(_, State.encode(state)))
+    ()
 
   // The targets attached: the configuration's, and those synced before, whose state is kept.
   def targets(configured: List[Target], directory: Text): List[Target] =
-    val path: java.nio.file.Path = java.nio.file.Path.of(directory.s).nn
+    val files: List[Text] =
+      safely(directory.as[Path on Linux].children.to[List].map(_.encode)).or(Nil)
+      . filter(_.ends(t".tel"))
 
-    val kept: List[Target] =
-      if !java.nio.file.Files.isDirectory(path) then Nil else
-        val files: scala.List[java.nio.file.Path] =
-          scala.collection.immutable.ArraySeq.unsafeWrapArray(path.toFile.nn.listFiles().nn)
-          . toList.map(_.nn.toPath.nn).filter(_.toString.endsWith(".tel"))
+    val kept: List[Target] = files.bind: (file: Text) =>
+      load(file).let(_.target).let { text => Target.parse(text.cut(t" ")) }.lay(Nil)(List(_))
 
-        List.from:
-          files.flatMap: (file: java.nio.file.Path) =>
-            load(file.toString.tt).let(_.target).let { text => Target.parse(text.cut(t" ")) }
-            . let(scala.List(_)).or(scala.Nil)
-
-    val all: List[Target] = configured + kept
-    List.from(all.stdlib.distinct)
+    (configured + kept).distinct
 
   // The state after a fetch: each issue fetched replaces the one of its number, or is dropped
   // when it is closed; `since` moves to the latest change seen (the tracker's timestamps are
   // ISO 8601 in UTC, so the latest is the greatest as text), and the ETag is the response's.
   def merge(state: State, fetched: List[Issue], etag: Optional[Text]): State =
-    val numbers: sci.Set[Int] = fetched.stdlib.map(_.number).toSet
-    val kept: List[Issue] = state.issues.filter { issue => !numbers.contains(issue.number) }
+    val numbers: Set[Int] = fetched.map(_.number).to[Set]
+    val kept: List[Issue] = state.issues.filter { issue => !numbers.has(issue.number) }
     val all: List[Issue] = kept + fetched.filter(_.open)
-    val issues: List[Issue] = List.from(all.stdlib.sortBy(_.number))
-    val seen: scala.List[String] = state.since.let(_.s).let(scala.List(_)).or(scala.Nil) ++ fetched.stdlib.map(_.updated.s)
-    val latest: Optional[Text] = seen.maxOption.map(_.tt).getOrElse(Unset)
+    val issues: List[Issue] = all.order(_.number)
+    val seen: List[Text] = state.since.lay(Nil)(List(_)) + fetched.map(_.updated)
+    val latest: Optional[Text] = seen.maximize(identity(_))
     State(state.target, etag.or(state.etag), latest, issues)
 
   // What a poll of a target found: the state after it, how many issues it fetched (none when
@@ -155,7 +148,7 @@ object Sync:
   def publish(states: List[State]): List[(Int, Text)] =
     val scope: Scope = Scope.document(Server.imports, Server.standard)
     val (index, unresolved) = Issue.index(states.bind(_.issues), Server.apis, scope)
-    Server.publishIssues(states, index)
+    Server.publishIssues(states, Map.from(index))
     unresolved
 
   // One poll of every attached target, from the state the daemon holds: what changed is merged,
@@ -178,13 +171,13 @@ object Sync:
 
   val interval = 10*Minute
 
-  private val watching: juc.atomic.AtomicBoolean = juc.atomic.AtomicBoolean(false)
+  private val watching: Atomic.Bool = Atomic.Bool(false)
 
   // The daemon's refresher, started once: every ten minutes, while the dashboard is served, the
   // attached targets are polled, which asks the tracker only for what changed since the last
   // time, and costs nothing of its rate limit when nothing has.
   def watch(directory: Text, token: Optional[Text])(using Monitor): Unit =
-    if watching.compareAndSet(false, true) then
+    if watching.replace(false, true) then
       async:
         while true do
           if pyrocosm.Tool.services.exists { (name, _) => name == t"fuel/serve" } then refresh(directory, token)

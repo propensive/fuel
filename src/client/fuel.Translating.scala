@@ -32,10 +32,6 @@
                                                                                                   */
 package fuel
 
-import java.nio.file as jnf
-
-import scala.collection.immutable as sci
-
 // Excluded from the umbrella: `Compilation`, anthology's, which would outrank fuel's own.
 import soundness.{Format as _, Compilation as _, Query as _, *}
 
@@ -65,24 +61,16 @@ object Translating:
   // language and a path each.
   case class Source(path: Text, kind: Kind, text: Text, translations: List[(Text, Text)])
 
-  private def read(path: Text): Optional[Text] =
-    try Text(jnf.Files.readString(jnf.Path.of(path.s)).nn) catch case _: Exception => Unset
+  private def read(path: Text): Optional[Text] = readText(path)
 
   // A file written, in a directory made for it if there is none.
   private def write(path: Text, text: Text): Boolean =
-    try
-      Optional(jnf.Path.of(path.s).nn.getParent).let(jnf.Files.createDirectories(_))
-      jnf.Files.writeString(jnf.Path.of(path.s), text.s)
-      true
-    catch case _: Exception => false
-
-  private def exists(path: Text): Boolean = jnf.Files.exists(jnf.Path.of(path.s))
+    safely(path.as[Path on Linux]).lay(false)(Filing.replace(_, text))
 
   // Every overlay file beneath a directory, in order.
   def telFiles(directory: Text): List[Text] =
     safely(directory.as[Path on Linux]).lay(List[Text]()): (root: Path on Linux) =>
-      if !Filing.directory(root) then Nil
-      else List.from(Filing.beneath(root).map(_.encode).filter(_.ends(t".tel")).stdlib.sortBy(_.s))
+      if !Filing.directory(root) then Nil else filesBeneath(root, t".tel")
 
   private def source(config: Workspace.Config, kind: Kind, path: Text): List[Source] =
     read(path).lay(List[Source]()): (text: Text) =>
@@ -241,7 +229,7 @@ object Translating:
 
     files.bind: (file: Text) =>
       Translations.original(file, targets).lay(List[Block]()): (tongue: Text, original: Text) =>
-        if exists(original) then Nil else
+        if onDisk(original) then Nil else
           val message: Text =
             t"This would translate `${shown(config, original)}` into `$tongue`, but there is " +
               t"no such file."
@@ -298,7 +286,7 @@ object Translating:
   // A translation nobody has started, written for a translator to fill in. One which exists is
   // left as it is.
   private def supply(config: Workspace.Config, source: Source, target: Text)(using Stdio): Unit =
-    if !exists(target) then
+    if !onDisk(target) then
       val content: Optional[Text] = source.kind match
         case Kind.Document => Translation.skeleton(source.text).serialize
         case Kind.Overlay  => OverlayTranslations.generate(source.text)
