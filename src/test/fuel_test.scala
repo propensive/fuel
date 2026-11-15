@@ -3939,7 +3939,7 @@ entry .Doc   a document
   definition
       A *monad* is a monoid in the category of endofunctors.
 
-define type class
+define  type class
   keyword  typeclass
   keyword  interface
   definition  A set of operations over a type, given apart from it.
@@ -4041,6 +4041,88 @@ define type class
           case _                       => Nil
 
       . assert(_ == List(t"monad", t"type-class"))
+
+      val richer: Text = t"""define monad
+  synonym  Kleisli triple
+  synonym burrito
+  link https://example.com/monads
+  definition  A monoid in the category of endofunctors.
+
+define padding
+  unlisted
+  definition  What fills a value out to a width.
+
+define  user interface
+  unlisted
+  link  /doc/guide/ui.md
+  definition  Where a person and a program meet.
+"""
+
+      val rich: Glossary = Glossary.read(t"doc/glossary.tel", richer) match
+        case glossary: Glossary => glossary
+        case _                  => Glossary.none
+
+      test(m"a glossary which follows its schema has no faults"):
+        (Glossary.faults(t"doc/glossary.tel", tel), Glossary.faults(t"doc/glossary.tel", richer))
+
+      . assert(_ == (Nil, Nil))
+
+      test(m"a name of several words after one space, a value too many and an unknown keyword are faults"):
+        val written: Text =
+          t"define typeclass\n  definition  A set.\n\ndefine type class\n  definition  A set.\n\ndefine monad\n  keyword policy import\n  colour  blue\n"
+
+        failures(Glossary.faults(t"doc/glossary.tel", written))
+
+      . assert(_ == List((Tone.Failure, 8), (Tone.Failure, 9), (Tone.Failure, 4)))
+
+      test(m"a term's name and synonyms, its being unlisted and its keywords are read"):
+        rich.terms.map { term => (term.name, term.synonyms, term.unlisted) }
+
+      . assert: found =>
+          found == List
+            ( (t"monad", List(t"Kleisli triple", t"burrito"), false),
+              (t"padding", List[Text](), true), (t"user interface", List[Text](), true) )
+
+      test(m"a synonym finds its term in a search, and an unlisted term is found by none"):
+        (rich.search(t"burrito").map(_.name), rich.search(t"padding"), rich.search(t"monad").size)
+
+      . assert(_ == (List(t"monad"), Nil, 1))
+
+      test(m"a synonym in brackets is its term"):
+        rich.definitions.cut(t"\n").stdlib.take(3).toList
+
+      . assert: lines =>
+          lines == scala.List
+            ( t"[monad]: glossary:monad", t"[Kleisli triple]: glossary:monad",
+              t"[burrito]: glossary:monad" )
+
+      test(m"an unlisted term in brackets shows its definition, leading only to its own link"):
+        (term(doc(t"Some [padding] here.\n", rich)), term(doc(t"A [user interface] here.\n", rich)))
+
+      . assert: found =>
+          found ==
+            ( Inline.Annotated(Inline.text(t"padding"), Inline.text(t"What fills a value out to a width.")),
+              Inline.Annotated
+                ( List(Inline.Link(Inline.Destination.Local(t"/doc/guide/ui.md"), Inline.text(t"user interface"))),
+                  Inline.text(t"Where a person and a program meet.") ) )
+
+      test(m"the glossary page lists each synonym, leading to its term, and no unlisted term"):
+        rich.page(Linker.none).bind:
+          case Block.Heading(2, _, id)                   => id.let(id => List(t"#$id")).or(Nil)
+          case Block.Paragraph(List(_, Inline.Link(Inline.Destination.Local(_, fragment), _), _)) =>
+            fragment.let(List(_)).or(Nil)
+          case _                                         => Nil
+
+      . assert(_ == List(t"#burrito", t"monad", t"#kleisli-triple", t"monad", t"#monad"))
+
+      test(m"a synonym which is another term's name, or its own, is a failure, and dropped"):
+        val clash: Glossary.Term =
+          Glossary.Term(t"functor", t"y", Unset, t"other.tel", 4, synonyms = List(t"Monad", t"map", t"map"))
+
+        val (merged, problems) = Glossary.merge(List(glossary, Glossary(List(clash))))
+        (merged.terms.stdlib.last.synonyms, failures(problems))
+
+      . assert(_ == (Nil, List((Tone.Failure, 4), (Tone.Failure, 4))))
 
       test(m"a fence left open is a failure at its line, and the document is read as written"):
         val d: Doc = doc(t"Text.\n\n```scala\nval x = 1\n")
@@ -5155,6 +5237,44 @@ entry .Channel
         GlossaryTranslations.generate(terms.sub(t"A fruit.", t"A round fruit."), glossed)
 
       . assert(_ == glossed.sub(t"      - A fruit.\n", t"      ! A fruit.\n      - A round fruit.\n"))
+
+      val synonymous: Text =
+        t"tel 1.0\n\ndefine  user interface\n  synonym UI\n  unlisted\n  definition\n      Where a person and a program meet.\n"
+
+      test(m"a translation carries a term's synonyms, writing a value with spaces after two"):
+        GlossaryTranslations.generate(synonymous)
+
+      . assert(_ == t"tel 1.0\n\ndefine  user interface\n  synonym UI\n  definition\n      - Where a person and a program meet.\n")
+
+      test(m"a translated term has its own synonyms, is unlisted as its origin is, and says the name it translates"):
+        val read: Glossary = Glossary.read(t"en/glossary.tel", synonymous) match
+          case glossary: Glossary => glossary
+          case _                  => Glossary.none
+
+        val translated: Text =
+          t"tel 1.0\n\ndefine  user interface\n  term  interface utilisateur\n  synonym IU\n  definition\n      - Where a person and a program meet.\n      + Là où une personne et un programme se rencontrent.\n"
+
+        val note: Text => Text = name => t"In English: *$name*."
+        val found: Glossary.Term = GlossaryTranslations.foreign(t"fr/glossary.tel", translated, read, note).terms.stdlib.head
+
+        (found.name, found.synonyms, found.unlisted, found.definition)
+
+      . assert: found =>
+          found ==
+            ( t"interface utilisateur", List(t"IU"), true,
+              t"Là où une personne et un programme se rencontrent.\n\nIn English: *user interface*." )
+
+      test(m"a term named as the term it translates is, says nothing more"):
+        val note: Text => Text = name => t"In English: *$name*."
+        GlossaryTranslations.foreign(t"fr/glossary.tel", glossed, defined, note).terms.map(_.definition.cut(t"\n").stdlib.last)
+
+      . assert(_ == List(t"In English: *library*.", t"Une frontière commune.", t"In English: *apple*."))
+
+      test(m"a translated synonym which is a name in its language already is a failure"):
+        val clashing: Text = glossed.sub(t"  term bibliothèque\n", t"  term bibliothèque\n  synonym interface\n")
+        places(GlossaryTranslations.check(t"fr/glossary.tel", clashing, terms))
+
+      . assert(_ == List((t"fr/glossary.tel", 3, Tone.Failure)))
 
       test(m"a term renamed is one the translation lacks and one it should not have"):
         val renamed: Text = terms.sub(t"define apple", t"define pear")

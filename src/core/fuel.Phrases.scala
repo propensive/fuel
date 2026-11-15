@@ -65,6 +65,24 @@ object Phrases:
   // The glossary page: where a term is explained in full, as `See /doc/guide.md.`
   val see: Phrase = en(t"See") | fr(t"Voir") | de(t"Siehe")
 
+  // A translated term's entry: the name the original text gives it, as `In English: *library*.`,
+  // by the language it is written in where Fuel knows that language's name.
+  def original(language: Optional[Text], name: Text): Phrase =
+    language.let(_.cut(t"-").stdlib.head.lower).or(t"") match
+      case t"en" =>
+        en(t"In English: *$name*.") | fr(t"En anglais : *$name*.") | de(t"Auf Englisch: *$name*.")
+
+      case t"fr" =>
+        en(t"In French: *$name*.") | fr(t"En français : *$name*.") |
+          de(t"Auf Französisch: *$name*.")
+
+      case t"de" =>
+        en(t"In German: *$name*.") | fr(t"En allemand : *$name*.") | de(t"Auf Deutsch: *$name*.")
+
+      case _ =>
+        en(t"In the original: *$name*.") | fr(t"Dans l'original : *$name*.") |
+          de(t"Im Original: *$name*.")
+
   // The dashboard.
   val documents: Phrase = en(t"Documents") | fr(t"Documents") | de(t"Dokumente")
   val glossary: Phrase = en(t"Glossary") | fr(t"Glossaire") | de(t"Glossar")

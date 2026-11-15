@@ -46,21 +46,24 @@ import pyrocosm.{Block, Tone}
 //   define library
 //     term bibliothèque
 //     keyword lib
+//     synonym  bibliothèque logicielle
 //     definition
 //         - A collection of code that other programs use.
 //         + Un ensemble de code que d'autres programmes utilisent.
 //
 // So a term is tied to the one it translates by the file itself. An entry with no `term` is
-// one nobody has translated, and is the definitive term; its `keyword`s are its own
-// language's, in place of the definitive term's; and a `link` is written only where the page
+// one nobody has translated, and is the definitive term; its `keyword`s and `synonym`s are its
+// own language's, in place of the definitive term's; whether it is `unlisted` is the definitive
+// term's, the same in every language; and a `link` is written only where the page
 // which explains the term is another in this language, which a page of the site never is. A
 // translation is made from the definitive glossary (`generate`), and made again from it when
 // it changes; `check` holds one to the other; and `foreign` is the glossary a reader of the
 // language has.
 object GlossaryTranslations:
-  // An entry of a glossary or of a translation of one, as it is written: the name on its
-  // `define` line; its `term`, `keyword`s and `link`; its definition's text; the line (from 1)
-  // of the entry; and the line its definition's text begins on.
+  // An entry of a glossary or of a translation of one, as the schema reads it: the name on its
+  // `define` line; its `term` (the line's second value, or a child), `keyword`s, `link` and
+  // `synonym`s; its definition's text; the line (from 1) of the entry; and the line its
+  // definition's text begins on.
   case class Entry
     ( name:       Text,
       term:       Optional[Text],
@@ -68,7 +71,8 @@ object GlossaryTranslations:
       link:       Optional[Text],
       definition: Optional[Text],
       line:       Int,
-      site:       Int )
+      site:       Int,
+      synonyms:   List[Text] = Nil )
 
   private def parsed(text: Text): Optional[(Tel, Overlay.Lines)] =
     import strategies.throwUnsafely
@@ -86,14 +90,16 @@ object GlossaryTranslations:
       tel.childCompounds.to[List].filter(_.keyword == t"define").map: (compound: Tel.Compound) =>
         val children: List[Tel.Compound] = Overlay.childrenOf(compound)
 
-        def child(keyword: Text): Optional[Text] =
-          children.filter(_.keyword == keyword).head.let: (child: Tel.Compound) =>
-            val text: Text = joined(Overlay.inlineAtoms(child))
-            if text == t"" then Unset else text
+        // Each child's first value, by keyword: what the schema reads a value of one as.
+        def all(keyword: Text): List[Text] =
+          children.filter(_.keyword == keyword).map: (child: Tel.Compound) =>
+            Overlay.inlineAtoms(child).filter(_ != t"").head.or(t"")
 
-        val keywords: List[Text] =
-          children.filter(_.keyword == t"keyword").map(child => joined(Overlay.inlineAtoms(child)))
           . filter(_ != t"")
+
+        def child(keyword: Text): Optional[Text] = all(keyword).head
+        val keywords: List[Text] = all(t"keyword")
+        val atoms: List[Text] = Overlay.inlineAtoms(compound).filter(_ != t"")
 
         val body: Optional[Tel.Compound] = children.filter(_.keyword == t"definition").head
 
@@ -104,17 +110,19 @@ object GlossaryTranslations:
             if brief == t"" then Unset else (brief, lines(body))
 
         Entry
-          ( joined(Overlay.inlineAtoms(compound)), child(t"term"), keywords, child(t"link"),
-            definition.let(_(0)), lines(compound), definition.let(_(1)).or(lines(compound)) )
+          ( atoms.head.or(t""), Glossary.second(atoms).or(child(t"term")), keywords, child(t"link"),
+            definition.let(_(0)), lines(compound), definition.let(_(1)).or(lines(compound)),
+            all(t"synonym") )
 
   private def set(lines: sci.Vector[String], indent: Int): sci.Vector[String] =
     lines.map { (line: String) => if line == "" then "" else " ".repeat(indent).nn + line }
 
   // The translation of a definitive glossary: each of its terms an entry, with the `term`,
-  // the `keyword`s and the `link` the translation `old` gives it (and the definitive term's
-  // keywords where it is new), and its definition a `Translation` — that of `old`, brought up
-  // to date, or one nobody has translated. What comes before the first term in the definitive
-  // glossary comes first here. `Unset` if the glossary is not TEL.
+  // the `keyword`s, the `synonym`s and the `link` the translation `old` gives it (and the
+  // definitive term's keywords and synonyms where it is new), each value with spaces after two;
+  // and its definition a `Translation` — that of `old`, brought up to date, or one nobody has
+  // translated. What comes before the first term in the definitive glossary comes first here.
+  // `Unset` if the glossary is not TEL.
   def generate(definitive: Text, old: Optional[Text] = Unset): Optional[Text] =
     if parsed(definitive).absent then Unset else
       val prior: sci.List[Entry] = old.lay(sci.List[Entry]())(entries(_).stdlib)
@@ -126,15 +134,19 @@ object GlossaryTranslations:
       val written: sci.List[sci.Vector[String]] = entries(definitive).stdlib.map: (entry: Entry) =>
         val before: Option[Entry] = prior.find(_.name == entry.name)
 
+        def line(keyword: Text, value: Text): String = s"  ${Glossary.line(keyword, value).s}"
+
         val term: sci.Vector[String] =
-          before.flatMap(_.term.option).toVector.map { (term: Text) => s"  term ${term.s}" }
+          before.flatMap(_.term.option).toVector.map(line(t"term", _))
 
         val keywords: sci.Vector[String] =
-          before.map(_.keywords).getOrElse(entry.keywords).stdlib.toVector.map: (keyword: Text) =>
-            s"  keyword ${keyword.s}"
+          before.map(_.keywords).getOrElse(entry.keywords).stdlib.toVector.map(line(t"keyword", _))
+
+        val synonyms: sci.Vector[String] =
+          before.map(_.synonyms).getOrElse(entry.synonyms).stdlib.toVector.map(line(t"synonym", _))
 
         val link: sci.Vector[String] =
-          before.flatMap(_.link.option).toVector.map { (link: Text) => s"  link ${link.s}" }
+          before.flatMap(_.link.option).toVector.map(line(t"link", _))
 
         val definition: sci.Vector[String] =
           entry.definition.option.toVector.flatMap: (text: Text) =>
@@ -145,7 +157,8 @@ object GlossaryTranslations:
 
             sci.Vector("  definition") ++ set(Translation.split(translation.serialize), 6)
 
-        sci.Vector(s"define ${entry.name.s}") ++ term ++ keywords ++ link ++ definition
+        sci.Vector(Glossary.line(t"define", entry.name).s) ++ term ++ keywords ++ synonyms ++
+          link ++ definition
 
       val blocks: sci.List[sci.Vector[String]] =
         if head.isEmpty then written else head :: written
@@ -164,9 +177,14 @@ object GlossaryTranslations:
 
   // The glossary a reader of a translation's language has, of the glossary `definitive` read
   // from the file it translates: each of its terms as the translation says it — its `term`,
-  // its definition as its translation reads, its own keywords, and its `link` if it has one —
-  // and as it is defined where the translation says nothing of it.
-  def foreign(path: Text, text: Text, definitive: Glossary): Glossary =
+  // its definition as its translation reads, its own keywords and synonyms, and its `link` if
+  // it has one — and as it is defined where the translation says nothing of it. Whether a
+  // term is unlisted is the definitive term's. Where a term's name is not the name it
+  // translates, `original` says that name, and is the definition's last paragraph, so that a
+  // reader knows the word the original text uses.
+  def foreign
+    ( path: Text, text: Text, definitive: Glossary, original: Optional[Text => Text] = Unset )
+  :   Glossary =
     val theirs: sci.List[Entry] = entries(text).stdlib
 
     Glossary:
@@ -179,12 +197,16 @@ object GlossaryTranslations:
             val name: Text = entry.term.lay(term.name): (name: Text) =>
               if Glossary.nameable(name) then name else term.name
 
-            val definition: Text =
+            val read: Text =
               entry.definition.let(Translation.parse(_).foreign.text).or(term.definition)
+
+            val definition: Text =
+              if name.lower == term.name.lower then read
+              else original.lay(read) { (note: Text => Text) => t"$read\n\n${note(term.name)}" }
 
             Glossary.Term
               ( name, definition, entry.link.or(term.link), path, entry.line, entry.keywords,
-                term.name )
+                term.name, entry.synonyms, term.unlisted )
 
   // What is wrong with the translation of a glossary, read from `text` at `path`, of the
   // definitive glossary `definitive`: what is wrong with it as TEL; each definition which is
@@ -197,6 +219,9 @@ object GlossaryTranslations:
     Glossary.read(path, text) match
       case diagnostic: Block.Diagnostic =>
         List(diagnostic)
+
+      case _ if !Glossary.faults(path, text, translation = true).nil =>
+        Glossary.faults(path, text, translation = true)
 
       case _ =>
         val theirs: sci.List[Entry] = entries(text).stdlib
@@ -279,6 +304,30 @@ object GlossaryTranslations:
                           t"`$term` is also the name of another term, `$name`, as the glossary " +
                             t"defines it: in this language `[$term]` is `${entry.name}`." )
 
+                // A synonym which cannot be a name, or which is a name in this language already:
+                // this term's, or another's term or synonym.
+                val synonymous: sci.List[Translation.Finding] =
+                  val others: sci.List[Text] =
+                    theirs.filter(_.name != entry.name).flatMap: (other: Entry) =>
+                      other.term.option.toList ++ other.synonyms.stdlib
+
+                  entry.synonyms.stdlib.zipWithIndex.flatMap: (synonym: Text, index: Int) =>
+                    val slug: Text = Blocks.slug(synonym)
+                    val own: sci.List[Text] =
+                      entry.term.option.toList ++ entry.synonyms.stdlib.take(index)
+
+                    if !Glossary.nameable(synonym) then
+                      finding
+                        ( Tone.Failure, entry.line,
+                          t"`$synonym` cannot be a synonym: a name is written in brackets, so it " +
+                            t"cannot hold one." )
+                    else if (own ++ others).exists(Blocks.slug(_) == slug) then
+                      finding
+                        ( Tone.Failure, entry.line,
+                          t"`$synonym` is a name in this language already, so `[$synonym]` " +
+                            t"would not say which term is meant." )
+                    else sci.Nil
+
                 val linked: sci.List[Translation.Finding] =
                   entry.link.option.toList.flatMap: (link: Text) =>
                     val local: Boolean = original.link.lay(false)(_.starts(t"/"))
@@ -291,7 +340,7 @@ object GlossaryTranslations:
                             t"`${original.link.or(t"")}`, which is the same page in every " +
                             t"language: this `link` is in place of it." )
 
-                unnamed ++ prose ++ named ++ linked
+                unnamed ++ prose ++ named ++ synonymous ++ linked
 
         val diagnostics: List[Block.Diagnostic] =
           Translation.report(path, text, List.from(absent ++ entered))
