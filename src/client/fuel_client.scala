@@ -153,6 +153,13 @@ object ui:
         Nil,
         "bring each translation up to the text it translates, keeping what it was written for" )
 
+  val DryRun =
+    Flag[Unit]
+      ( "dry-run",
+        false,
+        Nil,
+        "with --update, say what each translation would become, and write nothing" )
+
   val Language =
     Flag[Text]
       ( "language",
@@ -338,6 +345,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
     case ui.Translate() :: rest =>
       val config: Workspace.Config = Workspace.load(directory)
       val update: Boolean = ui.Update().present
+      val dry: Boolean = ui.DryRun().present
 
       // Registered here, so that it is offered and documented; its value is the word after it.
       ui.Language()
@@ -356,7 +364,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
 
       . map { (word: Text, _) => absolute(directory, word) }
 
-      ambient(translate(config, update, tongue, flags.exists(words.has(_)), files))
+      ambient(translate(config, update, dry, tongue, flags.exists(words.has(_)), files))
 
     case _ =>
       ambient
@@ -369,17 +377,25 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
 private def translate
   ( config: Workspace.Config,
     update: Boolean,
+    dry:    Boolean,
     tongue: Optional[Text],
     asked:  Boolean,
     files:  List[Text] )
   ( using Stdio, Environment )
-:   Exit | Tool.UsageError.type | NoDocument.type | Mistranslated.type =
+:   Exit | Tool.UsageError.type | NoDocument.type | Mistranslated.type | Withheld.type =
 
-  if asked && !tongue.lay(false)(Tongue.valid(_)) then
-    Out.println(t"fuel: usage: fuel translate [--update] [--language <language>] [<file>...]")
+  val usage: Text =
+    t"fuel: usage: fuel translate [--update [--dry-run]] [--language <language>] [<file>...]"
+
+  if dry && !update then
+    Out.println(usage)
+    Out.println(t"fuel: `--dry-run` says what `--update` would do, so it is given with it")
+    Tool.UsageError
+  else if asked && !tongue.lay(false)(Tongue.valid(_)) then
+    Out.println(usage)
     Out.println(t"fuel: a language is written as `fr`, or with a region as `pt-BR`")
     Tool.UsageError
-  else if update then Translating.update(config, tongue, files)
+  else if update then Translating.update(config, tongue, files, dry)
   else Translating.run(config, tongue, files, width)
 
 // Compiles every configured directory into the daemon's corpus, which the dashboard shows, and
@@ -1093,7 +1109,7 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
             ( overlay.file, tongue, config.translations, (file: Text) => readText(file).present )
 
         served.let(readText(_)).lay(overlay): (text: Text) =>
-          Overlay.read(overlay.file, text, OverlayTranslations.foreign(_)) match
+          OverlayTranslations.read(overlay.file, text) match
             case translated: Overlay => translated
             case _                   => overlay
 

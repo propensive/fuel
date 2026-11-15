@@ -165,7 +165,11 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   compile` and `fuel translate` check each one (stale text, untranslated passages, structure
   which is not the definitive text's), `fuel translate` writes those nobody has begun, and
   `fuel translate --update` rewrites one for a changed text, keeping what its translation was
-  written for in `! ` lines for the translator to work from. The dashboard
+  written for in `! ` lines for the translator to work from; it writes nothing which would add a
+  failure, lose a `+` line whose text remains, or change again on a second update
+  (`Translating.hazards`), and `--dry-run` says what it would write. TEL reads `! ` at the start
+  of a line's text as indentation, so a TEL translation is read with its `!` sigils shielded
+  (`Translation.shielded`). The dashboard
   serves each language (Pyrocosm's `Audience`): a document as its translation reads, an
   entity's page as its overlay's does, Fuel's own words as a `Polyglot` each (`Phrases`) in
   English, French and German. A glossary named beneath a `original` is translated too

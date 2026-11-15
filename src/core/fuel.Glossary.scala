@@ -149,7 +149,8 @@ object Glossary:
     import strategies.throwUnsafely
     import parsing.trackPositions
 
-    val tel: Optional[Tel] = try headed(text).read[Tel] catch case error: Tel.Error => Unset
+    val read: Text = if translation then Translation.shielded(text) else text
+    val tel: Optional[Tel] = try headed(read).read[Tel] catch case error: Tel.Error => Unset
 
     tel.lay(Nil): (tel: Tel) =>
       val faults: Faults =

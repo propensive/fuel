@@ -5362,3 +5362,100 @@ entry .Channel
         OverlayTranslations.lost(overlay.sub(t"entry #length", t"entry #size"), translated).map(_.title)
 
       . assert(_ == List(t"the `info` of `.Text#length`"))
+
+      def source(kind: Translating.Kind, text: Text): Translating.Source =
+        Translating.Source(t"/absent/en/sample", kind, text, List((t"fr", t"/absent/fr/sample")))
+
+      def remade(kind: Translating.Kind, text: Text, old: Text): Optional[Text] =
+        Translating.remake(source(kind, text), old)
+
+      // Each kind's update, made again, is the same; and a translation of its text as it stands
+      // is not changed by one.
+      def settled(kind: Translating.Kind, text: Text, changed: Text, old: Text): (Boolean, Boolean) =
+        val once: Optional[Text] = remade(kind, changed, old)
+        (once.let(remade(kind, changed, _)) == once, remade(kind, text, old) == old)
+
+      def hazards(kind: Translating.Kind, text: Text, old: Text, current: Text): List[Text] =
+        Translating.hazards(source(kind, text), t"fr", t"/absent/fr/sample", old, current)
+
+      test(m"a document's update is settled"):
+        settled(Translating.Kind.Document, english, english.sub(t"The first paragraph", t"The opening paragraph"), french)
+
+      . assert(_ == (true, true))
+
+      test(m"an overlay's update is settled"):
+        settled(Translating.Kind.Overlay, overlay, overlay.sub(t"its length", t"how long it is"), translated)
+
+      . assert(_ == (true, true))
+
+      test(m"the update of an overlay whose entry has its info on its line is settled"):
+        OverlayTranslations.generate(beside).lay((false, false)): (stub: Text) =>
+          settled(Translating.Kind.Overlay, beside, beside.sub(t"its size", t"how big it is"), stub)
+
+      . assert(_ == (true, true))
+
+      test(m"a glossary's update is settled"):
+        settled(Translating.Kind.Glossary, terms, terms.sub(t"A fruit.", t"A round fruit."), glossed)
+
+      . assert(_ == (true, true))
+
+      test(m"a section file's update is settled"):
+        settled(Translating.Kind.Section, described, t"tel 1.0\n\ntitle  Handbook\n", redescribed)
+
+      . assert(_ == (true, true))
+
+      test(m"an update which keeps every translation and adds no failure may be written"):
+        val changed: Text = overlay.sub(t"its length", t"how long it is")
+        remade(Translating.Kind.Overlay, changed, translated).lay(List(t"none")): (current: Text) =>
+          hazards(Translating.Kind.Overlay, changed, translated, current)
+
+      . assert(_ == Nil)
+
+      test(m"an update may leave out the translation of an entry which has gone"):
+        val changed: Text = overlay.sub(t"entry #length", t"entry #size")
+        remade(Translating.Kind.Overlay, changed, translated).lay(List(t"none")): (current: Text) =>
+          hazards(Translating.Kind.Overlay, changed, translated, current)
+
+      . assert(_ == Nil)
+
+      test(m"an update which adds a failure is not written"):
+        hazards(Translating.Kind.Overlay, overlay, translated, translated.sub(t"sample.Other", t"sample.Autre"))
+
+      . assert(_ == List(t"it would have 1 failures which the translation does not have", t"updating it again would change it again"))
+
+      test(m"an update which loses a translation whose text is still there is not written"):
+        hazards(Translating.Kind.Overlay, overlay, translated, translated.sub(t"        + sa longueur\n", t""))
+
+      . assert(_ == List(t"it would lose 1 lines of translation whose text is still there"))
+
+      test(m"an update which an update would change again is not written"):
+        hazards(Translating.Kind.Section, described, redescribed, t"tel 1.0\n\ntitle\n    - Handbook\n    + Guide de l'utilisateur\n")
+
+      . assert(_ == List(t"updating it again would change it again"))
+
+
+      test(m"a glossary's translation keeps what was translated through two updates"):
+        val changed: Text = terms.sub(t"A fruit.", t"A round fruit.")
+        remade(Translating.Kind.Glossary, changed, glossed).let(remade(Translating.Kind.Glossary, changed, _)).let(GlossaryTranslations.entries(_).map(_.term))
+
+      . assert(_ == List(t"bibliothèque", t"interface", t"Écrou"))
+
+      test(m"a section file's title with a `!` line is read"):
+        SectionFile.title(t"tel 1.0\n\ntitle\n    ! User guide\n    - Handbook\n    + Guide\n").let(_.text)
+
+      . assert(_ == t"! User guide\n- Handbook\n+ Guide")
+
+      test(m"an overlay's translation with a `!` line at the end reads as an overlay"):
+        OverlayTranslations.read(t"x", t"base sample\ninfo\n    ! a package\n    - the package\n    + un paquet\n") match
+          case overlay: Overlay => overlay.doc.info
+          case _                => Unset
+
+      . assert(_ == t"un paquet")
+
+      test(m"an update may remake a passage which says the same in both languages"):
+        val same: Text = t"tel 1.0\n\ntitle\n    - Soundness\n    + Soundness\n"
+        val changed: Text = t"tel 1.0\n\ntitle  The Soundness libraries\n"
+        remade(Translating.Kind.Section, changed, same).lay(List(t"none")): (current: Text) =>
+          hazards(Translating.Kind.Section, changed, same, current)
+
+      . assert(_ == Nil)

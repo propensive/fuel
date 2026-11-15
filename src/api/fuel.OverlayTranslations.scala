@@ -86,7 +86,7 @@ object OverlayTranslations:
     import strategies.throwUnsafely
 
     try
-      val tel: Tel = Overlay.headed(text).read[Tel]
+      val tel: Tel = Overlay.headed(Translation.shielded(text)).read[Tel]
       (tel, Overlay.Lines(text, tel.childCompounds.to[List]))
     catch case error: Tel.Error => Unset
 
@@ -98,7 +98,7 @@ object OverlayTranslations:
           val keyword: Text = compound.keyword
           val line: Int = lines(compound)
           val inline: sci.List[Text] = Overlay.inlineAtoms(compound).stdlib
-          val source: Optional[Text] = Overlay.sourceAtom(compound)
+          val source: Optional[Text] = Overlay.sourceAtom(compound).let(Translation.unshielded(_))
           val entry: List[Text] = List.from(path)
 
           if keyword == t"info" || keyword == t"detail" then
@@ -219,7 +219,11 @@ object OverlayTranslations:
 
   // An overlay's prose as its translation reads: what `Overlay.read` is given to read a
   // translation as the overlay it is in its own language.
-  def foreign(text: Text): Text = Translation.parse(text).foreign.text
+  def foreign(text: Text): Text = Translation.parse(Translation.unshielded(text)).foreign.text
+
+  // The translation of an overlay read as the overlay it is in its own language.
+  def read(path: Text, text: Text): Overlay | Block.Diagnostic =
+    Overlay.read(path, Translation.shielded(text), foreign)
 
   // What is wrong with the translation of an overlay, read from `text` at `path`, of the
   // definitive overlay `definitive`: what is wrong with it as an overlay, as its translation
@@ -227,7 +231,7 @@ object OverlayTranslations:
   // `Translation` and `Mirror` find; a run or an entry which one has and the other lacks; and
   // an entry which says other than the one it translates of what is the same in every language.
   def check(path: Text, text: Text, definitive: Text): List[Block] =
-    Overlay.read(path, text, foreign) match
+    read(path, text) match
       case diagnostic: Block.Diagnostic =>
         List(diagnostic)
 

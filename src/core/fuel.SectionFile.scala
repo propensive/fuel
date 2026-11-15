@@ -72,7 +72,7 @@ object SectionFile:
     import strategies.throwUnsafely
     stratiform.Tels.Validation.validate(schemaSource.read[Tel].as[stratiform.Tels])
 
-  private def headed(text: Text): Text = pyrocosm.Tels.headed(text)(0)
+  private def headed(text: Text): Text = pyrocosm.Tels.headed(Translation.shielded(text))(0)
   private def added(text: Text): Int = pyrocosm.Tels.headed(text)(1)
 
   private case class Faults(items: List[(Tel.Error, Text, Span)] = Nil)
@@ -131,7 +131,8 @@ object SectionFile:
   def title(text: Text): Optional[Prose] =
     parsed(text).let: (tel: Tel) =>
       tel.fields(t"title").to[List].head.let: (node: Tel) =>
-        val written: Text = node.atomTexts.to[List].filter(_ != t"").join(t" ")
+        val written: Text =
+          Translation.unshielded(node.atomTexts.to[List].filter(_ != t"").join(t" "))
         val lines: sci.Vector[String] = Translation.split(text)
         val index: Int = lines.indexWhere { line => line == "title" || line.startsWith("title ") }
         val brief: Boolean = index >= 0 && lines(index).trim.nn != "title"

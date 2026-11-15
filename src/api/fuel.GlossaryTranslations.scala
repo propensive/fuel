@@ -78,7 +78,7 @@ object GlossaryTranslations:
     import strategies.throwUnsafely
 
     try
-      val tel: Tel = Overlay.headed(text).read[Tel]
+      val tel: Tel = Overlay.headed(Translation.shielded(text)).read[Tel]
       (tel, Overlay.Lines(text, tel.childCompounds.to[List]))
     catch case error: Tel.Error => Unset
 
@@ -106,7 +106,9 @@ object GlossaryTranslations:
         val definition: Optional[(Text, Int)] = body.let: (body: Tel.Compound) =>
           val brief: Text = joined(Overlay.inlineAtoms(body))
 
-          Overlay.sourceAtom(body).let { (text: Text) => (text, lines(body) + 1) }.or:
+          val source: Optional[Text] = Overlay.sourceAtom(body).let(Translation.unshielded(_))
+
+          source.let { (text: Text) => (text, lines(body) + 1) }.or:
             if brief == t"" then Unset else (brief, lines(body))
 
         Entry

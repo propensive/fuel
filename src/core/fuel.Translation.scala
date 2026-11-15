@@ -64,6 +64,24 @@ import pyrocosm.{Block, Tone}
 // Nothing here knows what the text is: `Mirror` holds the two projections of a Markdown text
 // to the same structure.
 object Translation:
+  // TEL reads `!` and a space, at the start of a line's text, as part of its indentation, so a
+  // translation held in a TEL file would lose its `!` lines to the reader, or have them read as
+  // a literal. While such a file is read as TEL, each `!` sigil is a character no text has
+  // (`shielded`), and the text read has it back (`unshielded`); the columns are the same.
+  private val shield: Char = '\uE000'
+
+  def shielded(text: Text): Text =
+    Text:
+      split(text).map: (line: String) =>
+        val content: String = line.dropWhile(_ == ' ')
+        if content == "!" || content.startsWith("! ") then
+          line.take(line.length - content.length) + shield + content.drop(1)
+        else line
+
+      . mkString("\n")
+
+  def unshielded(text: Text): Text = Text(text.s.replace(shield, '!').nn)
+
   enum Mark:
     case Common, Definitive, Foreign, Former
 
