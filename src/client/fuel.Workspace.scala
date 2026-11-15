@@ -81,7 +81,7 @@ object Workspace:
     stratiform.Tels.Validation.validate(schemaSource.read[Tel].as[stratiform.Tels])
 
   private case class Faults(items: List[(Tel.Error, Text)] = Nil)
-  extends Error(m"the configuration has ${items.stdlib.size} faults"):
+  extends Error(m"the configuration has ${items.size} faults"):
     def +(error: Tel.Error, pointer: Text): Faults = Faults(items + List((error, pointer)))
 
   // Every fault the schema finds in a configuration, with the path of what it concerns.
@@ -107,10 +107,8 @@ object Workspace:
     val index: Int = path.skip(1).head.let { text => safely(text.as[Int]) }.or(0)
 
     val named: Text =
-      tel.fields(t"section").to[List].stdlib.lift(index).map: (node: Tel) =>
-        t"`section ${node.atomTexts.to[List].filter(_ != t"").join(t" ")}`"
-
-      . getOrElse(t"a `section`")
+      tel.fields(t"section").to[List].at(Ordinal.zerary(index)).lay(t"a `section`"):
+        (node: Tel) => t"`section ${node.atomTexts.to[List].filter(_ != t"").join(t" ")}`"
 
     error.reason match
       case Reason.UnknownKeyword =>
@@ -249,7 +247,7 @@ object Workspace:
 
     // Whether a name can be a section's: it is one segment of a page's address.
     def nameable(name: Text): Boolean =
-      name != t"" && !name.s.contains("/") && !name.s.contains("#")
+      name != t"" && !name.contains(t"/") && !name.contains(t"#")
 
     val form: Text = t"`section guide doc`, with `original en-US en` beneath it"
 
@@ -359,7 +357,7 @@ object Workspace:
 
     // Two sections of one name would have one address.
     val shared: List[Text] =
-      sections.map(_(0)).distinct.filter(name => sections.filter(_(0) == name).stdlib.size > 1)
+      sections.map(_(0)).distinct.filter(name => sections.filter(_(0) == name).size > 1)
       . map: (name: Text) =>
           t"more than one `section` is named `$name`: each has a name of its own"
 

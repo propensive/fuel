@@ -32,8 +32,6 @@
                                                                                                   */
 package fuel
 
-import scala.collection.immutable as sci
-
 import soundness.*
 
 import codepages.utf8Codepage
@@ -51,19 +49,18 @@ object ForcedAlignment:
   case class Word(label: Text, start: Double, end: Double)
 
   // The labels MFA gives silence, pauses and noise, which are not words of the transcript.
-  private val silent: sci.Set[Text] = sci.Set(t"", t"sil", t"sp", t"spn", t"<eps>", t"<sil>")
+  private val silent: Set[Text] = Set(t"", t"sil", t"sp", t"spn", t"<eps>", t"<sil>")
 
   private def number(text: Text): Optional[Double] = safely(text.trim.as[Double])
 
   // A word as it is compared: lower-case, without punctuation but for the apostrophes and
   // hyphens within it, as MFA normalises a transcript's words.
   def normal(word: Text): Text =
-    val lower: String = word.s.toLowerCase.nn
-    Text(lower.replaceAll("[^\\p{L}\\p{N}'’\\-]", "").nn.replace('’', '\'').nn)
+    word.lower.sub(r"[^\p{L}\p{N}'’\-]", t"").sub(t"’", t"'")
 
   // A transcript's words, normalised, the empty ones gone.
   def words(transcript: Text): List[Text] =
-    val spaced: Text = Text(transcript.s.replaceAll("\\s+", " ").nn)
+    val spaced: Text = transcript.sub(r"\s+", t" ")
     spaced.cut(t" ").map(normal).filter(_ != t"")
 
   // The spoken words of an alignment, in order, by the format its text is in; or what is wrong
@@ -77,7 +74,7 @@ object ForcedAlignment:
     else t"not a TextGrid, JSON or CSV alignment"
 
   private def spoken(words: List[Word]): List[Word] | Text =
-    val heard: List[Word] = words.filter { (word: Word) => !silent.contains(word.label) }
+    val heard: List[Word] = words.filter { (word: Word) => !silent.has(word.label) }
     if heard.nil then t"the alignment has no words in its `words` tier" else heard
 
   // A long-form TextGrid: the intervals of the item named `words`, each an `xmin`, an `xmax`
@@ -111,17 +108,14 @@ object ForcedAlignment:
 
   // MFA's JSON: `tiers.words.entries`, each `[start, end, label]`.
   private def json(text: Text): List[Word] | Text =
-    import strategies.throwUnsafely
-
-    try
+    val found: Optional[List[Word]] = safely:
       val document: Json = text.read[Json]
       val entries: List[Json] = document.tiers.words.entries.as[List[Json]]
 
-      val found: List[Word] = entries.map: (entry: Json) =>
+      entries.map: (entry: Json) =>
         Word(entry(2).as[Text], entry(0).as[Double], entry(1).as[Double])
 
-      spoken(found)
-    catch case error: Exception => t"the JSON has no `tiers.words.entries` of `[start, end, word]`"
+    found.lay(t"the JSON has no `tiers.words.entries` of `[start, end, word]`")(spoken(_))
 
   // MFA's CSV: `Begin,End,Label,Type,Speaker`, the rows whose type is `words`.
   private def csv(text: Text): List[Word] | Text =
@@ -152,8 +146,12 @@ object ForcedAlignment:
     def close: Boolean = differing <= (expected.size/10).max(1)
 
     // The place in the alignment of each word of the transcript, by its index, where it is.
-    def places: sci.Map[Int, Int] =
-      sci.Map.from(edits.stdlib.collect { case Par(left, right, _) => left -> right })
+    def places: Map[Int, Int] =
+      edits.bind:
+        case Par(left, right, _) => List(left -> right)
+        case _                   => Nil
+
+      . to[Map]
 
     // The differences, each shown with up to three words either side: a word of the
     // transcript not spoken as `-word`, one spoken which the transcript lacks as `+word`.
@@ -203,35 +201,41 @@ object ForcedAlignment:
     val transcripts: List[List[Text]] = presentation.slides.map(_.transcript.let(words).or(Nil))
 
     val missing: List[Text] = presentation.slides.indexed.bind: (slide: Presentation.Slide, index: Ordinal) =>
-      if transcripts.at(index).or(Nil).nil
-      then List(t"slide ${(index.n0 + 1).toString.tt} (line ${slide.line.toString.tt}) has no transcript, which timing it by an alignment needs")
-      else Nil
+      if !transcripts.at(index).or(Nil).nil then Nil else
+        List
+          ( t"slide ${index.n1.show} (line ${slide.line.show}) has no transcript, which timing it "
+            + t"by an alignment needs" )
 
     if !missing.nil then Outcome.Failed(missing) else
       val expected: List[Text] = transcripts.bind(identity(_))
       val comparison: Comparison = compare(expected, aligned)
 
       if !comparison.close then
-        val count: Text = comparison.differing.toString.tt
-        val total: Text = expected.size.toString.tt
+        val count: Text = comparison.differing.show
+        val total: Text = expected.size.show
         val heading: Text = t"the transcript and the alignment differ in $count of $total words, which is too many to time the presentation by:"
         Outcome.Failed(heading :: comparison.shown.map { hunk => t"  $hunk" })
       else
-        val places: sci.Map[Int, Int] = comparison.places
+        val places: Map[Int, Int] = comparison.places
 
         // Each slide's time: that of the first of its words the alignment has.
         val times: List[Optional[Double]] = transcripts.indexed.map: (words: List[Text], index: Ordinal) =>
-          val offset: Int = transcripts.keep(index.n0).map(_.size).stdlib.sum
-          val found: List[Int] = List.range(offset, offset + words.size).bind(places.get(_).toList.pipe(List.from(_)))
+          val offset: Int = transcripts.keep(index.n0).fold(0)(_ + _.size)
+
+          val found: List[Int] =
+            List.range(offset, offset + words.size).bind(places.at(_).lay(Nil)(List(_)))
+
           found.head.let { (place: Int) => aligned.at(Ordinal.zerary(place)) }.let(_.start)
 
         val unplaced: List[Text] = times.indexed.bind: (time: Optional[Double], index: Ordinal) =>
           if time.present then Nil else
             val line: Int = presentation.slides.at(index).let(_.line).or(1)
-            List(t"slide ${(index.n0 + 1).toString.tt} (line ${line.toString.tt}) has a transcript none of whose words the alignment has")
+            List
+              ( t"slide ${index.n1.show} (line ${line.show}) has a transcript none of whose "
+                + t"words the alignment has" )
 
         // Times to the millisecond: an aligner's floats carry noise beyond it.
-        def rounded(time: Double): Double = java.lang.Math.round(time*1000.0)/1000.0
+        def rounded(time: Double): Double = (time*1000.0).round/1000.0
 
         if !unplaced.nil then Outcome.Failed(unplaced)
         else Outcome.Timed(times.skip(1).map(_.or(0.0)).map(rounded), comparison)

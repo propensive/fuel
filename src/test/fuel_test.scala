@@ -1076,9 +1076,9 @@ item []:
 
       test(m"the transcript's words are compared with the alignment's, a word the aligner did not know standing for any"):
         val comparison = ForcedAlignment.compare(List(t"one", t"two", t"three", t"four", t"five", t"six"), aligned)
-        (comparison.differing, comparison.close, comparison.places.get(3), comparison.places.get(5))
+        (comparison.differing, comparison.close, comparison.places.at(3), comparison.places.at(5))
 
-      . assert(_ == (0, true, Some(3), Some(5)))
+      . assert(_ == (0, true, 3, 5))
 
       test(m"the schedule is each later slide's first word's time"):
         timed(List(t"One, two three.", t"Four five.", t"Six!"))
@@ -1136,12 +1136,12 @@ item []:
         ( create.head, create.has(t"/c/fuel/mfa/env"), create.reverse.head,
           Aligner.downloadCommand(home, t"acoustic").skip(4),
           align.skip(4).keep(2), align.reverse.keep(4).reverse, align.has(t"--beam"), wide.has(t"--retry_beam"),
-          Aligner.variables(home).get(t"MFA_ROOT_DIR") )
+          Aligner.variables(home).at(t"MFA_ROOT_DIR") )
 
       . assert(_ == ( t"/c/fuel/mfa/bin/micromamba", true, t"montreal-forced-aligner>=3.4,<4",
                       List(t"mfa", t"model", t"download", t"acoustic", t"english_mfa"),
                       List(t"mfa", t"align"), List(t"/p/corpus", t"english_mfa", t"english_mfa", t"/p/out"), false, true,
-                      Some(t"/c/fuel/mfa/root") ))
+                      t"/c/fuel/mfa/root" ))
 
       test(m"a presentation's transcript is its slides' transcripts, in order, as paragraphs"):
         read(talk).lay(Nil): (presentation: Presentation, _) =>

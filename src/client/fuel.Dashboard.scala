@@ -120,7 +120,7 @@ final class Dashboard(audience: Audience = Audience()):
   // Whether the pages the compile rendered say Fuel's words as this tab does: they are
   // rendered in the language the documents are written in.
   private val rendered: Boolean =
-    Phrases.locale(languages.stdlib.headOption.getOrElse(Unset)).language == locale.language
+    Phrases.locale(languages.head).language == locale.language
 
   // What a tab is looking at: a document, by its section and path, or an entity, by its
   // address.
@@ -161,10 +161,8 @@ final class Dashboard(audience: Audience = Audience()):
   // A search which fails says so in place of its results.
   private val searches: Latest[Text] = Latest: (text: Text) =>
     val page: List[Block] =
-      try Dashboard.searchPage(text, apis, locale, Server.terms(tongue))
-      catch case error: Exception =>
-        val message: List[Block] = List(Block.paragraph(error.toString.tt))
-        List(Block.Notice(Tone.Failure, Inline.text(Phrases.search()), message))
+      safely(Dashboard.searchPage(text, apis, locale, Server.terms(tongue))).or:
+        List(Block.Notice(Tone.Failure, Inline.text(Phrases.search()), Nil))
 
     display(Target.Search(text), page)
 
@@ -201,7 +199,7 @@ final class Dashboard(audience: Audience = Audience()):
 
   // The target a path names: the first document for `/`, a document, an entity, or nothing.
   private def target(path: Text): Optional[Target] =
-    def decode(text: Text): Text = Text(java.net.URLDecoder.decode(text.s, "UTF-8").nn)
+    def decode(text: Text): Text = text.urlDecode
 
     if path == t"/" || path == t"" then first
     else if path.starts(t"/doc/") then

@@ -32,21 +32,21 @@
                                                                                                   */
 package fuel
 
-import java.nio.file as jnf
-
 import scala.caps
-import scala.collection.immutable as sci
 
 // Excluded from the umbrella: `Compilation`, anthology's, which would outrank fuel's own.
 import soundness.{Format as _, Compilation as _, Query as _, *}
 
-import dysasymptotics.linearSize
+import dysasymptotics.{linearAccess, linearSize}
 import interpreters.posixInterpreter
 import probates.cancelProbate
 import pyrocosm.Boards.{show as showBoard}
 import pyrocosm.Tool
 import pyrocosm.standardRendering.given
 import pyrocosm.{ambient, Attend, Block, Board, Digests, Filing, Notices, TerminalRenderer, Tone}
+import soundness.collationComparable
+import sortingAlgorithms.timsort
+import collations.codepointCollation
 import threads.platformThreads
 
 // The exit statuses fuel can terminate with, as objects (soundness#1811), so that the union of
@@ -65,13 +65,9 @@ object SyncFailed extends Status(7, t"the issues of an attached tracker could no
 // ends with a status of its own.
 given fuelBackstop: Backstop = new Backstop:
   def handle(error: Throwable)(using Stdio): Exit =
-    try
-      val frames: scala.Array[String] =
-        error.getStackTrace.nn.take(8).map { frame => s"    at $frame" }
-
-      Err.println(t"fuel: the daemon failed while carrying out the command: ${error.toString.tt}")
-      frames.foreach { (frame: String) => Err.println(frame.tt) }
-    catch case _: Throwable => ()
+    safely:
+      Err.println(t"fuel: the daemon failed while carrying out the command: ${described(error)}")
+      frames(error).keep(8).each { (frame: Text) => Err.println(t"    at $frame") }
 
     DaemonFailed.exit
 
@@ -254,7 +250,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
 
       val operand: Optional[Text] = words.indexed.filter: (word: Text, index: Ordinal) =>
         val flags: List[Text] = List(t"--align", t"--alignment")
-        val valued: Boolean = index.n0 > 0 && flags.has(words.stdlib(index.n0 - 1))
+        val valued: Boolean = before(words, index).lay(false)(flags.has(_))
         !word.starts(t"-") && !valued
 
       . head.let(_(0))
@@ -291,7 +287,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
               case (title: Text, deck: Block) =>
                 val frontend: pyrocosm.WebFrontend = Presenter.frontend(port)
                 async(frontend.run(Presenter.interface(title, deck))((_: pyrocosm.Event) => ()))
-                val url: Text = t"http://localhost:${port.toString.tt}/"
+                val url: Text = t"http://localhost:${port.show}/"
                 Out.println(t"fuel: presenting $title at $url (Ctrl+C to stop)")
 
                 Attend.interrupt()
@@ -354,7 +350,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
       val flags: List[Text] = List(t"--language", t"-l")
 
       def valued(index: Ordinal): Boolean =
-        index.n0 > 0 && flags.has(words.stdlib(index.n0 - 1))
+        before(words, index).lay(false)(flags.has(_))
 
       val tongue: Optional[Text] =
         words.indexed.filter { (_, index) => valued(index) }.head.let(_(0))
@@ -541,9 +537,7 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
     // nothing to compile them against, and they are highlighted alone.
     // A classpath entry that does not exist is reported once, and nothing is compiled against
     // the rest: the compiler would fail on every fragment for want of the standard library.
-    def exists(entry: Text): Boolean = jnf.Files.exists(jnf.Path.of(entry.s))
-
-    val missing: List[Text] = config.classpath.filter(!exists(_))
+    val missing: List[Text] = config.classpath.filter(!onDisk(_))
 
     missing.each: (entry: Text) =>
       val text: Text = t"This classpath entry does not exist, so no fragment was compiled."
@@ -559,13 +553,10 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
 
     // The work there is, counted before it starts: the documents of every root, the dependency
     // jars, the sources; the pages are guessed from the sources until the API says.
-    val documents: Int =
-      config.documents.stdlib.map: root =>
-        Compilation.files(root, config.translations).stdlib.size
+    val documents: Int = config.documents.fold(0): (count, root) =>
+      count + Compilation.files(root, config.translations).size
 
-      . sum
-
-    val jars: Int = config.classpath.filter(_.ends(t".jar")).stdlib.size
+    val jars: Int = config.classpath.filter(_.ends(t".jar")).size
     progress.plan(Phase.Documents, documents)
     progress.plan(Phase.Links, 1)
 
@@ -575,7 +566,7 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
       if !config.sources.nil then
         progress.plan(Phase.Build, 1)
         progress.plan(Phase.Inspect, 1)
-        progress.plan(Phase.Pages, config.sources.stdlib.size*8)
+        progress.plan(Phase.Pages, config.sources.size*8)
 
       if !config.overlays.nil then progress.plan(Phase.Overlays, 1)
 
@@ -616,8 +607,9 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
     // are sessions and fragments checked, the imports references resolve through, and which
     // entities the API has, which decides what links.
     def environment(sources: Text, apis: Apis): Text =
-      import soundness.sortingAlgorithms.timsort
-      val addresses: List[Text] = apis.all.bind(_.entities.values.map(_.address)).order(_.s)
+      val addresses: List[Text] =
+        apis.all.bind(_.entities.values.map(_.address)).order(identity(_))
+
       val entities: Text = Digests.of(addresses.join(t"\n"))
       val mode: Text = if config.session then t"session" else t"single"
       val checking: Text = if checked then t"checked" else t"tokenized"
@@ -652,40 +644,46 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
     // The API first, since the documents link to it: the sources compiled and saved, their
     // output and the dependencies walked, the overlays merged, and the pages of the project's
     // own entities rendered with their examples compiled.
-    type Readings = sci.Map[Text, Server.Reading]
+    type Readings = Map[Text, Server.Reading]
 
-    val outcome: Optional[(Corpus, Apis, sci.Map[Text, List[Block]], Text, Readings)] =
-      if !checked then Unset else
-        try Checking.session(config.classpath, config.options): (checker: Checker) =>
-          val (apis, sources, spoken) = model(config, checker, progress)
-          val api: Api = apis.primary
-          val key: Text = environment(sources, apis)
-          val standard: List[Locator] = Scope.standardOf(config.options)
+    type Outcome = (Corpus, Apis, Map[Text, List[Block]], Text, Readings)
 
-          val pages: sci.Map[Text, List[Block]] =
-            rendered(apis, checker, store, key, progress, standard)
+    def checking(): Outcome =
+      Checking.session(config.classpath, config.options): (checker: Checker) =>
+        val (apis, sources, spoken) = model(config, checker, progress)
+        val api: Api = apis.primary
+        val key: Text = environment(sources, apis)
+        val standard: List[Locator] = Scope.standardOf(config.options)
 
-          val scope: Scope = Scope.document(config.imports, standard)
+        val pages: Map[Text, List[Block]] =
+          rendered(apis, checker, store, key, progress, standard)
 
-          val linker: (Text, Text) -> Linker =
-            (section: Text, path: Text) => Resolver(api, scope, Doc.url(section, path), apis)
+        val scope: Scope = Scope.document(config.imports, standard)
 
-          val written: Corpus = Compilation.corpus(config.documents, checker, regime(key, linker))
+        val linker: (Text, Text) -> Linker =
+          (section: Text, path: Text) => Resolver(api, scope, Doc.url(section, path), apis)
 
-          // The corpus and the API as each language reads them.
-          val readings: Readings =
-            sci.Map.from:
-              spoken.stdlib.map: (tongue: Text, apis: Apis) =>
-                val read: Corpus =
-                  Compilation.translated
-                    ( written, tongue, checker, regime(key, linker).copy(glossary = terms(tongue)) )
+        val written: Corpus =
+          Compilation.corpus(config.documents, checker, regime(key, linker))
 
-                tongue -> Server.Reading(retitled(read, tongue), apis)
+        // The corpus and the API as each language reads them.
+        val readings: Readings =
+          spoken.map: (tongue: Text, apis: Apis) =>
+            val read: Corpus =
+              Compilation.translated
+                ( written, tongue, checker,
+                  regime(key, linker).copy(glossary = terms(tongue)) )
 
-          (entitled(written, titles), apis, pages, key, readings)
-        catch case error: Throwable =>
-          progress.report(failed(t"The fragments could not be compiled", error))
-          Unset
+            tongue -> Server.Reading(retitled(read, tongue), apis)
+
+          . to[Map]
+
+        (entitled(written, titles), apis, pages, key, readings)
+
+    val outcome: Optional[Outcome] =
+      if !checked then Unset else sheltered(checking()): (error: Throwable) =>
+        progress.report(failed(t"The fragments could not be compiled", error))
+        Unset
 
     val unchecked: Text = environment(t"", Apis.empty)
 
@@ -693,11 +691,10 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
 
     val corpus: Corpus =
       outcome.let(_(0)).or:
-        try
-          entitled
-            ( Compilation.corpus(config.documents, Checker.tokenized, regime(unchecked, unlinked)),
-              titles )
-        catch case error: Throwable =>
+        def highlighted: Corpus =
+          Compilation.corpus(config.documents, Checker.tokenized, regime(unchecked, unlinked))
+
+        sheltered(entitled(highlighted, titles)): (error: Throwable) =>
           progress.report(failed(t"The documents could not be highlighted", error))
           Corpus(Nil)
 
@@ -705,22 +702,23 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
 
     // Without an API, a language still reads the documents, highlighted alone.
     val readings: Readings = outcome.let(_(4)).or:
-      sci.Map.from:
-        tongues.stdlib.map: (tongue: Text) =>
-          val read: Corpus =
-            try
-              Compilation.translated
-                ( corpus, tongue, Checker.tokenized,
-                  regime(unchecked, unlinked).copy(glossary = terms(tongue)) )
-            catch case error: Throwable => corpus
+      tongues.map: (tongue: Text) =>
+        def translated: Corpus =
+          Compilation.translated
+            ( corpus, tongue, Checker.tokenized,
+              regime(unchecked, unlinked).copy(glossary = terms(tongue)) )
 
-          tongue -> Server.Reading(retitled(read, tongue), apis)
+        val read: Corpus = sheltered(translated)(_ => corpus)
+
+        tongue -> Server.Reading(retitled(read, tongue), apis)
+
+      . to[Map]
 
     // The languages there are to read in: the one the documents are written in, then each
     // they are translated into.
     val languages: List[Text] =
       if tongues.nil then Nil
-      else (config.languages.map(_(1)).stdlib.take(1) ++ tongues.stdlib).distinct.to(List)
+      else (config.languages.map(_(1)).keep(1) + tongues).distinct
     val api: Api = apis.primary
 
     // Every link, now that every target is known.
@@ -737,12 +735,15 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
         glossary.page
           ( Resolver(apis.primary, scope, t"/glossary", apis), Phrases.locale(tongue) )
 
-    val glossaried: Readings = readings.map: (tongue: Text, reading: Server.Reading) =>
-      val read: Glossary = terms(tongue)
-      tongue -> reading.copy(glossary = glossaryPage(read, tongue, reading.apis), terms = read)
+    val glossaried: Readings =
+      readings.to[List].map: (tongue: Text, reading: Server.Reading) =>
+        val read: Glossary = terms(tongue)
+        tongue -> reading.copy(glossary = glossaryPage(read, tongue, reading.apis), terms = read)
+
+      . to[Map]
 
     Server.publish
-      ( corpus, api, outcome.let(_(2)).or(sci.Map()), config.imports,
+      ( corpus, api, outcome.let(_(2)).or(Map()), config.imports,
         glossaryPage(glossary, languages.head, apis), Scope.standardOf(config.options), glossary,
         apis.others, languages, glossaried )
 
@@ -921,21 +922,20 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
 
   // The packages the sources declare, whose copies in a jar are theirs to shadow.
   val shadowed: List[Text] =
-    val names: scala.List[Text] = sources.stdlib.flatMap: (_, text) =>
-      text.s.linesIterator.map(_.trim.nn).filter(_.startsWith("package ")).map: line =>
-        val name: String = line.substring(8).nn.trim.nn
-        Text(name.takeWhile { c => c.isLetterOrDigit || c == '.' || c == '_' })
+    val names: List[Text] = sources.bind: (_, text) =>
+      text.cut(t"\n").map(_.trim).filter(_.starts(t"package ")).map: (line: Text) =>
+        line.skip(8).trim.keep { char => char.isLetterOrDigit || char == '.' || char == '_' }
 
       . filter(_ != t"")
 
-    List.from(names.distinct)
+    names.distinct
 
   // The dependencies, each walked through a session of its own (once per version of the jar,
   // which the daemon keeps): a walk through the compile's session leaves it, whichever comes
   // first, reading next to nothing or writing nothing.
-  val jars: scala.List[Text] = config.classpath.filter(_.ends(t".jar")).stdlib
+  val jars: List[Text] = config.classpath.filter(_.ends(t".jar"))
 
-  val dependencies: Api = jars.foldLeft(Api.empty): (acc, jar) =>
+  val dependencies: Api = jars.fold(Api.empty): (acc, jar) =>
     val walked: Api = Server.jar(jar, shadowed):
       Checking.session(config.classpath, config.options): (walker: Checker) =>
         walker.context.lay(Api.empty): (context: dotty.tools.dotc.core.Contexts.Context) =>
@@ -965,14 +965,12 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
       // A fresh output: what the sources no longer declare must not linger.
       Filing.wipe(unsafely(cache.as[Path on Linux]))
 
-      val notices: List[Notice] = checker.build(Map.from(sources.stdlib), cache)
-      val texts: sci.Map[Text, Text] = sci.Map.from(sources.stdlib)
+      val notices: List[Notice] = checker.build(sources.to[Map], cache)
 
       // The notice names its file as the compiler does, by its name alone or its path; the
       // file is named relative to the project root, as a reader knows it.
       def source(file: Text): Optional[Text] =
-        texts.get(file).fold(Unset)(identity).or:
-          texts.find { (path, _) => path.ends(t"/$file") }.map(_(1)).fold(Unset)(identity)
+        sources.seek(_(0) == file).or(sources.seek(_(0).ends(t"/$file"))).let(_(1))
 
       Notices.diagnostics(notices, source(_), config.root).each(report(_))
 
@@ -995,12 +993,11 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
 
   Inspection.failures() match
     case (count, error: Throwable) if count > 0 =>
-      val frames: scala.Array[String] = error.getStackTrace.nn.take(6).map(_.toString)
-      val trace: Text = Text(java.lang.String.join("; ", frames*).nn)
+      val trace: Text = frames(error).keep(6).join(t"; ")
 
       val text: Text =
         t"${count.show} members could not be read into the API model; the first failed with: " +
-          t"${error.toString.tt} ($trace)"
+          t"${described(error)} ($trace)"
 
       report(Block.Diagnostic(Tone.Warning, Unset, List(Block.paragraph(text))))
 
@@ -1134,7 +1131,7 @@ private def rendered
     environment: Text,
     progress:    Progress,
     standard:    List[Locator] )
-:   sci.Map[Text, List[Block]] =
+:   Map[Text, List[Block]] =
 
   def render(entity: Api.Entity): (List[Block], List[Block]) =
     val api: Api = apis.of(entity)
@@ -1155,12 +1152,12 @@ private def rendered
     (blocks, scala.problems + tables.problems + ambiguous)
 
   // Every format's own entities, Scala's first, each kept by its address.
-  val own: scala.List[Api.Entity] = apis.all.stdlib.toList.flatMap: (api: Api) =>
-    api.entities.values.filter(_.own).stdlib.sortBy(_.key.s)
+  val own: List[Api.Entity] = apis.all.bind: (api: Api) =>
+    api.entities.values.filter(_.own).order(_.key)
 
   progress.plan(Progress.Phase.Pages, own.size)
 
-  val pages: scala.List[(Text, List[Block])] = own.map: (entity: Api.Entity) =>
+  val pages: List[(Text, List[Block])] = own.map: (entity: Api.Entity) =>
     val (blocks, raised) = store.lay(render(entity)): (store: Store) =>
       val members: Text = apis.of(entity).children(entity).map(_.toString.tt).join(t"\n")
       val key: Text = Digests.of(environment, t"page", entity.toString.tt, members)
@@ -1172,7 +1169,7 @@ private def rendered
     progress.step(Progress.Phase.Pages)
     (entity.address, blocks)
 
-  sci.Map.from(pages)
+  pages.to[Map]
 
 // One document set in the terminal: its blocks at the terminal's width, paragraphs justified
 // and hyphenated, code highlighted, an animated block as its steps in sequence; its problems
@@ -1191,11 +1188,7 @@ private def transcript(directory: Text, operand: Optional[Text])(using Stdio, En
       def print(blocks: List[Block]): Unit =
         renderer.blocks(blocks, width).each: (line: Teletype) => Out.println(line)
 
-      val content: Optional[Text] =
-        try Text(java.nio.file.Files.readString(java.nio.file.Path.of(path.s)).nn)
-        catch case _: Exception => Unset
-
-      content match
+      readText(path) match
         case content: Text => Presentation.read(path, content) match
           case diagnostic: Block.Diagnostic =>
             print(List(diagnostic))
@@ -1257,7 +1250,7 @@ private def searchApi(text: Text)(using Stdio): Exit | Tool.UsageError.type =
 
     Query.read(text, apis.vocabulary) match
       case error: Query.Error =>
-        Out.println(t"fuel: ${error.message.text} (at ${error.offset.toString.tt})")
+        Out.println(t"fuel: ${error.message.text} (at ${error.offset.show})")
         Tool.UsageError
 
       case query: Query =>
@@ -1288,7 +1281,7 @@ private def searchApi(text: Text)(using Stdio): Exit | Tool.UsageError.type =
 
             Out.println(t"    $written")
 
-          Out.println(t"fuel: ${outcome.hits.size.toString.tt} results")
+          Out.println(t"fuel: ${outcome.hits.size.show} results")
           Exit.Ok
 
 private def blank: Teletype = e""
@@ -1301,7 +1294,7 @@ private def absolute(directory: Text, operand: Text): Text =
 // configuration gives, or highlighted alone where there is no usable classpath or the
 // session fails; `Unset` if it cannot be read.
 private def compiled(config: Workspace.Config, path: Text): Optional[Doc] =
-  val checked: Boolean = !config.classpath.nil && config.classpath.all(exists(_))
+  val checked: Boolean = !config.classpath.nil && config.classpath.all(onDisk(_))
   val glossary: Glossary = glossaries(config)(0)
 
   val sections: List[(Text, Text)] = config.sections
@@ -1311,27 +1304,50 @@ private def compiled(config: Workspace.Config, path: Text): Optional[Doc] =
       ( config.session, config.fixtures, glossary = glossary, sections = sections,
         translations = config.translations )
 
-  if checked then
-    try Checking.session(config.classpath, config.options): (checker: Checker) =>
+  def compiled: Optional[Doc] =
+    Checking.session(config.classpath, config.options): (checker: Checker) =>
       Compilation.document(path, checker, regime)
-    catch case error: Throwable => Compilation.document(path, Checker.tokenized, regime)
+
+  if checked then sheltered(compiled)(_ => Compilation.document(path, Checker.tokenized, regime))
   else
     Compilation.document(path, Checker.tokenized, regime)
 
 // Whether a path exists.
-private def exists(entry: Text): Boolean =
+def onDisk(entry: Text): Boolean =
   safely(entry.as[Path on Linux]).let(Filing.exists(_)).or(false)
 
 // The text of a file, if it can be read.
-private def readText(file: Text): Optional[Text] =
+def readText(file: Text): Optional[Text] =
   safely(file.as[Path on Linux]).let(Filing.text(_))
 
 // The files beneath a directory whose names end with a suffix, in order.
-private def filesBeneath(root: Path on Linux, suffix: Text): List[Text] =
-  val paths: List[Text] = Filing.beneath(root).map(_.encode).filter(_.ends(suffix))
-  List.from(paths.stdlib.sortBy(_.s))
+def filesBeneath(root: Path on Linux, suffix: Text): List[Text] =
+  Filing.beneath(root).map(_.encode).filter(_.ends(suffix)).order(identity(_))
+
+// The word before the one at `index`, if there is one.
+private def before(words: List[Text], index: Ordinal): Optional[Text] =
+  if index.n0 == 0 then Unset else words.at(Ordinal.zerary(index.n0 - 1))
+
+// A computation of the compiler's, or, if it fails, what `fallback` makes of its failure. The
+// compiler fails not only with exceptions but with errors — an `AssertionError` of its own, a
+// `StackOverflowError` deep in a type, a `LinkageError` from the classpath it is given — and
+// contingency's `safely` and `recover` see exceptions alone, so this is the one place which
+// catches every `Throwable` (a gap in Soundness, which has no handler for errors).
+def sheltered[result](block: => result)(fallback: Throwable => result): result =
+  try block catch case error: Throwable => fallback(error)
+
+// A failure, as the JVM describes it: its class and its message. A `Throwable` has no
+// `Showable`, so its own description is the one there is.
+def described(error: Throwable): Text = error.toString.tt
+
+// Where a failure was thrown: each frame of its stack, innermost first, as its class, its
+// method, and its file and line.
+def frames(error: Throwable): List[Text] =
+  StackTrace(error).frames.map: (frame: StackTrace.Frame) =>
+    val line: Text = frame.line.let(_.show).or(t"?")
+    t"${frame.method.className}.${frame.method.method}(${frame.file}:$line)"
 
 // A failure of the compiler itself, which has no place in a document, as a diagnostic.
 private def failed(what: Text, error: Throwable): Block =
-  val detail: List[Block] = List(Block.paragraph(error.toString.tt))
+  val detail: List[Block] = List(Block.paragraph(described(error)))
   Block.Diagnostic(Tone.Failure, Unset, List(Block.paragraph(what)), Nil, detail)

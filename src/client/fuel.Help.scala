@@ -123,7 +123,9 @@ object Help:
           val made: Peer.Listener[Message] =
             Peer.Listener[Message](Fuel.name, Fuel.version, codec, token, identity, Nil, () => Unset):
               session =>
-                try session.send(index()) finally session.close()
+                // A session which cannot be sent the index is closed all the same.
+                safely(session.send(index()))
+                session.close()
 
           listener = made
           made.serve(port)

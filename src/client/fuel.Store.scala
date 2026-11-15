@@ -32,14 +32,12 @@
                                                                                                   */
 package fuel
 
-import java.util.concurrent as juc
-
-import scala.collection.immutable as sci
-import scala.jdk.CollectionConverters.*
-
 import soundness.*
 
+import collations.codepointCollation
 import pyrocosm.{Block, Filing, ObjectStore}
+import soundness.collationComparable
+import sortingAlgorithms.timsort
 
 object Store:
   // The manifest of an output directory, if it has one.
@@ -56,20 +54,23 @@ class Store(output: Text, fresh: Boolean) extends Cache:
     val directory: Path on Linux = unsafely(root / "objects")
     ObjectStore.at(directory, t".fuel").or(ObjectStore(directory, t".fuel"))
 
-  private val kept: sci.Map[Text, Text] =
+  private val kept: Map[Text, Text] =
     val manifest: Optional[Output.Manifest] = if fresh then Unset else Store.manifest(output)
 
-    manifest.lay(sci.Map()): (manifest: Output.Manifest) =>
-      val entries = manifest.cache.stdlib.map: entry => (entry.key, entry.record)
-      val pages = manifest.pages.stdlib.map: page => (page.key, page.record)
-      sci.Map.from(entries ++ pages)
+    manifest.lay(Map[Text, Text]()): (manifest: Output.Manifest) =>
+      val entries: List[(Text, Text)] = manifest.cache.map { entry => (entry.key, entry.record) }
+      val pages: List[(Text, Text)] = manifest.pages.map { page => (page.key, page.record) }
+      (entries + pages).to[Map]
 
-  private val used: juc.ConcurrentHashMap[Text, Text] = juc.ConcurrentHashMap()
+  // What this compile used, by its key, and the documents and pages it recorded, latest first:
+  // each is added to from many threads at once.
+  private val used: Atomic.Ref[Map[Text, Text]] = Atomic.Ref(Map())
+  private val documents: Atomic.Ref[List[Output.Manifest.Document]] = Atomic.Ref(Nil)
+  private val pages: Atomic.Ref[List[Output.Manifest.Page]] = Atomic.Ref(Nil)
 
-  private val documents: juc.ConcurrentLinkedQueue[Output.Manifest.Document] =
-    juc.ConcurrentLinkedQueue()
-
-  private val pages: juc.ConcurrentLinkedQueue[Output.Manifest.Page] = juc.ConcurrentLinkedQueue()
+  private def use(key: Text, hash: Text): Unit =
+    used.since(_.define(key, hash))
+    ()
 
   val hits: Atomic[Int] = Atomic(0)
   val misses: Atomic[Int] = Atomic(0)
@@ -77,14 +78,14 @@ class Store(output: Text, fresh: Boolean) extends Cache:
   private def write(data: Data): Text = objects.put(data)
 
   private def read[value](key: Text)(decode: Data => Optional[value]): Optional[value] =
-    kept.get(key).fold(Unset)(identity).let: (hash: Text) =>
+    kept.at(key).let: (hash: Text) =>
       objects.get(hash).let(decode(_)).let: (value: value) =>
-        used.put(key, hash)
+        use(key, hash)
         hits.since(_ + 1)
         value
 
   private def keep(key: Text, data: Data): Unit =
-    used.put(key, write(data))
+    use(key, write(data))
     misses.since(_ + 1)
 
   def fragment(key: Text): Optional[Output.Fragment] = read(key)(Output.Fragment.decode)
@@ -105,21 +106,33 @@ class Store(output: Text, fresh: Boolean) extends Cache:
       keep(key, Output.Page.encode(page))
       page
 
-    pages.add(Output.Manifest.Page(entity, path, key, used.get(key).nn))
+    val hash: Text = used().at(key).or(t"")
+    val record: Output.Manifest.Page = Output.Manifest.Page(entity, path, key, hash)
+    pages.since(record :: _)
     page
 
   def document(section: Text, doc: Doc): Unit =
     val record: Output.Document = Output.Document(doc.path, doc.title, doc.blocks, doc.problems)
     val hash: Text = write(Output.Document.encode(record))
-    documents.add(Output.Manifest.Document(section, doc.path, doc.title, hash))
+    documents.since(Output.Manifest.Document(section, doc.path, doc.title, hash) :: _)
+    ()
 
   // Writes the manifest, and deletes every object it no longer names.
   def finish(fuel: Text, classpath: Text, environment: Text): Unit =
-    val pageKeys: Set[Text] = Set.from(pages.asScala.map(_.key))
-    val entries = used.asScala.toList.filter: entry => !pageKeys.has(entry(0))
-    val cache = List.from(entries.sortBy(_(0).s).map(Output.Manifest.Entry(_, _)))
-    val documented = List.from(documents.asScala.toList.sortBy(_.path.s).sortBy(_.section.s))
-    val paged = List.from(pages.asScala.toList.sortBy(_.entity.s))
+    // In the order they were recorded, before they are sorted, as the sort is stable.
+    val recorded: List[Output.Manifest.Page] = pages().reverse
+    val pageKeys: Set[Text] = recorded.map(_.key).to[Set]
+
+    val entries: List[(Text, Text)] =
+      used().to[List].filter { (key, _) => !pageKeys.has(key) }
+
+    val cache: List[Output.Manifest.Entry] =
+      entries.order(_(0)).map(Output.Manifest.Entry(_, _))
+
+    val documented: List[Output.Manifest.Document] =
+      documents().reverse.order(_.path).order(_.section)
+
+    val paged: List[Output.Manifest.Page] = recorded.order(_.entity)
 
     val manifest: Output.Manifest =
       Output.Manifest(fuel, classpath, environment, documented, paged, cache)
@@ -127,9 +140,7 @@ class Store(output: Text, fresh: Boolean) extends Cache:
     Filing.replace(index, Output.Manifest.encode(manifest))
 
     val named: Set[Text] =
-      Set.from
-        ( manifest.documents.stdlib.map(_.record) ++
-          manifest.pages.stdlib.map(_.record) ++
-          manifest.cache.stdlib.map(_.record) )
+      ( manifest.documents.map(_.record) + manifest.pages.map(_.record)
+        + manifest.cache.map(_.record) ).to[Set]
 
     objects.prune(named)

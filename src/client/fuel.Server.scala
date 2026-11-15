@@ -32,13 +32,13 @@
                                                                                                   */
 package fuel
 
-import java.util.concurrent as juc
-
-import scala.collection.immutable as sci
-
 import soundness.*
 
+import filesystemBackends.javaBaseFilesystem
+import filesystemOptions.dereferenceSymlinks
+import instantiables.epochMillisecondsInstantiable
 import pyrocosm.{Block, Digests}
+import systems.javaBaseSystem
 
 // The daemon's state: the corpus and the API model the latest `fuel compile` produced, from
 // whichever shell, the pages it rendered for the project's own documented entities (whose
@@ -67,7 +67,7 @@ object Server:
 
   @scala.caps.unsafe.untrackedCaptures
   @volatile
-  private var readings0: sci.Map[Text, Reading] = sci.Map()
+  private var readings0: Map[Text, Reading] = Map()
 
   @scala.caps.unsafe.untrackedCaptures
   @volatile
@@ -79,7 +79,7 @@ object Server:
 
   @scala.caps.unsafe.untrackedCaptures
   @volatile
-  private var pages0: sci.Map[Text, List[Block]] = sci.Map()
+  private var pages0: Map[Text, List[Block]] = Map()
 
   @scala.caps.unsafe.untrackedCaptures
   @volatile
@@ -122,22 +122,22 @@ object Server:
   def publishIssues(states: List[Sync.State], index: Map[Text, List[Issue]]): Unit =
     syncs0 = states
     issues0 = index
-    edition0.incrementAndGet()
+    edition0.since(_ + 1L)
 
-  private val edition0: juc.atomic.AtomicLong = juc.atomic.AtomicLong(0L)
-  private val jars: juc.ConcurrentHashMap[(Text, Long), Api] = juc.ConcurrentHashMap()
+  private val edition0: Atomic.Long = Atomic.Long(0L)
+  private val jars: Memo[(Text, Long), Api] = Memo()
 
   def publish
     ( corpus:   Corpus,
       api:      Api                        = Api.empty,
-      pages:    sci.Map[Text, List[Block]] = sci.Map(),
+      pages:    Map[Text, List[Block]] = Map(),
       imports:  List[Text]                 = Nil,
       glossary: List[Block]                = Nil,
       standard: List[Locator]           = Scope.standard,
       terms:    Glossary                   = Glossary.none,
       formats:  List[Api]                  = Nil,
       languages: List[Text]                = Nil,
-      readings:  sci.Map[Text, Reading]    = sci.Map() )
+      readings:  Map[Text, Reading]    = Map() )
   :   Unit =
 
     languages0 = languages
@@ -150,22 +150,19 @@ object Server:
     imports0 = imports
     glossary0 = glossary
     standard0 = standard
-    edition0.incrementAndGet()
+    edition0.since(_ + 1L)
 
-    // The search index is built now, apart, rather than at the first keystroke.
-    val runnable: Runnable = () => { api.search; () }
-    val warm: java.lang.Thread = java.lang.Thread(runnable)
-    warm.setDaemon(true)
-    warm.start()
+    // The search index is built now, apart, rather than at the first keystroke, on a virtual
+    // thread, which belongs to no invocation and does not keep the daemon alive.
+    VirtualSupervisor.fork(() => Unset) { api.search; () }
+    ()
 
   def corpus: Optional[Corpus] = corpus0
   def languages: List[Text] = languages0
 
   private def reading(tongue: Optional[Text]): Optional[Reading] =
     tongue.let: (tongue: Text) =>
-      readings0.get(tongue) match
-        case Some(reading) => reading
-        case _             => Unset
+      readings0.at(tongue)
 
   // The corpus and the APIs as a language reads them: as they are written, for the language
   // they are written in, or one nothing is translated into.
@@ -200,32 +197,61 @@ object Server:
   // The glossary as a language reads it.
   def glossary(tongue: Optional[Text]): List[Block] = reading(tongue).let(_.glossary).or(glossary0)
   def terms(tongue: Optional[Text]): Glossary = reading(tongue).let(_.terms).or(terms0)
-  def edition: Long = edition0.get
+  def edition: Long = edition0()
 
-  def page(key: Text): Optional[List[Block]] = pages0.get(key) match
-    case Some(blocks) => blocks
-    case _            => Unset
+  def page(key: Text): Optional[List[Block]] = pages0.at(key)
 
-  private val hashes: juc.ConcurrentHashMap[(Text, Long, Long), Text] = juc.ConcurrentHashMap()
+  private val hashes: Memo[(Text, Long, Long), Text] = Memo()
+
+  // A path's size and modification time, if it is a regular file.
+  private def stamp(path: Path on Linux): Optional[(Long, Long)] =
+    safely:
+      if path.entry() != File then Unset else (path.filesize().long, path.modified[Long]())
 
   // A classpath entry's hash, computed once per size and modification time of the entry.
   def hash(entry: Text): Text =
-    val path = java.nio.file.Path.of(entry.s).nn
+    val path: Path on Linux = unsafely(entry.as[Path on Linux])
 
-    def tree: Text = Digests.tree(unsafely(entry.as[Path on Linux]))
+    def tree: Text = Digests.tree(path)
 
-    if !java.nio.file.Files.isRegularFile(path) then tree else
-      val modified: Long = java.nio.file.Files.getLastModifiedTime(path).nn.toMillis
-      val key: (Text, Long, Long) = (entry, java.nio.file.Files.size(path), modified)
-      hashes.computeIfAbsent(key, _ => tree).nn
+    stamp(path).lay(tree): (size: Long, modified: Long) =>
+      hashes((entry, size, modified))(tree)
 
   // A jar's model, walked once per version of the jar.
   def jar(path: Text, shadowed: List[Text] = Nil)(walk: => Api): Api =
-    val file: java.nio.file.Path = java.nio.file.Path.of(path.s).nn
-    val modified: Long = java.nio.file.Files.getLastModifiedTime(file).nn.toMillis
-    jars.computeIfAbsent((t"$path ${shadowed.join(t",")}", modified), _ => walk).nn
+    val modified: Long = unsafely(path.as[Path on Linux].modified[Long]())
+    jars((t"$path ${shadowed.join(t",")}", modified))(walk)
 
   // The JDK's model, walked once per runtime, which does not change while the daemon runs.
   def jdk(walk: => Api): Api =
-    val version: Text = java.lang.Runtime.version.nn.toString.tt
-    jars.computeIfAbsent((t"jdk $version", 0L), _ => walk).nn
+    val version: Text = summon[System](t"java.runtime.version").or(t"")
+    jars((t"jdk $version", 0L))(walk)
+
+// A table of values, each computed once for its key: the first to ask for a key computes its
+// value, while any other asking for it meanwhile waits for that one value rather than computing
+// another, and values of different keys are computed independently. A computation which fails
+// keeps nothing, so the next to ask computes it afresh. Each key's cell is a lazy value, which
+// gives exactly this, installed in the table by a compare-and-set; once it has its value, it
+// lets go of its computation, and of everything that holds.
+final class Memo[key, value]():
+  private final class Cell(compute: () -> value):
+    @scala.caps.unsafe.untrackedCaptures
+    private var work: () -> value = compute
+
+    lazy val value: value =
+      val result: value = work()
+      work = () => result
+      result
+
+  private val cells: Atomic.Ref[Map[key, Cell]] = Atomic.Ref(Map())
+
+  def apply(key: key)(compute: => value): value =
+    // Vouched pure: the computation is run at most once, by this call or one concurrent with it,
+    // before either returns, and the cell lets go of it then.
+    val fresh: Cell = new Cell(scala.caps.unsafe.unsafeAssumePure(() => compute))
+
+    val table: Map[key, Cell] =
+      cells.since: (table: Map[key, Cell]) =>
+        if table.at(key).present then table else table.define(key, fresh)
+
+    table.at(key).or(fresh).value
