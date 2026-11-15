@@ -46,6 +46,9 @@ import pyrocosm.{Block, Filing, TerminalRenderer, Tone, Tool}
 object Mistranslated
 extends Status(10, t"a translation is not consistent with the text it translates")
 
+object Withheld
+extends Status(11, t"a translation was not updated, since the update would have damaged it")
+
 // `fuel translate`: the translations of a project's documents, overlays and glossaries,
 // without compiling anything. A translation is where the configuration puts it: the file of
 // the same relative path in the directory a `translation` line, beneath a `section`, gives
@@ -117,23 +120,119 @@ object Translating:
     Translations.partial(Translations.within(source.path, config.translations))
 
   // What is wrong with a source's translations.
-  def problems(source: Source, partial: List[Text], names: List[Text] = Nil): List[Block] =
-    val reader: Text -> Optional[Text] = (path: Text) => read(path)
+  // What is wrong with a source's translations, each read by `reader`: from its file, unless
+  // another reader is given.
+  def problems
+    ( source:  Source,
+      partial: List[Text],
+      names:   List[Text]                    = Nil,
+      reader:  Optional[Text -> Optional[Text]] = Unset )
+  :   List[Block] =
+
+    val reading: Text -> Optional[Text] = reader.or((path: Text) => read(path))
 
     source.kind match
       case Kind.Document =>
-        Translations.check(source.path, source.text, source.translations, read, partial)
+        Translations.check(source.path, source.text, source.translations, reading(_), partial)
 
       case Kind.Overlay =>
         OverlayTranslations.verify
-          ( source.path, source.text, source.translations, reader, partial )
+          ( source.path, source.text, source.translations, reading, partial )
 
       case Kind.Glossary =>
         GlossaryTranslations.verify
-          ( source.path, source.text, source.translations, reader, partial, names )
+          ( source.path, source.text, source.translations, reading, partial, names )
 
       case Kind.Section =>
-        SectionFile.verify(source.path, source.text, source.translations, read, partial)
+        SectionFile.verify(source.path, source.text, source.translations, reading(_), partial)
+
+  // The translation `old` of a source, brought up to the text it translates; `Unset` where
+  // that cannot be made, as for an overlay which is not TEL.
+  def remake(source: Source, old: Text): Optional[Text] = source.kind match
+    case Kind.Document => Translation.update(Translation.parse(old), source.text).serialize
+    case Kind.Overlay  => OverlayTranslations.generate(source.text, old)
+    case Kind.Glossary => GlossaryTranslations.generate(source.text, old)
+    case Kind.Section  => SectionFile.generate(source.text, old)
+
+  // The `+` lines of a translation, each as it reads without its indentation: what a
+  // translator wrote, which an update must keep. A passage whose `+` lines are its `-` lines is
+  // text shared by both languages, not a translation, and is not among them.
+  private def written(text: Text): List[Text] =
+    def marked(sigil: Text)(line: Text): Boolean = line == sigil || line.starts(t"$sigil ")
+
+    def scan(lines: List[Text]): List[Text] =
+      if lines.nil then Nil else
+        val definitive: List[Text] = lines.keep(marked(t"-"))
+        val after: List[Text] = lines.skip(definitive.size)
+        val foreign: List[Text] = after.keep(marked(t"+"))
+
+        if foreign.nil then scan(lines.skip(definitive.size.max(1)))
+        else
+          val shared: Boolean = foreign.map(_.skip(1)) == definitive.map(_.skip(1))
+          (if shared then Nil else foreign) + scan(after.skip(foreign.size))
+
+    scan(text.cut(t"\n").map(_.trim))
+
+  // What of `left` is not in `right`, each element of `right` taking away one equal element of
+  // `left`: a difference of multisets, which Soundness's collections do not yet have
+  // (propensive/soundness#2498).
+  private def without[element](left: List[element], right: List[element]): List[element] =
+    right.fold(left): (rest: List[element], element: element) =>
+      rest.where(_ == element).lay(rest): (index: Ordinal) =>
+        rest.keep(index.n0) + rest.skip(index.n0 + 1)
+
+  // The `+` lines which an update may leave out: those of the prose, and the entries, which the
+  // text translated no longer has.
+  private def forsaken(source: Source, old: Text): List[Text] = source.kind match
+    case Kind.Overlay =>
+      OverlayTranslations.lost(source.text, old).bind: (run: OverlayTranslations.Prose) =>
+        written(run.text)
+
+    case Kind.Glossary =>
+      GlossaryTranslations.lost(source.text, old).bind: (entry: GlossaryTranslations.Entry) =>
+        entry.definition.lay(List[Text]())(written(_))
+
+    case _ =>
+      Nil
+
+  // What a diagnostic says, wherever it says it: a failure is the same failure at another line.
+  private def gist(block: Block): Optional[(Tone, List[Block])] = block match
+    case diagnostic: Block.Diagnostic => (diagnostic.tone, diagnostic.message)
+    case _                            => Unset
+
+  // Why the translation `current`, an update of `old` into `tongue` at `target`, must not be
+  // written over it, if it must not: a failure `old` did not have; text a translator wrote,
+  // left out though what it translates is still there; or an update which, made again, would
+  // change it again.
+  def hazards(source: Source, tongue: Text, target: Text, old: Text, current: Text): List[Text] =
+    val single: Source = source.copy(translations = List((tongue, target)))
+
+    def failures(text: Text): List[(Tone, List[Block])] =
+      problems(single, Nil, Nil, (path: Text) => if path == target then text else read(path))
+      . bind { (block: Block) => gist(block).lay(List[(Tone, List[Block])]())(List(_)) }
+      . filter(_(0) == Tone.Failure)
+
+    val before: List[(Tone, List[Block])] = failures(old)
+
+    val introduced: Int =
+      without(failures(current), before).size
+
+    val broken: List[Text] =
+      if introduced == 0 then Nil
+      else List(t"it would have ${introduced.show} failures which the translation does not have")
+
+    val kept: List[Text] = written(current) + forsaken(source, old)
+    val dropped: Int = without(written(old), kept).size
+
+    val lost: List[Text] =
+      if dropped == 0 then Nil
+      else List(t"it would lose ${dropped.show} lines of translation whose text is still there")
+
+    val unsettled: List[Text] =
+      if remake(source, current).lay(true)(_ == current) then Nil
+      else List(t"updating it again would change it again")
+
+    broken + lost + unsettled
 
   // The files in the directories of translations which translate nothing: each a caution.
   private def strays(config: Workspace.Config, targets: List[Translations.Target]): List[Block] =
@@ -289,58 +388,82 @@ object Translating:
 
       if !unread.nil then NoDocument else if !found.nil then Mistranslated else Exit.Ok
 
-  // `fuel translate --update [--language <language>] [<file>...]`: each translation — or those
-  // of the files named, or the translations named themselves, or those into one language —
-  // brought up to the text it translates.
-  def update(config: Workspace.Config, tongue: Optional[Text], files: List[Text])(using Stdio)
-  :   Exit | Tool.UsageError.type =
+  // `fuel translate --update [--dry-run] [--language <language>] [<file>...]`: each translation
+  // — or those of the files named, or the translations named themselves, or those into one
+  // language — brought up to the text it translates. An update is written only if it is safe
+  // (`hazards`); with `--dry-run`, nothing is written, and what would be is said.
+  def update
+    ( config: Workspace.Config, tongue: Optional[Text], files: List[Text], dry: Boolean = false )
+    ( using Stdio )
+  :   Exit | Tool.UsageError.type | Withheld.type =
 
     if unconfigured(config, tongue) then Tool.UsageError else
       val all: List[Source] = sources(config).map(only(_, tongue))
+      val verb: Text = if dry then t"would update" else t"updated"
 
-      val changed: List[Boolean] = all.bind: (source: Source) =>
-        source.translations.bind: (_, target: Text) =>
+      val outcomes: List[Outcome] = all.bind: (source: Source) =>
+        source.translations.bind: (language: Text, target: Text) =>
           if !files.nil && !files.has(source.path) && !files.has(target) then Nil
-          else read(target).lay(List[Boolean]()): (old: Text) =>
-            val current: Optional[Text] = source.kind match
-              case Kind.Document =>
-                Translation.update(Translation.parse(old), source.text).serialize
+          else read(target).lay(List[Outcome]()): (old: Text) =>
+            remake(source, old).lay(List[Outcome]()): (current: Text) =>
+              if current == old then List(Outcome.Unchanged) else
+                val reasons: List[Text] = hazards(source, language, target, old, current)
 
-              case Kind.Overlay =>
-                OverlayTranslations.generate(source.text, old)
-
-              case Kind.Glossary =>
-                GlossaryTranslations.generate(source.text, old)
-
-              case Kind.Section =>
-                SectionFile.generate(source.text, old)
-
-            current.lay(List[Boolean]()): (current: Text) =>
-              if current == old then List(false) else
-                if source.kind == Kind.Overlay then
-                  OverlayTranslations.lost(source.text, old).each:
-                    (run: OverlayTranslations.Prose) =>
-                      Out.println
-                        ( t"fuel: ${shown(config, target)}: the translation of ${run.title} is " +
-                            t"left out, since the overlay no longer has it" )
-
-                if source.kind == Kind.Glossary then
-                  GlossaryTranslations.lost(source.text, old).each:
-                    (entry: GlossaryTranslations.Entry) =>
-                      Out.println
-                        ( t"fuel: ${shown(config, target)}: the translation of `${entry.name}` " +
-                            t"is left out, since the glossary no longer has the term" )
-
-                if write(target, current) then
+                if !reasons.nil then
                   Out.println
-                    ( t"fuel: updated ${shown(config, target)}: " +
-                        t"${summary(progress(source, current))}" )
-                else Out.println(t"fuel: ${shown(config, target)} could not be written")
+                    ( t"fuel: ${shown(config, target)} is not updated, since " +
+                        t"${reasons.join(t"; ")}: this is a fault in fuel, so please report it" )
 
-                List(true)
+                  List(Outcome.Refused)
+                else
+                  if source.kind == Kind.Overlay then
+                    OverlayTranslations.lost(source.text, old).each:
+                      (run: OverlayTranslations.Prose) =>
+                        Out.println
+                          ( t"fuel: ${shown(config, target)}: the translation of ${run.title} " +
+                              t"is left out, since the overlay no longer has it" )
 
-      if changed.nil then Out.println(t"fuel: there is no translation to update")
-      else if !changed.has(true) then
+                  if source.kind == Kind.Glossary then
+                    GlossaryTranslations.lost(source.text, old).each:
+                      (entry: GlossaryTranslations.Entry) =>
+                        Out.println
+                          ( t"fuel: ${shown(config, target)}: the translation of " +
+                              t"`${entry.name}` is left out, since the glossary no longer has " +
+                              t"the term" )
+
+                  val before: Translation.Progress = progress(source, old)
+                  val after: Translation.Progress = progress(source, current)
+
+                  if dry || write(target, current) then
+                    Out.println
+                      ( t"fuel: $verb ${shown(config, target)}: " +
+                          t"${changes(before, after)}; then ${summary(after)}" )
+
+                    List(Outcome.Updated)
+                  else
+                    Out.println(t"fuel: ${shown(config, target)} could not be written")
+                    List(Outcome.Refused)
+
+      if outcomes.nil then Out.println(t"fuel: there is no translation to update")
+      else if !outcomes.exists(_ != Outcome.Unchanged) then
         Out.println(t"fuel: every translation is of its text as it stands")
 
-      Exit.Ok
+      if outcomes.has(Outcome.Refused) then Withheld else Exit.Ok
+
+  enum Outcome:
+    case Unchanged, Updated, Refused
+
+  // What an update does to how far a translation is done.
+  private def changes(before: Translation.Progress, after: Translation.Progress): Text =
+    val revise: Int = after.pending - before.pending
+    val fresh: Int = after.untranslated - before.untranslated
+    val gone: Int = after.orphaned - before.orphaned
+
+    val parts: List[Text] =
+      List
+        ( (revise, t"newly to revise"), (fresh, t"newly to translate"),
+          (gone, t"newly to delete") )
+      . filter(_(0) > 0)
+      . map { (count: Int, what: Text) => t"${count.show} $what" }
+
+    if parts.nil then t"no passage changes state" else parts.join(t", ")

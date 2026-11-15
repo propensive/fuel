@@ -31,6 +31,7 @@ fuel translate     # write the translations nobody has begun, into each configur
 fuel translate doc/x.md doc/y.md  # the same, for these documents (or overlays) alone
 fuel translate --language fr  # the same, into French alone
 fuel translate --update  # bring each translation up to the text it translates
+fuel translate --update --dry-run  # say what that would change, and write nothing
 fuel install       # install tab-completions and the manpage
 fuel about         # fuel's version, and the daemon serving it
 fuel --version     # the version alone
@@ -704,6 +705,15 @@ lines, and keeps the text its translation was written for as `!` lines.
 - and serves it on the web.
 + Fuel compile chaque fichier Markdown, et le sert sur le web.
 ```
+
+An update is written only where it is safe. Before it replaces a translation, `fuel translate
+--update` checks the new file against the old: it must have no failure the old one did not
+have, it must keep every `+` line whose text is still there (a passage whose `+` lines are its
+`-` lines is shared text, not a translation), and updating it again must change nothing.
+Where an update fails any of these, the file is left as it was, the command says why, and it
+exits with status 11; it is a fault in fuel, and worth reporting. With `--dry-run`, nothing is
+written: each translation which would change is named, with how many passages it would newly
+give the translator to revise, to translate and to delete.
 
 The translator revises the `+` lines and deletes the `!` lines. New text arrives as a passage
 with no `+` lines, and text which has gone leaves its `!` and `+` lines, to be deleted. A
