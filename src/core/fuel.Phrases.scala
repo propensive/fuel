@@ -51,7 +51,7 @@ object Phrases:
   // The locale Fuel's words are read in, for a language the documents are in: its own, where
   // Fuel has words for it, as `fr` for `fr-CA`; English otherwise.
   def locale(tongue: Optional[Text]): Locale[Spoken] =
-    tongue.let(_.cut(t"-").stdlib.head.lower).or(t"en") match
+    tongue.let(_.cut(t"-").head).let(_.lower).or(t"en") match
       case t"fr" => Locale(fr)
       case t"de" => Locale(de)
       case _     => Locale(en)
@@ -68,7 +68,7 @@ object Phrases:
   // A translated term's entry: the name the original text gives it, as `In English: *library*.`,
   // by the language it is written in where Fuel knows that language's name.
   def original(language: Optional[Text], name: Text): Phrase =
-    language.let(_.cut(t"-").stdlib.head.lower).or(t"") match
+    language.let(_.cut(t"-").head).let(_.lower).or(t"") match
       case t"en" =>
         en(t"In English: *$name*.") | fr(t"En anglais : *$name*.") | de(t"Auf Englisch: *$name*.")
 

@@ -37,8 +37,9 @@ import soundness.*
 import codepages.utf8Codepage
 import dysasymptotics.{linearAccess, linearSize}
 import errorDiagnostics.emptyDiagnostics
-import pyrocosm.Tels
 import pyrocosm.{Block, Inline, Tone}
+import soundness.collationComparable
+import soundness.sortingAlgorithms.timsort
 
 // The glossary: terms defined in TEL files, each `define <term>` holding a Markdown
 // `definition` and, when the term is explained in full elsewhere, a `link` to that page. A
@@ -95,10 +96,7 @@ object Glossary:
   // `[term]` the parser linked is known as the glossary's.
   val scheme: Text = t"glossary:"
 
-  // The lines `headed` adds before the file's own.
-  private def headed(text: Text): Text = Tels.headed(text)(0)
 
-  private def added(text: Text): Int = Tels.headed(text)(1)
 
   val schemaResource: Text = t"fuel/glossary.schema.tel"
 
@@ -112,10 +110,13 @@ object Glossary:
     import strategies.throwUnsafely
     stratiform.Tels.Validation.validate(schemaSource.read[Tel].as[stratiform.Tels])
 
-  // A line of a glossary: a keyword and its value, after two spaces where the value has one,
-  // so that it is one value, as the schema reads it.
-  def line(keyword: Text, value: Text): Text =
-    if value.s.contains(" ") then t"$keyword  $value" else t"$keyword $value"
+  // A value of a glossary, after two spaces where it has one, so that it is one value, as the
+  // schema reads it.
+  def atom(value: Text): Tel.Atom = Tel.Atom.Inline(value, if value.contains(t" ") then 2 else 1)
+
+  // A compound of a glossary: a keyword and its value.
+  def compound(keyword: Text, value: Text): Tel.Compound =
+    Tel.Compound(keyword, Array(atom(value)), Unset, Array.empty)
 
   private case class Faults(items: List[(Tel.Error, Text, Span)] = Nil)
   extends Error(m"the glossary has ${items.size} faults"):
@@ -149,9 +150,7 @@ object Glossary:
     import strategies.throwUnsafely
     import parsing.trackPositions
 
-    val tel: Optional[Tel] = try headed(text).read[Tel] catch case error: Tel.Error => Unset
-
-    tel.lay(Nil): (tel: Tel) =>
+    safely(text.read[Tel]).lay(Nil): (tel: Tel) =>
       val faults: Faults =
         validate[Tel.Focus](Faults()):
           case error: Tel.Error =>
@@ -161,7 +160,7 @@ object Glossary:
         . protect(Tel.Type.assign(tel, schema))
 
       val schemed: List[Block] = faults.items.map: (error, pointer, span) =>
-        val line: Int = if span.exists then span.startLine.lay(1)(_.n1) - added(text) else 1
+        val line: Int = if span.exists then span.startLine.lay(1)(_.n1) else 1
         val location: Block.Location = Block.Location(path, line.max(1))
         Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(explain(error, pointer))))
 
@@ -179,36 +178,21 @@ object Glossary:
   // Each term's name, line and `term`, as the schema reads them: the `term` is the line's
   // second value, or a child.
   private def entries(text: Text): List[(Text, Int, Optional[Text])] =
-    import strategies.throwUnsafely
+    import parsing.trackPositions
 
-    try
-      val tel: Tel = headed(text).read[Tel]
+    safely(text.read[Tel]).lay(Nil): (tel: Tel) =>
       val compounds: List[Tel.Compound] = tel.childCompounds.to[List].filter(_.keyword == t"define")
       val nodes: List[Tel] = tel.fields(t"define").to[List]
 
-      nodes.zip(compounds).map: (node: Tel, compound: Tel.Compound) =>
-        val atoms: List[Text] = atomsOf(compound)
-        val name: Text = atoms.head.or(t"")
-        (name, lineOf(text, name), second(atoms).or(first(node, t"term")))
-
-    catch case error: Tel.Error => Nil
-
-  // A compound's inline atoms.
-  private def atomsOf(compound: Tel.Compound): List[Text] = List.from:
-    compound.atoms.stdlib.collect { case Tel.Atom.Inline(text, _) => text }.toList
+      nodes.zip(compounds).indexed.map: (pair: (Tel, Tel.Compound), index: Ordinal) =>
+        val atoms: List[Text] = Compounds.inline(pair(1))
+        val line: Int = Compounds.line(tel, List(t"define", index.n0.show))
+        (atoms.head.or(t""), line, second(atoms).or(first(pair(0), t"term")))
 
   // A list's second element, if it has one.
   def second(values: List[Text]): Optional[Text] = values match
     case _ :: value :: _ => value
     case _               => Unset
-
-  // The line of a term, by its text: a TEL node does not know its own.
-  private def lineOf(text: Text, name: Text): Int =
-    text.cut(t"\n").indexed.seek: (line: Text, index: Ordinal) =>
-      val rest: Text = line.trim.skip(7).trim
-      line.trim.starts(t"define ") && (rest == name || rest.starts(t"$name "))
-
-    . let(_(1).n0 + 1).or(1)
 
   // The first value of each of a node's children by keyword, as the schema reads it.
   private def values(node: Tel, keyword: Text): List[Text] =
@@ -224,40 +208,33 @@ object Glossary:
 
   // A glossary read from a file's text, or the diagnostic which says why it could not be.
   def read(path: Text, text: Text): Glossary | Block.Diagnostic =
-    import strategies.throwUnsafely
+    import parsing.trackPositions
 
-    try
-      val tel: Tel = headed(text).read[Tel]
+    recover:
+      case error: Tel.Error => Block.Diagnostic.of(error, path, text)
 
-      // A node, and the compound it wraps (whose atoms are the name), paired by order: `fields`
-      // and `childCompounds` walk the same children.
-      val nodes: List[Tel] = tel.fields(t"define").to[List]
-      val compounds: List[Tel.Compound] = tel.childCompounds.to[List].filter(_.keyword == t"define")
+    . protect:
+        val tel: Tel = text.read[Tel]
 
-      val terms: List[Term] = nodes.zip(compounds).map: (node: Tel, compound: Tel.Compound) =>
-        val name: Text = atomsOf(compound).head.or(t"").trim
-        val unlisted: Boolean = !node.fields(t"unlisted").to[List].nil
+        // A node, and the compound it wraps (whose atoms are the name), paired by order:
+        // `fields` and `childCompounds` walk the same children.
+        val nodes: List[Tel] = tel.fields(t"define").to[List]
 
-        Term
-          ( name, child(node, t"definition").or(t""), first(node, t"link"), path,
-            lineOf(text, name), values(node, t"keyword"), Unset, values(node, t"synonym"),
-            unlisted )
+        val compounds: List[Tel.Compound] =
+          tel.childCompounds.to[List].filter(_.keyword == t"define")
 
-      Glossary(terms)
+        val terms: List[Term] = nodes.zip(compounds).indexed.map:
+          (pair: (Tel, Tel.Compound), index: Ordinal) =>
+            val node: Tel = pair(0)
+            val name: Text = Compounds.inline(pair(1)).head.or(t"").trim
+            val unlisted: Boolean = !node.fields(t"unlisted").to[List].nil
+            val line: Int = Compounds.line(tel, List(t"define", index.n0.show))
 
-    catch case error: Tel.Error =>
-      val shift: Int = -added(text)
-      val raw: Block.Diagnostic = Block.Diagnostic.of(error, path, headed(text))
+            Term
+              ( name, child(node, t"definition").or(t""), first(node, t"link"), path, line,
+                values(node, t"keyword"), Unset, values(node, t"synonym"), unlisted )
 
-      val location = raw.location.let: (location: Block.Location) =>
-        location.copy(line = location.line.let(_ + shift))
-
-      // The excerpt's lines are numbered as the file numbers them too.
-      val excerpt: List[Block] = raw.excerpt.map:
-        case code: Block.Code => code.copy(start = code.start.let(_ + shift))
-        case other            => other
-
-      raw.copy(location = location, excerpt = excerpt)
+        Glossary(terms)
 
   // Every glossary as one, with the problems: a term defined twice, or a name — a term's or a
   // synonym's — which another term has already (by its slug, so that two spellings of one
@@ -363,11 +340,8 @@ case class Glossary(terms: List[Glossary.Term]):
 
   // The terms in the order of a language's dictionary.
   def sorted(locale: Locale[Phrases.Spoken]): List[Glossary.Term] =
-    val collation: Collation = Phrases.collation(locale)
-
-    def before(left: Text, right: Text): Boolean = collation.compare(left, right).less
-
-    List.from(terms.stdlib.sortWith { (left, right) => before(left.name, right.name) })
+    given Collation = Phrases.collation(locale)
+    terms.order(_.name)
 
   // The glossary page: each listed term under a heading anchored by its slug, with its
   // definition and where it is explained in full, and each of its synonyms under its own,
@@ -376,7 +350,7 @@ case class Glossary(terms: List[Glossary.Term]):
   def page(linker: Linker, locale: Locale[Phrases.Spoken] = Phrases.english): List[Block] =
     given Locale[Phrases.Spoken] = locale
 
-    val collation: Collation = Phrases.collation(locale)
+    given Collation = Phrases.collation(locale)
     val listed: List[Glossary.Term] = terms.filter(!_.unlisted)
 
     def see(destination: Inline.Destination, text: Text): Block =
@@ -402,10 +376,6 @@ case class Glossary(terms: List[Glossary.Term]):
         val heading: Block = Block.Heading(2, Inline.text(synonym), Blocks.slug(synonym))
         (synonym, List(heading, see(destination, term.name)))
 
-    def before(left: (Text, List[Block]), right: (Text, List[Block])): Boolean =
-      collation.compare(left(0), right(0)).less
-
-    val entries: List[Block] =
-      List.from((defined + synonyms).stdlib.sortWith(before)).bind(_(1))
+    val entries: List[Block] = (defined + synonyms).order(_(0)).bind(_(1))
 
     Block.Heading(1, Inline.text(Phrases.glossary())) :: entries

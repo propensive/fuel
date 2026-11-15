@@ -4089,10 +4089,10 @@ define  user interface
       . assert(_ == (List(t"monad"), Nil, 1))
 
       test(m"a synonym in brackets is its term"):
-        rich.definitions.cut(t"\n").stdlib.take(3).toList
+        rich.definitions.cut(t"\n").keep(3)
 
       . assert: lines =>
-          lines == scala.List
+          lines == List
             ( t"[monad]: glossary:monad", t"[Kleisli triple]: glossary:monad",
               t"[burrito]: glossary:monad" )
 
@@ -4120,7 +4120,7 @@ define  user interface
           Glossary.Term(t"functor", t"y", Unset, t"other.tel", 4, synonyms = List(t"Monad", t"map", t"map"))
 
         val (merged, problems) = Glossary.merge(List(glossary, Glossary(List(clash))))
-        (merged.terms.stdlib.last.synonyms, failures(problems))
+        (merged.terms.keep(1, Rtl).bind(_.synonyms), failures(problems))
 
       . assert(_ == (Nil, List((Tone.Failure, 4), (Tone.Failure, 4))))
 
@@ -5145,6 +5145,13 @@ entry .Channel
       val unglossed: Text =
         t"tel 1.0\n\ndefine library\n  keyword lib\n  definition\n      - A collection of code.\n\n      - Other programs use it.\n\ndefine interface\n  definition\n      - A shared boundary.\n\ndefine apple\n  definition\n      - A fruit.\n"
 
+      // What `generate` writes of `terms`: the glossary as TEL reads it, which has no blank line
+      // after a source atom (§14), nor the line ending of a document's last line where that is
+      // in one.
+      def generated(text: Text): Text =
+        text.sub(t"use it.\n\ndefine", t"use it.\ndefine").sub(t"utilisent.\n\ndefine", t"utilisent.\ndefine")
+        . sub(t"      - A fruit.\n", t"      - A fruit.").sub(t"+ Un fruit.\n", t"+ Un fruit.")
+
       val glossed: Text =
         unglossed
         . sub(t"define library\n  keyword lib\n", t"define library\n  term bibliothèque\n  keyword bib\n")
@@ -5164,7 +5171,7 @@ entry .Channel
       test(m"a glossary's translation is its terms, their definitions to be translated"):
         GlossaryTranslations.generate(terms)
 
-      . assert(_ == unglossed)
+      . assert(_ == generated(unglossed))
 
       test(m"a glossary's translation which nobody has translated is one caution"):
         places(GlossaryTranslations.check(t"fr/glossary.tel", unglossed, terms)).map(_(2))
@@ -5236,7 +5243,7 @@ entry .Channel
       test(m"a glossary's translation is made again with what was translated"):
         GlossaryTranslations.generate(terms.sub(t"A fruit.", t"A round fruit."), glossed)
 
-      . assert(_ == glossed.sub(t"      - A fruit.\n", t"      ! A fruit.\n      - A round fruit.\n"))
+      . assert(_ == generated(glossed.sub(t"      - A fruit.\n", t"      ! A fruit.\n      - A round fruit.\n")))
 
       val synonymous: Text =
         t"tel 1.0\n\ndefine  user interface\n  synonym UI\n  unlisted\n  definition\n      Where a person and a program meet.\n"
@@ -5244,7 +5251,7 @@ entry .Channel
       test(m"a translation carries a term's synonyms, writing a value with spaces after two"):
         GlossaryTranslations.generate(synonymous)
 
-      . assert(_ == t"tel 1.0\n\ndefine  user interface\n  synonym UI\n  definition\n      - Where a person and a program meet.\n")
+      . assert(_ == t"tel 1.0\n\ndefine  user interface\n  synonym UI\n  definition\n      - Where a person and a program meet.")
 
       test(m"a translated term has its own synonyms, is unlisted as its origin is, and says the name it translates"):
         val read: Glossary = Glossary.read(t"en/glossary.tel", synonymous) match
@@ -5255,9 +5262,8 @@ entry .Channel
           t"tel 1.0\n\ndefine  user interface\n  term  interface utilisateur\n  synonym IU\n  definition\n      - Where a person and a program meet.\n      + Là où une personne et un programme se rencontrent.\n"
 
         val note: Text => Text = name => t"In English: *$name*."
-        val found: Glossary.Term = GlossaryTranslations.foreign(t"fr/glossary.tel", translated, read, note).terms.stdlib.head
-
-        (found.name, found.synonyms, found.unlisted, found.definition)
+        GlossaryTranslations.foreign(t"fr/glossary.tel", translated, read, note).terms.head.let:
+          (found: Glossary.Term) => (found.name, found.synonyms, found.unlisted, found.definition)
 
       . assert: found =>
           found ==
@@ -5266,7 +5272,7 @@ entry .Channel
 
       test(m"a term named as the term it translates is, says nothing more"):
         val note: Text => Text = name => t"In English: *$name*."
-        GlossaryTranslations.foreign(t"fr/glossary.tel", glossed, defined, note).terms.map(_.definition.cut(t"\n").stdlib.last)
+        GlossaryTranslations.foreign(t"fr/glossary.tel", glossed, defined, note).terms.map(_.definition.cut(t"\n").keep(1, Rtl).join)
 
       . assert(_ == List(t"In English: *library*.", t"Une frontière commune.", t"In English: *apple*."))
 
@@ -5350,3 +5356,5 @@ entry .Channel
         OverlayTranslations.lost(overlay.sub(t"entry #length", t"entry #size"), translated).map(_.title)
 
       . assert(_ == List(t"the `info` of `.Text#length`"))
+
+
