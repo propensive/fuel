@@ -32,10 +32,10 @@
                                                                                                   */
 package fuel
 
-import soundness.{Format as _, Language as _, Token as _, *}
+import soundness.{Format as _, Language as _, *}
 
 import dysasymptotics.linearSize
-import pyrocosm.{Block, Figure, Inline, Language, Token, Tone}
+import pyrocosm.{Block, Inline, Language, Token, Tone}
 
 // An entity's page, and the navigation of the whole API, as blocks: Amok's `JvmFolio` layout.
 // The page is its place (each parent a link), its name, its one-line info, then for each of
@@ -75,7 +75,7 @@ object ApiPages:
 
       Token(phrase.text, accent, Unset, link)
 
-    tokens.flatMap(List(Token.plain(t" "), _)).skip(1)
+    tokens.bind { (token: Token) => List(Token.plain(t" "), token) }.skip(1)
 
   // What a format is given to make an entity's sections from: the entity and its API, how
   // references in it resolve, and its members — those which are parameters, listed apart, and
@@ -174,8 +174,8 @@ object ApiPages:
     val where: List[Inline] =
       if !qualified then Nil
       else
-        val end: Int = member.key.s.length - member.name.s.length
-        List(Inline.Toned(Tone.Muted, Inline.text(Text(member.key.s.substring(0, end).nn))))
+        val end: Int = member.key.length - member.name.length
+        List(Inline.Toned(Tone.Muted, Inline.text(member.key.keep(end))))
 
     val token: Token = Token(member.name, accent, Unset, Inline.Destination.Local(member.url))
     val name: List[Inline] = where + List(Inline.Strong(List(code(api, List(token)))))
@@ -246,7 +246,7 @@ object ApiPages:
 
     given Locale[Phrases.Spoken] = locale
     val count: Int = outcome.hits.size
-    val drawn: List[Search.Hit] = List.from(outcome.hits.stdlib.take(shown))
+    val drawn: List[Search.Hit] = outcome.hits.keep(shown)
 
     val summary: Text = Phrases.resultsFor(count)()
 
@@ -308,8 +308,8 @@ object ApiPages:
 
 
       // After the title, so that the place above it stays the first block.
-      val (before, from) = page.stdlib.span { case Block.Heading(1, _, _) => false; case _ => true }
-      List.from(before ++ from.take(1)) + List(top) + List.from(from.drop(1)) + foot
+      val (before, from) = page.span { case Block.Heading(1, _, _) => false; case _ => true }
+      before + from.keep(1) + List(top) + from.skip(1) + foot
 
   def page
     ( api:        Api,

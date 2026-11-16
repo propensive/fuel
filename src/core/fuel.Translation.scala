@@ -34,9 +34,6 @@ package fuel
 
 import soundness.*
 
-import scala.collection.immutable as sci
-import scala.collection.mutable as scm
-
 import dysasymptotics.{linearAccess, linearSize}
 import pyrocosm.{Block, Tone}
 
@@ -103,119 +100,133 @@ object Translation:
   case class Projection(text: Text, origins: List[Int]):
     // The line of the file for a line of the projection, both from 1; the last line's, for one
     // beyond the end.
-    def origin(line: Int): Int =
-      val lines: sci.List[Int] = origins.stdlib
-      lines.lift(line - 1).orElse(lines.lastOption).getOrElse(1)
+    def origin(line: Int): Int = origins.at((line - 1).z).or(origins.last).or(1)
 
   private[fuel] enum Item:
     case Shared(text: Text)
     case Group(passage: Passage)
 
-  // A string cut at each match of a pattern, empty strings at the end kept.
-  private def pieces(string: String, pattern: String): sci.Vector[String] =
-    sci.ArraySeq.unsafeWrapArray(string.split(pattern, -1).nn).toVector.map(_.nn)
+  // A run of the edits which turn one sequence of lines into another: a line kept, by its
+  // indices in both; or a change, the indices it removes from the first, those it adds from
+  // the second, and how many lines of the first come before it.
+  private[fuel] enum Run:
+    case Kept(left: Int, right: Int)
+    case Changed(removed: List[Int], added: List[Int], position: Int)
 
-  private[fuel] def split(text: Text): sci.Vector[String] = pieces(text.s, "\n")
+  // New lines, as `update` gives them out: a line which divides paragraphs (a blank line, or
+  // one within a fence), or a paragraph.
+  private enum Token:
+    case Divider(line: Text)
+    case Paragraph(lines: List[Text])
 
-  private def classify(line: String): Line =
-    def marked(sigil: Char, mark: Mark): Optional[Line] =
-      if line.length == 1 && line.charAt(0) == sigil then Line(mark, t"")
-      else if line.length >= 2 && line.charAt(0) == sigil && line.charAt(1) == ' '
-      then Line(mark, Text(line.substring(2).nn))
+  // A text's lines, an empty one at the end kept.
+  private[fuel] def split(text: Text): List[Text] = text.cut(t"\n")
+
+  private def classify(line: Text): Line =
+    def marked(sigil: Text, mark: Mark): Optional[Line] =
+      if line == sigil then Line(mark, t"")
+      else if line.starts(t"$sigil ") then Line(mark, line.skip(2))
       else Unset
 
-    marked('-', Mark.Definitive).or(marked('+', Mark.Foreign)).or(marked('!', Mark.Former))
-    . or(Line(Mark.Common, Text(line)))
+    marked(t"-", Mark.Definitive).or(marked(t"+", Mark.Foreign)).or(marked(t"!", Mark.Former))
+    . or(Line(Mark.Common, line))
 
-  def parse(text: Text): Translation = Translation(List.from(split(text).map(classify).toList))
+  def parse(text: Text): Translation = Translation(split(text).map(classify))
 
   // A line both languages share: common, unless it would be read as a marked line, when it is
   // a passage which says the same twice.
-  private def shared(line: String): sci.List[Line] =
-    val text: Text = Text(line)
+  private def shared(line: Text): List[Line] =
+    if classify(line).mark == Mark.Common then List(Line(Mark.Common, line))
+    else List(Line(Mark.Definitive, line), Line(Mark.Foreign, line))
 
-    if classify(line).mark == Mark.Common then sci.List(Line(Mark.Common, text))
-    else sci.List(Line(Mark.Definitive, text), Line(Mark.Foreign, text))
-
-  private val opening: java.util.regex.Pattern =
-    java.util.regex.Pattern.compile("^\\s*(`{3,}|~{3,})(.*)$").nn
+  // The marker and the info string of a line which opens a fence.
+  private def opening(line: Text): Optional[(Text, Text)] = line match
+    case r"\s*$marker(`{3,}|~{3,})$info(.*)" => (marker, info.trim)
+    case _                                   => Unset
 
   // Which lines of a text are not prose to translate: the lines which open and close a fence,
   // and what is between them, unless the fence is a table, whose content is prose.
-  private[fuel] def verbatim(lines: sci.Vector[String]): sci.Vector[Boolean] =
-    var fence: String = ""
-    var prose: Boolean = false
+  private[fuel] def verbatim(lines: List[Text]): List[Boolean] =
+    // `fence` is the marker of the open fence, empty outside one, and `prose` whether its
+    // content is prose; `done` is what is found, latest first.
+    def recur(lines: List[Text], fence: Text, prose: Boolean, done: List[Boolean])
+    :   List[Boolean] =
 
-    lines.map: (line: String) =>
-      if fence == "" then
-        val matcher: java.util.regex.Matcher = opening.matcher(line).nn
+      lines match
+        case line :: rest =>
+          if fence == t"" then opening(line) match
+            case (marker: Text, info: Text) =>
+              if marker.starts(t"`") && info.contains(t"`") then
+                recur(rest, fence, prose, false :: done)
+              else
+                val table: Boolean = info.cut(r"\s+").head == Tables.language
+                recur(rest, marker, table, true :: done)
 
-        if !matcher.matches then false else
-          val marker: String = matcher.group(1).nn
-          val info: String = matcher.group(2).nn.trim.nn
+            case _ =>
+              recur(rest, fence, prose, false :: done)
+          else
+            val trimmed: Text = line.trim
+            // A line closes the fence with as many of its marker's sign at least, and no other.
+            val closes: Boolean =
+              trimmed.length >= fence.length && trimmed.sub(fence.keep(1), t"") == t""
 
-          if marker.charAt(0) == '`' && info.contains("`") then false else
-            fence = marker
-            prose = pieces(info, "\\s+").headOption.contains(Tables.language.s)
-            true
-      else
-        val trimmed: String = line.trim.nn
+            if closes then recur(rest, t"", prose, true :: done)
+            else recur(rest, fence, prose, !prose :: done)
 
-        val closes: Boolean =
-          trimmed.length >= fence.length && trimmed.forall(_ == fence.charAt(0))
+        case _ =>
+          done.reverse
 
-        if closes then
-          fence = ""
-          true
-        else !prose
+    recur(lines, t"", false, Nil)
 
   // The translation of a text which nobody has translated yet: every line of prose a `-` line,
   // and the rest common.
   def skeleton(definitive: Text): Translation =
-    val lines: sci.Vector[String] = split(definitive)
-    val fixed: sci.Vector[Boolean] = verbatim(lines)
+    val lines: List[Text] = split(definitive)
 
-    val marked: sci.Vector[Line] = lines.zip(fixed).flatMap: (line: String, fixed: Boolean) =>
-      if fixed || line.trim.nn == "" then shared(line)
-      else sci.List(Line(Mark.Definitive, Text(line)))
+    Translation:
+      lines.zip(verbatim(lines)).bind: (line: Text, fixed: Boolean) =>
+        if fixed || line.trim == t"" then shared(line) else List(Line(Mark.Definitive, line))
 
-    Translation(List.from(marked.toList))
+  // The edits which turn one sequence of lines into another, as runs.
+  private[fuel] def hunks(left: List[Text], right: List[Text]): List[Run] =
+    // dissonance's `Diff` holds its edits as varargs, a standard `Seq`, read by `List.from`.
+    val edits: List[Diff.Edit[Text]] = List.from(diff(left.to[Sequence], right.to[Sequence]).edits)
 
-  // The edits which turn one sequence of lines into another, as runs: each `Right` a line
-  // kept, by its indices in both, and each `Left` a change, the indices it removes from the
-  // first, those it adds from the second, and how many lines of the first come before it.
-  private[fuel] def hunks(left: sci.Vector[String], right: sci.Vector[String])
-  :   sci.Vector[Either[(sci.Vector[Int], sci.Vector[Int], Int), (Int, Int)]] =
+    // `removed` and `added` are the change being gathered, and `done` the runs before it, each
+    // latest first; `consumed` is how many lines of the first sequence the edits have passed.
+    def recur
+      ( edits:    List[Diff.Edit[Text]],
+        removed:  List[Int],
+        added:    List[Int],
+        consumed: Int,
+        done:     List[Run] )
+    :   List[Run] =
 
-    val before: Sequence[Text] = Sequence.from(left.map(Text(_)))
-    val after: Sequence[Text] = Sequence.from(right.map(Text(_)))
-    val edits: sci.Vector[Edit[Text]] = diff(before, after).edits.to(List).stdlib.toVector
-    val out = sci.Vector.newBuilder[Either[(sci.Vector[Int], sci.Vector[Int], Int), (Int, Int)]]
-    var removed: sci.Vector[Int] = sci.Vector()
-    var added: sci.Vector[Int] = sci.Vector()
-    var consumed: Int = 0
+      val flushed: List[Run] =
+        if removed.nil && added.nil then done
+        else Run.Changed(removed.reverse, added.reverse, consumed - removed.size) :: done
 
-    def flush(): Unit =
-      if removed.nonEmpty || added.nonEmpty then
-        out += Left((removed, added, consumed - removed.size))
-        removed = sci.Vector()
-        added = sci.Vector()
+      edits match
+        case Diff.Par(left, right, _) :: rest =>
+          recur(rest, Nil, Nil, consumed + 1, Run.Kept(left, right) :: flushed)
 
-    edits.foreach:
-      case Par(left, right, _) =>
-        flush()
-        consumed += 1
-        out += Right((left, right))
+        case Diff.Del(left, _) :: rest =>
+          recur(rest, left :: removed, added, consumed + 1, done)
 
-      case Del(left, _) =>
-        consumed += 1
-        removed = removed :+ left
+        case Diff.Ins(right, _) :: rest =>
+          recur(rest, removed, right :: added, consumed, done)
 
-      case Ins(right, _) =>
-        added = added :+ right
+        case _ =>
+          flushed.reverse
 
-    flush()
-    out.result()
+    recur(edits, Nil, Nil, 0, Nil)
+
+  // A passage, and the lines of the new text `update` gives it, latest first.
+  private final class Draft(val passage: Passage):
+    @scala.caps.unsafe.untrackedCaptures
+    var lines: List[Text] = Nil
+
+    def give(more: List[Text]): Unit = lines = more.reverse + lines
 
   // A translation brought up to a definitive text which has changed. Each passage a change
   // touches keeps its `+` lines, takes the new text as its `-` lines, and keeps the text its
@@ -225,156 +236,195 @@ object Translation:
   // which has gone leaves its translation with `!` lines alone, to be deleted. Several new
   // paragraphs replacing several passages are given to them in order.
   def update(translation: Translation, definitive: Text): Translation =
-    val items: sci.Vector[Item] = translation.items
-    val target: sci.Vector[String] = split(definitive)
-    val fixed: sci.Vector[Boolean] = verbatim(target)
+    val items: List[Item] = translation.items
+    val count: Int = items.size
+    val lines: List[Text] = split(definitive)
 
-    final class Draft(val passage: Passage):
-      val lines: scm.ArrayBuffer[String] = scm.ArrayBuffer()
+    // The edits name lines by their indices, so the lines are read by index, within the bounds
+    // the diff keeps them in.
+    val target: Array[Text] = lines.to[Array]
+    val fixed: Array[Boolean] = verbatim(lines).to[Array]
 
-    val drafts: sci.Map[Int, Draft] =
-      sci.Map.from:
-        items.zipWithIndex.collect { case (Item.Group(passage), index) => index -> Draft(passage) }
+    val drafts: Map[Int, Draft] =
+      items.indexed.bind: (item: Item, index: Ordinal) =>
+        item match
+          case Item.Group(passage) => List(index.n0 -> Draft(passage))
+          case _                   => Nil
 
-    // Each line of the definitive projection, with the item it is of.
-    val source: sci.Vector[(String, Int)] = items.zipWithIndex.flatMap:
-      case (Item.Shared(text), index) =>
-        sci.Vector((text.s, index))
+      . to[Map]
 
-      case (Item.Group(passage), index) =>
-        passage.definitive.stdlib.toVector.map { line => (line.s, index) }
+    // Each line of the definitive projection, with the index of the item it is of.
+    val source: Array[(Text, Int)] =
+      items.indexed.bind: (item: Item, index: Ordinal) =>
+        item match
+          case Item.Shared(text)   => List((text, index.n0))
+          case Item.Group(passage) => passage.definitive.map((_, index.n0))
 
-    val out: scm.ArrayBuffer[Draft | Line] = scm.ArrayBuffer()
+      . to[Array]
+
+    // The item of a line of the definitive projection.
+    def of(line: Int): Int = source.readUnchecked(line)(1)
+
+    // What is written so far, latest first; and how many items are in it.
+    var out: List[Draft | Line] = Nil
     var emitted: Int = 0
 
     // Every passage up to an item is in the output from here on.
     def reach(index: Int): Unit =
-      while emitted <= index && emitted < items.size do
-        drafts.get(emitted).foreach(out += _)
+      while emitted <= index && emitted < count do
+        drafts.at(emitted).let { (draft: Draft) => out = draft :: out }
         emitted += 1
 
-    def draft(index: Int): Option[Draft] = if index < emitted then None else drafts.get(index)
+    def draft(index: Int): Optional[Draft] = if index < emitted then Unset else drafts.at(index)
 
-    hunks(source.map(_(0)), target).foreach:
-      case Right((left, right)) =>
-        val index: Int = source(left)(1)
+    def latest(draft: Draft): Boolean = out match
+      case (last: Draft) :: _ => last eq draft
+      case _                  => false
+
+    hunks(source.to[List].map(_(0)), lines).each:
+      case Run.Kept(left, right) =>
+        val index: Int = of(left)
+        val line: Text = target.readUnchecked(right)
         reach(index)
 
-        drafts.get(index) match
-          case Some(draft) => draft.lines += target(right)
-          case None        => out ++= shared(target(right))
+        drafts.at(index) match
+          case draft: Draft => draft.give(List(line))
+          case _            => out = shared(line).reverse + out
 
-      case Left((removed, added, position)) =>
-        val touched: scm.Queue[Int] =
-          scm.Queue.from(removed.map(source(_)(1)).distinct.filter(drafts.contains))
+      case Run.Changed(removed, added, position) =>
+        var touched: List[Int] = removed.map(of(_)).distinct.filter(drafts.at(_).present)
 
         // The lines of the projection either side of the change.
-        val before: Option[Draft] =
-          if position == 0 then None
-          else
-            drafts.get(source(position - 1)(1)).filter: draft =>
-              out.lastOption.exists(_ eq draft)
+        val before: Optional[Draft] =
+          if position == 0 then Unset
+          else drafts.at(of(position - 1)).let { draft => if latest(draft) then draft else Unset }
 
         val following: Int = position + removed.size
 
-        val after: Option[Int] =
-          if following >= source.size then None
-          else Some(source(following)(1)).filter { index => draft(index).isDefined }
+        val after: Optional[Int] =
+          if following >= source.length then Unset
+          else
+            val index: Int = of(following)
+            if draft(index).present then index else Unset
 
         // The new lines, as paragraphs and what divides them.
-        val tokens: sci.Vector[Either[String, sci.Vector[String]]] =
-          added.foldLeft(sci.Vector[Either[String, sci.Vector[String]]]()): (tokens, index) =>
-            val line: String = target(index)
+        val tokens: List[Token] =
+          added.fold(List[Token]()): (tokens: List[Token], index: Int) =>
+            val line: Text = target.readUnchecked(index)
 
-            if fixed(index) || line.trim.nn == "" then tokens :+ Left(line)
-            else tokens.lastOption match
-              case Some(Right(lines)) => tokens.init :+ Right(lines :+ line)
-              case _                  => tokens :+ Right(sci.Vector(line))
+            if fixed.readUnchecked(index) || line.trim == t"" then Token.Divider(line) :: tokens
+            else tokens match
+              case Token.Paragraph(lines) :: rest => Token.Paragraph(line :: lines) :: rest
+              case _                              => Token.Paragraph(List(line)) :: tokens
 
-        tokens.zipWithIndex.foreach:
-          case (Left(line), _) =>
-            out ++= shared(line)
+          . reverse
 
-          case (Right(lines), index) =>
-            val receiver: Draft =
-              if touched.nonEmpty then
-                val item: Int = touched.dequeue()
-                reach(item)
-                drafts(item)
-              else if index == 0 && before.isDefined then before.get
-              else if index == tokens.size - 1 && after.isDefined then
-                reach(after.get)
-                drafts(after.get)
-              else
-                val fresh: Draft = Draft(Passage(0, Nil, Nil, Nil))
-                out += fresh
-                fresh
+        val last: Int = tokens.size - 1
 
-            receiver.lines ++= lines
+        tokens.indexed.each: (token: Token, index: Ordinal) =>
+          token match
+            case Token.Divider(line) =>
+              out = shared(line).reverse + out
 
-        removed.lastOption.foreach { last => reach(source(last)(1)) }
+            // A paragraph's lines are latest first.
+            case Token.Paragraph(lines) =>
+              val receiver: Draft = touched match
+                case item :: rest =>
+                  touched = rest
+                  reach(item)
+                  drafts.at(item).or(panic(m"a touched item is a passage"))
 
-    reach(items.size - 1)
+                case _ =>
+                  if index.n0 == 0 && before.present
+                  then before.or(panic(m"the passage before is present"))
+                  else if index.n0 == last && after.present then
+                    val item: Int = after.or(panic(m"the passage after is present"))
+                    reach(item)
+                    drafts.at(item).or(panic(m"the passage after is a passage"))
+                  else
+                    val fresh: Draft = Draft(Passage(0, Nil, Nil, Nil))
+                    out = fresh :: out
+                    fresh
 
-    val lines: sci.Vector[Line] = out.toVector.flatMap:
-      case line: Line =>
-        sci.Vector(line)
+              receiver.give(lines.reverse)
 
-      case draft: Draft =>
-        val passage: Passage = draft.passage
-        val current: List[Text] = List.from(draft.lines.toList.map(Text(_)))
+        removed.last.let { (last: Int) => reach(of(last)) }
 
-        val revised: Passage =
-          if current == passage.definitive then passage
-          else if passage.shared then passage.copy(definitive = current, foreign = current)
-          else if !passage.former.nil || passage.foreign.nil then passage.copy(definitive = current)
-          else passage.copy(former = passage.definitive, definitive = current)
+    reach(count - 1)
 
-        revised.former.stdlib.toVector.map(Line(Mark.Former, _)) ++
-          revised.definitive.stdlib.toVector.map(Line(Mark.Definitive, _)) ++
-          revised.foreign.stdlib.toVector.map(Line(Mark.Foreign, _))
+    Translation:
+      out.reverse.bind:
+        case line: Line =>
+          List(line)
 
-    Translation(List.from(lines.toList))
+        case draft: Draft =>
+          val passage: Passage = draft.passage
+          val current: List[Text] = draft.lines.reverse
+
+          val revised: Passage =
+            if current == passage.definitive then passage
+            else if passage.shared then passage.copy(definitive = current, foreign = current)
+            else if !passage.former.nil || passage.foreign.nil
+            then passage.copy(definitive = current)
+            else passage.copy(former = passage.definitive, definitive = current)
+
+          revised.former.map(Line(Mark.Former, _)) +
+            revised.definitive.map(Line(Mark.Definitive, _)) +
+            revised.foreign.map(Line(Mark.Foreign, _))
 
   // A change to some words, as it reads: `[-these-]` gone and `{+those+}` come, among the
   // words which stay.
-  private def reworded(before: sci.Vector[String], after: sci.Vector[String]): Text =
-    def words(lines: sci.Vector[String]): sci.Vector[String] =
-      lines.flatMap(pieces(_, "\\s+")).filter(_ != "")
+  private def reworded(before: List[Text], after: List[Text]): Text =
+    def words(lines: List[Text]): List[Text] = lines.bind(_.cut(r"\s+")).filter(_ != t"")
 
-    val old: sci.Vector[String] = words(before)
-    val current: sci.Vector[String] = words(after)
+    val old: List[Text] = words(before)
+    val current: List[Text] = words(after)
 
-    val shown: sci.Vector[String] = hunks(old, current).map:
-      case Right((left, _)) =>
-        old(left)
+    // The edits name words by their indices.
+    val olds: Array[Text] = old.to[Array]
+    val currents: Array[Text] = current.to[Array]
 
-      case Left((removed, added, _)) =>
-        val gone: String =
-          if removed.isEmpty then "" else removed.map(old(_)).mkString("[-", " ", "-]")
+    val shown: List[Text] = hunks(old, current).map:
+      case Run.Kept(left, _) =>
+        olds.readUnchecked(left)
 
-        val come: String =
-          if added.isEmpty then "" else added.map(current(_)).mkString("{+", " ", "+}")
+      case Run.Changed(removed, added, _) =>
+        val gone: Text =
+          if removed.nil then t"" else t"[-${removed.map(olds.readUnchecked(_)).join(t" ")}-]"
 
-        gone + come
+        val come: Text =
+          if added.nil then t"" else t"{+${added.map(currents.readUnchecked(_)).join(t" ")}+}"
 
-    Text(shown.mkString(" "))
+        t"$gone$come"
 
-  // Something wrong with a translation, at a line of its text (from 1): what `findings` and
-  // `Mirror` find, before it is known which file the text is in, or where in it.
+    shown.join(t" ")
+
+  // Something wrong with a translation, at a line of its text (from 1), with its code: what
+  // `findings` and `Mirror` find, before it is known which file the text is in, or where in it.
   case class Finding
     ( tone:         Tone,
       line:         Int,
       message:      Text,
+      code:         fulminate.Bolt,
       detail:       Optional[Text] = Unset,
       untranslated: Boolean        = false ):
 
     def shifted(lines: Int): Finding = copy(line = line + lines)
 
+  // The code of what is wrong with a translation of a document, `↯/f.25.9.<variant>`: text it
+  // translates which has gained lines (1), lost them (2) or changed (3); `+` lines which
+  // translate nothing (4); a passage pending revision (5), or orphaned (6); a passage nobody has
+  // translated (7); and a document with no translation into a language it is translated into
+  // (8, from `Translations`).
+  private[fuel] def bolt(variant: Int): fulminate.Bolt =
+    FuelBolts(FuelBolts.core, FuelBolts.translation, variant)
+
   // Findings as diagnostics at their lines of the file at `path`, whose text is `file`: the
   // failures first, and the passages nobody has translated together, as one caution at the
   // first which lists the rest.
   def report(path: Text, file: Text, findings: List[Finding]): List[Block.Diagnostic] =
+    import sortingAlgorithms.timsort
+
     def diagnostic(finding: Finding, message: Text): Block.Diagnostic =
       val style: Block.Note.Style =
         if finding.tone == Tone.Failure then Block.Note.Style.Erroneous
@@ -386,33 +436,33 @@ object Translation:
         finding.detail.lay(List[Block]()) { text => List(Block.paragraph(text)) }
 
       val location: Block.Location = Block.Location(path, finding.line)
-      Block.Diagnostic(finding.tone, location, List(Block.paragraph(message)), excerpt, detail)
+      val paragraphs: List[Block] = List(Block.paragraph(message))
+      Block.Diagnostic(finding.tone, location, paragraphs, excerpt, detail, finding.code)
 
-    val all: sci.Vector[Finding] = findings.stdlib.toVector
-    val untranslated: sci.Vector[Finding] = all.filter(_.untranslated).sortBy(_.line)
-    val rest: sci.Vector[Finding] = all.filter(!_.untranslated)
+    val untranslated: List[Finding] = findings.filter(_.untranslated).order(_.line)
+    val rest: List[Finding] = findings.filter(!_.untranslated)
 
-    val missing: sci.Vector[Block.Diagnostic] =
-      untranslated.headOption.toVector.map: (first: Finding) =>
+    val missing: List[Block.Diagnostic] =
+      untranslated.head.lay(List[Block.Diagnostic]()): (first: Finding) =>
         val count: Int = untranslated.size
-        val places: String = untranslated.take(12).map(_.line.toString).mkString(", ")
-        val more: String = if count > 12 then ", …" else ""
+        val places: Text = untranslated.keep(12).map(_.line.show).join(t", ")
+        val more: Text = if count > 12 then t", …" else t""
 
         val message: Text =
           if count == 1 then first.message
           else
             t"${count.show} passages are not translated, the first here " +
-              t"(lines ${Text(places + more)})."
+              t"(lines $places$more)."
 
-        diagnostic(first, message)
+        List(diagnostic(first, message))
 
-    val failures: sci.Vector[Block.Diagnostic] =
+    val failures: List[Block.Diagnostic] =
       rest.filter(_.tone == Tone.Failure).map { finding => diagnostic(finding, finding.message) }
 
-    val cautions: sci.Vector[Block.Diagnostic] =
+    val cautions: List[Block.Diagnostic] =
       rest.filter(_.tone != Tone.Failure).map { finding => diagnostic(finding, finding.message) }
 
-    List.from((failures ++ cautions ++ missing).toList)
+    failures + cautions + missing
 
   // What is wrong with a translation, as its text `source` has it, of a definitive text: each
   // place where the text it says it translates is no longer the definitive text, with the
@@ -421,51 +471,61 @@ object Translation:
   def findings(source: Text, definitive: Text): List[Finding] =
     val translation: Translation = parse(source)
     val projection: Projection = translation.definitive
-    val before: sci.Vector[String] = split(projection.text)
-    val after: sci.Vector[String] = split(definitive)
+    val before: List[Text] = split(projection.text)
+    val after: List[Text] = split(definitive)
 
-    val stale: sci.Vector[Finding] = hunks(before, after).collect:
-      case Left((removed, added, position)) =>
-        val line: Int =
-          projection.origin(if removed.nonEmpty then position + 1 else position.max(1))
+    // The edits name lines by their indices.
+    val befores: Array[Text] = before.to[Array]
+    val afters: Array[Text] = after.to[Array]
 
-        val message: Text =
-          if removed.isEmpty then
-            t"The text this translates has gained lines after this one, which are not " +
-              t"translated."
-          else if added.isEmpty then t"The text this translates has lost these lines."
-          else t"The text this translates has changed here."
+    val stale: List[Finding] = hunks(before, after).bind:
+      case Run.Changed(removed, added, position) =>
+        val line: Int = projection.origin(if !removed.nil then position + 1 else position.max(1))
 
-        Finding(Tone.Warning, line, message, reworded(removed.map(before(_)), added.map(after(_))))
+        val (message, variant) =
+          if removed.nil then
+            ( t"The text this translates has gained lines after this one, which are not " +
+                t"translated.",
+              1 )
+          else if added.nil then (t"The text this translates has lost these lines.", 2)
+          else (t"The text this translates has changed here.", 3)
 
-    val states: sci.Vector[Finding] =
-      translation.passages.stdlib.toVector.flatMap: (passage: Passage) =>
+        val change: Text =
+          reworded(removed.map(befores.readUnchecked(_)), added.map(afters.readUnchecked(_)))
+
+        List(Finding(Tone.Warning, line, message, bolt(variant), change))
+
+      case _ =>
+        Nil
+
+    val states: List[Finding] =
+      translation.passages.bind: (passage: Passage) =>
         passage.state match
           case State.Unpaired =>
             val message: Text =
               t"These lines translate nothing: `+` lines follow the `-` lines they translate."
 
-            sci.Vector(Finding(Tone.Failure, passage.line, message))
+            List(Finding(Tone.Failure, passage.line, message, bolt(4)))
 
           case State.Pending =>
             val message: Text =
               t"The text this translates has changed, from the `!` lines to the `-` lines: " +
                 t"revise the `+` lines, then delete the `!` lines."
 
-            sci.Vector(Finding(Tone.Warning, passage.line, message))
+            List(Finding(Tone.Warning, passage.line, message, bolt(5)))
 
           case State.Orphaned =>
             val message: Text = t"The text this translates has gone: delete these lines."
-            sci.Vector(Finding(Tone.Warning, passage.line, message))
+            List(Finding(Tone.Warning, passage.line, message, bolt(6)))
 
           case State.Untranslated =>
-            sci.Vector:
-              Finding(Tone.Warning, passage.line, t"This is not translated.", untranslated = true)
+            val message: Text = t"This is not translated."
+            List(Finding(Tone.Warning, passage.line, message, bolt(7), untranslated = true))
 
           case State.Translated =>
-            sci.Vector()
+            Nil
 
-    List.from((stale ++ states).toList)
+    stale + states
 
   def check(path: Text, source: Text, definitive: Text): List[Block.Diagnostic] =
     report(path, source, findings(source, definitive))
@@ -476,9 +536,13 @@ object Translation:
     def complete: Boolean = untranslated == 0 && pending == 0 && orphaned == 0 && stale == 0
 
   def progress(translation: Translation, definitive: Text): Progress =
-    val passages: sci.Vector[Passage] = translation.passages.stdlib.toVector.filter(!_.shared)
+    val passages: List[Passage] = translation.passages.filter(!_.shared)
     def count(state: State): Int = passages.count(_.state == state)
-    val changes: Int = hunks(split(translation.definitive.text), split(definitive)).count(_.isLeft)
+
+    val changes: Int =
+      hunks(split(translation.definitive.text), split(definitive)).count:
+        case Run.Changed(_, _, _) => true
+        case _                    => false
 
     Progress
       ( count(State.Translated), count(State.Untranslated), count(State.Pending),
@@ -489,70 +553,67 @@ case class Translation(lines: List[Translation.Line]):
 
   def serialize: Text = lines.map(_.serialize).join(t"\n")
 
-  // The file as its common lines and its passages, in order.
-  private[fuel] lazy val items: sci.Vector[Item] =
-    val all: sci.Vector[Line] = lines.stdlib.toVector
-    val out = sci.Vector.newBuilder[Item]
-    var index: Int = 0
+  // The file as its common lines and its passages, in order: each passage is the run of `!`
+  // lines, then of `-` lines, then of `+` lines, which begins at its first marked line.
+  private[fuel] lazy val items: List[Item] =
+    // `index` is the line of the file (from 0) of the first of `lines`; `done` is what is
+    // found, latest first.
+    def recur(lines: List[Line], index: Int, done: List[Item]): List[Item] = lines match
+      case line :: rest =>
+        if line.mark == Mark.Common then recur(rest, index + 1, Item.Shared(line.text) :: done)
+        else
+          def run(mark: Mark, lines: List[Line]): List[Text] =
+            lines.keep(_.mark == mark).map(_.text)
 
-    def run(mark: Mark): List[Text] =
-      val start: Int = index
-      while index < all.size && all(index).mark == mark do index += 1
-      List.from(all.slice(start, index).map(_.text).toList)
+          val former: List[Text] = run(Mark.Former, lines)
+          val definitive: List[Text] = run(Mark.Definitive, lines.skip(former.size))
+          val foreign: List[Text] = run(Mark.Foreign, lines.skip(former.size + definitive.size))
+          val size: Int = former.size + definitive.size + foreign.size
+          val passage: Passage = Passage(index + 1, former, definitive, foreign)
 
-    while index < all.size do
-      if all(index).mark == Mark.Common then
-        out += Item.Shared(all(index).text)
-        index += 1
-      else
-        val start: Int = index
-        val former: List[Text] = run(Mark.Former)
-        val definitive: List[Text] = run(Mark.Definitive)
-        val foreign: List[Text] = run(Mark.Foreign)
-        out += Item.Group(Passage(start + 1, former, definitive, foreign))
+          recur(lines.skip(size), index + size, Item.Group(passage) :: done)
 
-    out.result()
+      case _ =>
+        done.reverse
 
-  def passages: List[Passage] =
-    List.from(items.collect { case Item.Group(passage) => passage }.toList)
+    recur(lines, 0, Nil)
 
-  private def projection(lines: sci.Vector[(Text, Int)]): Projection =
-    Projection(List.from(lines.map(_(0)).toList).join(t"\n"), List.from(lines.map(_(1)).toList))
+  def passages: List[Passage] = items.bind:
+    case Item.Group(passage) => List(passage)
+    case _                   => Nil
 
-  private def numbered(lines: List[Text], first: Int): sci.Vector[(Text, Int)] =
-    lines.stdlib.toVector.zipWithIndex.map { (line, index) => (line, first + index) }
+  private def projection(lines: List[(Text, Int)]): Projection =
+    Projection(lines.map(_(0)).join(t"\n"), lines.map(_(1)))
+
+  private def numbered(lines: List[Text], first: Int): List[(Text, Int)] =
+    lines.indexed.map { (line: Text, index: Ordinal) => (line, first + index.n0) }
+
+  // A projection's lines, each with the line of the file it is: a common line's is counted
+  // from the line after the passage before it.
+  private def projected(passage: Passage => List[(Text, Int)]): Projection =
+    def recur(items: List[Item], line: Int, done: List[(Text, Int)]): List[(Text, Int)] =
+      items match
+        case Item.Shared(text) :: rest =>
+          recur(rest, line + 1, (text, line + 1) :: done)
+
+        case Item.Group(group) :: rest =>
+          val last: Int =
+            group.line + group.former.size + group.definitive.size + group.foreign.size - 1
+
+          recur(rest, last, passage(group).reverse + done)
+
+        case _ =>
+          done.reverse
+
+    projection(recur(items, 0, Nil))
 
   // The definitive text, as the translation has it.
-  def definitive: Projection =
-    var line: Int = 0
-
-    projection:
-      items.flatMap:
-        case Item.Shared(text) =>
-          line += 1
-          sci.Vector((text, line))
-
-        case Item.Group(passage) =>
-          line =
-            passage.line + passage.former.size + passage.definitive.size + passage.foreign.size - 1
-
-          numbered(passage.definitive, passage.definitiveLine)
+  def definitive: Projection = projected: (passage: Passage) =>
+    numbered(passage.definitive, passage.definitiveLine)
 
   // The translated text: a passage nobody has translated is as the definitive text has it, and
   // one which translates nothing is left out.
-  def foreign: Projection =
-    var line: Int = 0
-
-    projection:
-      items.flatMap:
-        case Item.Shared(text) =>
-          line += 1
-          sci.Vector((text, line))
-
-        case Item.Group(passage) =>
-          line =
-            passage.line + passage.former.size + passage.definitive.size + passage.foreign.size - 1
-
-          if passage.definitive.nil then sci.Vector()
-          else if passage.foreign.nil then numbered(passage.definitive, passage.definitiveLine)
-          else numbered(passage.foreign, passage.foreignLine)
+  def foreign: Projection = projected: (passage: Passage) =>
+    if passage.definitive.nil then Nil
+    else if passage.foreign.nil then numbered(passage.definitive, passage.definitiveLine)
+    else numbered(passage.foreign, passage.foreignLine)

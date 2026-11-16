@@ -31,6 +31,7 @@ fuel translate     # write the translations nobody has begun, into each configur
 fuel translate doc/x.md doc/y.md  # the same, for these documents (or overlays) alone
 fuel translate --language fr  # the same, into French alone
 fuel translate --update  # bring each translation up to the text it translates
+fuel translate --update --dry-run  # say what that would change, and write nothing
 fuel install       # install tab-completions and the manpage
 fuel about         # fuel's version, and the daemon serving it
 fuel --version     # the version alone
@@ -44,6 +45,13 @@ from a compile's own failures (status 4), from a tracker whose issues could not 
 from an aligner that could not be installed or run (status 9), from a translation which is not
 consistent with the text it translates (status 10, from `fuel translate`) and from a command
 line it did not understand (status 2).
+
+Every error, diagnostic and failure fuel reports is named by a bolt code, the scheme of all of
+Propensive's projects: `↯/f.25` to `↯/f.28` are fuel's (its core, API, client and launcher), as
+`FuelBolts` declares, and `[↯/f.27.5.7] usage: fuel show <file>` is printed after its code's
+label. A code which carries another names the error reported on account of it: a glossary's
+fault the TEL schema finds, `↯/f.25.4.1/s.…`, carries the TEL error's own code. The record of
+what every code means is `f.tel` in [propensive/bolt](https://github.com/propensive/bolt).
 
 `fuel compile` reads every `*.md` in each configured section's directory, parses it as
 CommonMark, and converts it to Pyrocosm blocks: a fenced block whose info string is `scala` or
@@ -118,10 +126,10 @@ session on that classpath with the configured `scalac-option`s, so a fragment th
 typecheck fails the compile (exit status 4). A macro the fragments call is run against that
 classpath, never fuel's own copy of a library it uses (Proscala's `-Zisolated-macros`). Every problem — a fragment that does not typecheck,
 a preamble that is not TEL, a file that cannot be read — is a Pyrocosm diagnostic: `fuel
-compile` prints it as the terminal renders one (`path:line:col: error`, the message, and the
-lines concerned numbered from the file, with the place underlined), and in the served document
-it follows the fragment, whose lines are numbered from the file too. Every link is checked
-too, once every document is compiled: a link to another document (`guide/x.md`, `../x.md`,
+compile` prints it as the terminal renders one (`path:line:col: error` and its bolt code, the
+message, and the lines concerned numbered from the file, with the place underlined), and in the
+served document it follows the fragment, whose lines are numbered from the file too. Every
+link is checked too, once every document is compiled: a link to another document (`guide/x.md`, `../x.md`,
 resolved against the document's directory as the files on disk relate, so that
 `../philosophy/x.md` from `doc/modules` leads into the section `doc/philosophy`) or to a place
 on one (`#set-up`, a heading's slug as GitHub makes it, or a fence's `id`), to an API page
@@ -704,6 +712,15 @@ lines, and keeps the text its translation was written for as `!` lines.
 - and serves it on the web.
 + Fuel compile chaque fichier Markdown, et le sert sur le web.
 ```
+
+An update is written only where it is safe. Before it replaces a translation, `fuel translate
+--update` checks the new file against the old: it must have no failure the old one did not
+have, it must keep every `+` line whose text is still there (a passage whose `+` lines are its
+`-` lines is shared text, not a translation), and updating it again must change nothing.
+Where an update fails any of these, the file is left as it was, the command says why, and it
+exits with status 11; it is a fault in fuel, and worth reporting. With `--dry-run`, nothing is
+written: each translation which would change is named, with how many passages it would newly
+give the translator to revise, to translate and to delete.
 
 The translator revises the `+` lines and deletes the `!` lines. New text arrives as a passage
 with no `+` lines, and text which has gone leaves its `!` and `+` lines, to be deleted. A

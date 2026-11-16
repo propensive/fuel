@@ -32,13 +32,15 @@
                                                                                                   */
 package fuel
 
-import scala.collection.immutable as sci
-
 // Excluded from the umbrella: `Compilation`, anthology's, which would outrank fuel's own.
-import soundness.{Compilation as _, Format as _, Language as _, Token as _, Query as _, *}
+import soundness.{Compilation as _, Format as _, Language as _, Query as _, *}
 
+import collations.codepointCollation
 import dysasymptotics.{linearAccess, linearSize}
-import pyrocosm.{Block, Inline, Language, Purview, TerminalRenderer, Token, Tone}
+import filesystemBackends.javaBaseFilesystem
+import pyrocosm.{Block, Filing, Inline, Language, Purview, TerminalRenderer, Token, Tone}
+import soundness.collationComparable
+import sortingAlgorithms.timsort
 import systems.javaBaseSystem
 
 object Tests extends Suite(m"Fuel tests"):
@@ -58,6 +60,31 @@ make run
   // The suite's own classpath, from its classloader (so it is the same under fume, which runs
   // the suite in-process, as under plain java), carrying the Scala library the fragments need.
   val classpath: LocalClasspath = LocalClasspath.of(Classloader[Tests.type])
+
+  // The directory the suite runs in: fuel's own, with its documents and its build.
+  def here: Text = workingDirectories.javaBaseWorkingDirectory.directory()
+
+  // A fresh, empty directory of a test's own, in the temporary directory, named by `prefix` and
+  // a `Uuid`; it is left, as the system's other temporary files are, for the system to clear.
+  def scratch(prefix: Text): Text =
+    import temporaryDirectories.javaBaseTemporaryDirectory
+    import strategies.throwUnsafely
+
+    val directory: Path on Linux = temporaryDirectory[Path on Linux] / t"$prefix-${Uuid().show}"
+    directory.create[Directory]()
+    directory.encode
+
+  // A file's text, or nothing where it cannot be read; and a file written, its parents made.
+  def fileText(path: Text): Text = safely(path.as[Path on Linux]).let(Filing.text(_)).or(t"")
+
+  def writeFile(path: Text, text: Text): Unit =
+    safely(path.as[Path on Linux]).let(Filing.replace(_, text))
+
+  // The plain text of a table's cell, where the row has one at that index.
+  def cellText(row: Block.Row, index: Int): Text =
+    row.cells.at(Ordinal.zerary(index)).lay(t"") { (cell: Block.Cell) => Blocks.plain(cell.content) }
+
+  def contents(cell: Optional[Block.Cell]): List[Inline] = cell.lay(Nil)(_.content)
 
   // The sample's model, from the Inspection suite, for the Overlays suite to document.
   @scala.caps.unsafe.untrackedCaptures
@@ -139,7 +166,7 @@ error oops
           t"# Title\n\n```scala fuel\ncontext term\n   three spaces\n##\nval x = 1\n```\n"
 
         Doc.parse(t"doc/bad.md", text).problems match
-          case Block.Diagnostic(Tone.Failure, location, _, _, _) :: _ =>
+          case Block.Diagnostic(Tone.Failure, location, _, _, _, _) :: _ =>
             (location.let(_.path), location.let(_.line))
 
           case _ =>
@@ -200,7 +227,7 @@ error oops
 
       test(m"an ill-typed fragment is a problem: a diagnostic at its line"):
         problems(t"```scala\nval n: Int = \"oops\"\n```\n") match
-          case Block.Diagnostic(Tone.Failure, location, _, excerpt, _) :: Nil =>
+          case Block.Diagnostic(Tone.Failure, location, _, excerpt, _, _) :: Nil =>
             (location.let(_.path), location.let(_.line), excerpt.size)
 
           case _ =>
@@ -217,7 +244,7 @@ error oops
               t"  def +(item: Int): Issues = Issues(items :+ item)\n```\n"
 
           . bind:
-              case Block.Diagnostic(_, _, content, _, _) => content.map:
+              case Block.Diagnostic(_, _, content, _, _, _) => content.map:
                 case Block.Paragraph(inlines) => Blocks.plain(inlines)
                 case _                        => t""
 
@@ -246,7 +273,7 @@ error oops
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           Doc.parse(t"doc/check.md", fence, checker).blocks match
-            case Block.Code(_, _, note :: _, _, _, _, _, _) :: Block.Diagnostic(_, _, _, _, _) :: _ =>
+            case Block.Code(_, _, note :: _, _, _, _, _, _) :: (_: Block.Diagnostic) :: _ =>
               (note.line, note.style)
 
             case _ =>
@@ -259,7 +286,7 @@ error oops
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           Doc.parse(t"doc/check.md", fence, checker).blocks match
-            case Block.Code(_, _, note :: _, _, _, _, _, _) :: Block.Diagnostic(_, _, _, _, _) :: _ =>
+            case Block.Code(_, _, note :: _, _, _, _, _, _) :: (_: Block.Diagnostic) :: _ =>
               note.caption.nil
 
             case _ =>
@@ -282,7 +309,7 @@ error oops
 
       test(m"a failing fragment's error of one line remains a problem of the document"):
         problems(t"```scala\nval n = missing\n```\n") match
-          case Block.Diagnostic(Tone.Failure, location, _, excerpt, _) :: Nil =>
+          case Block.Diagnostic(Tone.Failure, location, _, excerpt, _, _) :: Nil =>
             (location.let(_.line), excerpt.size)
 
           case _ =>
@@ -366,7 +393,7 @@ error oops
         val doc = Doc.parse(t"doc/anim.md", text)
 
         val problem = doc.problems match
-          case Block.Diagnostic(Tone.Failure, location, paragraph :: _, _, _) :: Nil =>
+          case Block.Diagnostic(Tone.Failure, location, paragraph :: _, _, _, _) :: Nil =>
             val second: Boolean = paragraph match
               case Block.Paragraph(Inline.Textual(message) :: _) => message.starts(t"Frame 2")
               case _                                             => false
@@ -474,7 +501,7 @@ error oops
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           Doc.parse(t"doc/anim.md", fence, checker).problems match
-            case Block.Diagnostic(Tone.Failure, _, message, _, _) :: Nil =>
+            case Block.Diagnostic(Tone.Failure, _, message, _, _, _) :: Nil =>
               message match
                 case Block.Paragraph(Inline.Textual(text) :: _) :: _ => text.starts(t"Frame 2:")
                 case _                                               => false
@@ -583,7 +610,7 @@ error oops
           Doc.parse(t"doc/check.md", markdown, checker, true).blocks
 
       def line(problem: Block): Optional[Int] = problem match
-        case Block.Diagnostic(_, location, _, _, _) => location.let(_.line)
+        case Block.Diagnostic(_, location, _, _, _, _) => location.let(_.line)
         case _                                      => Unset
 
       test(m"a fragment sees a value an earlier one defined"):
@@ -628,7 +655,7 @@ error oops
         val fixture: (Text, Text) = (t"doc/fixtures/check.scala", t"val fixed: Int = \"x\"")
 
         problems(t"```scala\nval n: Int = 1\n```\n", fixture) match
-          case Block.Diagnostic(_, location, _, _, _) :: Nil =>
+          case Block.Diagnostic(_, location, _, _, _, _) :: Nil =>
             (location.let(_.path), location.let(_.line))
 
           case _ =>
@@ -699,7 +726,7 @@ error oops
 
       test(m"a diagnostic in a session is at its line and column in the file"):
         problems(t"```scala\nval a: Int = 1\n```\n```scala\nval b: Int = \"oops\"\n```\n") match
-          case Block.Diagnostic(_, location, _, _, _) :: Nil =>
+          case Block.Diagnostic(_, location, _, _, _, _) :: Nil =>
             (location.let(_.line), location.let(_.column))
 
           case _ =>
@@ -727,7 +754,7 @@ error oops
         case _                    => Nil
 
       def thrown(doc: Doc): List[Text] = doc.blocks.bind:
-        case Block.Diagnostic(Tone.Failure, _, Block.Paragraph(content) :: _, _, _) =>
+        case Block.Diagnostic(Tone.Failure, _, Block.Paragraph(content) :: _, _, _, _) =>
           List(Blocks.plain(content))
 
         case _ =>
@@ -827,7 +854,6 @@ error oops
         import tableStyles.thickTableStyle
         import palettes.solarizedDarkGaugePalette
 
-        val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
 
         Compilation.document(t"$here/doc/markdown.md").let: (doc: Doc) =>
           val renderer = TerminalRenderer(justify = true)
@@ -927,7 +953,7 @@ slide
 
       test(m"a part a slide does not understand, and an empty slide, are reported at their line"):
         read(t"slide\n  picture cat.png\n\nslide\n").lay(Nil) { (_, problems) => problems }.map:
-          case Block.Diagnostic(_, location, _, _, _) => location.let(_.line)
+          case Block.Diagnostic(_, location, _, _, _, _) => location.let(_.line)
           case _                                      => Unset
 
       . assert(_ == List(2, 4))
@@ -949,7 +975,7 @@ slide
 
       test(m"a slide's `code` is reported as now being `syntax`, at its line"):
         read(t"slide\n  code scala\n      val x = 1\n").lay(Nil)(_(1)).map:
-          case Block.Diagnostic(_, location, content, _, _) =>
+          case Block.Diagnostic(_, location, content, _, _, _) =>
             val said: Text = content.head match
               case Block.Paragraph(inlines) => Blocks.plain(inlines)
               case _                        => t""
@@ -963,7 +989,7 @@ slide
       test(m"what a slide's syntax does not say, and a `syntax` without a language, are faults"):
         val text: Text = t"slide\n  syntax\n    highlite x\n    code\n        val x = 1\n"
         read(text).lay(Nil)(_(1)).map:
-          case Block.Diagnostic(_, location, _, _, _) => location.let(_.line)
+          case Block.Diagnostic(_, location, _, _, _, _) => location.let(_.line)
           case _                                      => Unset
 
       . assert(_ == List(3, 2))
@@ -1071,14 +1097,22 @@ item []:
       def timed(transcripts: List[Optional[Text]]): List[Double] | List[Text] =
         read(slides(transcripts)).lay(List[Text]()): (presentation: Presentation, _) =>
           ForcedAlignment.schedule(presentation, aligned) match
-            case ForcedAlignment.Outcome.Timed(schedule, _) => schedule
-            case ForcedAlignment.Outcome.Failed(messages)   => messages
+            case ForcedAlignment.Outcome.Timed(schedule, _)  => schedule
+            case ForcedAlignment.Outcome.Failed(_, messages) => messages
+
+      test(m"a slide without a transcript fails the timing, labelled with its code"):
+        read(slides(List(t"hello world", Unset))).lay(t""): (presentation: Presentation, _) =>
+          ForcedAlignment.schedule(presentation, aligned) match
+            case ForcedAlignment.Outcome.Failed(code, _) => code.label
+            case _                                       => t""
+
+      . assert(_ == t"[↯/f.27.1.6]")
 
       test(m"the transcript's words are compared with the alignment's, a word the aligner did not know standing for any"):
         val comparison = ForcedAlignment.compare(List(t"one", t"two", t"three", t"four", t"five", t"six"), aligned)
-        (comparison.differing, comparison.close, comparison.places.get(3), comparison.places.get(5))
+        (comparison.differing, comparison.close, comparison.places.at(3), comparison.places.at(5))
 
-      . assert(_ == (0, true, Some(3), Some(5)))
+      . assert(_ == (0, true, 3, 5))
 
       test(m"the schedule is each later slide's first word's time"):
         timed(List(t"One, two three.", t"Four five.", t"Six!"))
@@ -1111,7 +1145,7 @@ item []:
       . assert(_ == (t"osx-arm64", t"osx-64", t"linux-64", t"linux-aarch64", Unset, Unset))
 
       test(m"a recording is known by its extension or its first bytes; an alignment's text is not"):
-        def bytes(text: Text): Data = Array.unsafeFrozen(text.s.getBytes("US-ASCII").nn)
+        def bytes(text: Text): Data = text.sysData
         val m4a: Data = bytes(t"\u0000\u0000\u0000 ftypM4A ")
 
         ( Aligner.isAudio(t"talk.wav", Array.empty[Byte]), Aligner.isAudio(t"talk.FLAC", Array.empty[Byte]),
@@ -1136,12 +1170,12 @@ item []:
         ( create.head, create.has(t"/c/fuel/mfa/env"), create.reverse.head,
           Aligner.downloadCommand(home, t"acoustic").skip(4),
           align.skip(4).keep(2), align.reverse.keep(4).reverse, align.has(t"--beam"), wide.has(t"--retry_beam"),
-          Aligner.variables(home).get(t"MFA_ROOT_DIR") )
+          Aligner.variables(home).at(t"MFA_ROOT_DIR") )
 
       . assert(_ == ( t"/c/fuel/mfa/bin/micromamba", true, t"montreal-forced-aligner>=3.4,<4",
                       List(t"mfa", t"model", t"download", t"acoustic", t"english_mfa"),
                       List(t"mfa", t"align"), List(t"/p/corpus", t"english_mfa", t"english_mfa", t"/p/out"), false, true,
-                      Some(t"/c/fuel/mfa/root") ))
+                      t"/c/fuel/mfa/root" ))
 
       test(m"a presentation's transcript is its slides' transcripts, in order, as paragraphs"):
         read(talk).lay(Nil): (presentation: Presentation, _) =>
@@ -1229,7 +1263,7 @@ item []:
         def enter(name: Text, unit: Text): Boolean = inner.enter(name, unit)
         def run(name: Text): Unit = inner.run(name)
 
-        def build(sources: Map[Text, Text], output: Text): List[Notice] =
+        def build(sources: Map[Text, Text], output: Text): List[Compiler.Notice] =
           inner.build(sources, output)
 
         def context: Optional[dotty.tools.dotc.core.Contexts.Context] = inner.context
@@ -1288,9 +1322,7 @@ item []:
       . assert(_ == 1)
 
       test(m"a document compiled through a cache has the blocks it has without one"):
-        val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
-        val path = java.nio.file.Path.of(s"$here/doc/markdown.md")
-        val text: Text = Text(java.nio.file.Files.readString(path).nn)
+        val text: Text = fileText(t"$here/doc/markdown.md")
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           val plain: Doc = Doc.parse(t"markdown.md", text, checker, true)
@@ -1327,10 +1359,10 @@ item []:
         Output.Prose(List(Block.paragraph(t"prose"), Output.sentinel(0)), Nil)
 
       def directory(): Text =
-        Text(java.nio.file.Files.createTempDirectory("fuel-output").nn.toString)
+        scratch(t"fuel-output")
 
       def objects(output: Text): Int =
-        java.nio.file.Files.list(java.nio.file.Path.of(output.s, "objects")).nn.count.toInt
+        safely((output.as[Path on Linux] / "objects").children.to[List].size).or(0)
 
       test(m"what a compile keeps, the next reads back"):
         val output = directory()
@@ -1381,7 +1413,6 @@ item []:
 
     suite(m"Output"):
       test(m"a compiled document's blocks round-trip through BinTEL as a fragment's output"):
-        val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
 
         Compilation.document(t"$here/doc/markdown.md").lay(t"unreadable"): (doc: Doc) =>
           val fragment: Output.Fragment =
@@ -1421,11 +1452,11 @@ object Util:
 """
 
       val output: Text =
-        Text(java.nio.file.Files.createTempDirectory("fuel-api").nn.toString)
+        scratch(t"fuel-api")
 
       val entries: List[Text] = classpath().cut(t":").filter(_ != t"")
 
-      lazy val notices: List[Notice] =
+      lazy val notices: List[Compiler.Notice] =
         Checking.session(classpath, Nil): (checker: Checker) =>
           checker.build(Map(t"Sample.scala" -> sample), output)
 
@@ -1448,11 +1479,8 @@ object Util:
 
       test(m"the inspection yields a model"):
         api match
-          case api: Api => t"${api.entities.size.toString} entities"
-
-          case error: Throwable =>
-            val frames = error.getStackTrace.nn.take(6).map(_.toString)
-            t"${error.toString}: ${java.lang.String.join("; ", frames*).nn}"
+          case api: Api         => t"${api.entities.size.show} entities"
+          case error: Throwable => error.toString.tt
 
       . assert(_.ends(t"entities"))
 
@@ -1556,7 +1584,6 @@ object Util:
       . assert(_ == (Api.Kind.Given, Api.Kind.Val))
 
       test(m"a dependency jar is walked through the session's symbol table"):
-        val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
         val jar: Text = t"$here/out/fuel/launcher/assembly.dest/out.jar"
 
         val result: Api | Throwable =
@@ -1576,7 +1603,7 @@ object Util:
               mapped.let(_.definition.let(_.result.let(_.qualified))) )
 
           case error: Throwable =>
-            error.toString
+            error.toString.tt
 
       . assert(_ == (true, false, Api.Kind.Class, true, t"scala.Option[B]"))
 
@@ -1609,7 +1636,7 @@ object Util:
               deprecated.has(t"java") && deprecated.has(t"annotation") )
 
           case error: Throwable =>
-            error.toString
+            error.toString.tt
 
       . assert(_ == (true, true, false, t"/api/java.lang.String~getBytes", Unset, true, true))
 
@@ -1620,11 +1647,11 @@ object Util:
         ( m"every type of a dependency renders, all but a few through stenography " +
           m"whole and almost none as `?`" ):
 
-        val rendered: Int = Inspection.rendered.get
+        val rendered: Int = Inspection.rendered()
 
         ( rendered > 10000,
-          Inspection.fallbacks.get * 1000 < rendered,
-          Inspection.unrendered.get * 10000 < rendered )
+          Inspection.fallbacks() * 1000 < rendered,
+          Inspection.unrendered() * 10000 < rendered )
 
       . assert(_ == (true, true, true))
 
@@ -1632,12 +1659,10 @@ object Util:
         ( m"a dependency jar is walked before a build, in a session on " +
           m"that jar under the project's options" ):
 
-        val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
         val jar: Text = t"$here/out/fuel/launcher/assembly.dest/out.jar"
-        val out: Text = Text(java.nio.file.Files.createTempDirectory("fuel-probe").nn.toString)
+        val out: Text = scratch(t"fuel-probe")
 
-        val path = java.nio.file.Path.of(s"$here/.pyrocosm/fuel/config.tel")
-        val config: Text = Text(java.nio.file.Files.readString(path).nn)
+        val config: Text = fileText(t"$here/.pyrocosm/fuel/config.tel")
 
         val options: List[Text] =
           config.cut(t"\n").filter(_.starts(t"scalac-option ")).map(_.skip(14).trim)
@@ -1709,7 +1734,7 @@ extension (doc: Doc) def titled: String = doc.title
 
       lazy val decorated: Api =
         val output2: Text =
-          Text(java.nio.file.Files.createTempDirectory("fuel-api2").nn.toString)
+          scratch(t"fuel-api2")
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           checker.build(Map(t"Extended.scala" -> extended), output2)
@@ -1771,7 +1796,7 @@ object Exports:
 
       lazy val exported: Api =
         val output3: Text =
-          Text(java.nio.file.Files.createTempDirectory("fuel-api3").nn.toString)
+          scratch(t"fuel-api3")
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           checker.build(Map(t"Exporting.scala" -> exporting), output3)
@@ -1845,7 +1870,7 @@ object Exports:
           api(key).lay(Nil: List[Text]): (entity: Api.Entity) =>
             ApiPages.page(api, entity, Resolver(api, scope), scope, Nil).bind:
               case Block.Table(_, rows, _) =>
-                rows.map { row => Blocks.plain(row.cells.stdlib(1).content) }
+                rows.map(cellText(_, 1))
 
               case _ =>
                 Nil
@@ -1872,7 +1897,7 @@ class Logger() uses Io.out initially, Io.out:
 
       test(m"a uses clause is recorded and written, marking what is used initially"):
         val output4: Text =
-          Text(java.nio.file.Files.createTempDirectory("fuel-api4").nn.toString)
+          scratch(t"fuel-api4")
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           checker.build(Map(t"Capturing.scala" -> capturing), output4)
@@ -2015,7 +2040,7 @@ class Logger() uses Io.out initially, Io.out:
           val scope: Scope = Scope.of(util, Nil)
           val page: List[Block] = ApiPages.page(api0, util, Resolver(api0, scope), scope, Nil)
 
-          def cell(row: Block.Row, index: Int): Text = Blocks.plain(row.cells.stdlib(index).content)
+          def cell(row: Block.Row, index: Int): Text = cellText(row, index)
 
           page.bind:
             case Block.Table(_, rows, _) =>
@@ -2038,7 +2063,7 @@ class Logger() uses Io.out initially, Io.out:
 
             val kinds: List[Text] =
               ApiPages.rows(entity, true, exported, scope, resolver).map: (row: Block.Row) =>
-                Blocks.plain(row.cells.stdlib.head.content)
+                Blocks.plain(contents(row.cells.head))
 
             val signatures: List[Text] =
               ApiPages.page(exported, entity, resolver, scope, Nil).bind:
@@ -2108,7 +2133,7 @@ class Logger() uses Io.out initially, Io.out:
 
         val scala: Api.Entity = named(t"scala", t"Double")
         val java: Api.Entity = named(t"java.lang", t"Double")
-        val api: Api = Api(sci.Map(scala.key -> scala, java.key -> java))
+        val api: Api = Api(Map(scala.key -> scala, java.key -> java))
         destination(api, Nil, t"#Double")
 
       . assert(_ == t"/api/scala.Double")
@@ -2158,7 +2183,6 @@ class Logger() uses Io.out initially, Io.out:
       // The sample with its dependencies, as the daemon models a project: the standard library
       // gives `String` its alias and `List` its subtypes.
       val full: Api =
-        val here: Text = Text(java.lang.System.getProperty("user.dir").nn)
         val jar: Text = t"$here/out/fuel/launcher/assembly.dest/out.jar"
 
         val dependencies: Api | Throwable =
@@ -2172,11 +2196,10 @@ class Logger() uses Io.out initially, Io.out:
 
       // The keys of the sample's hits, in order, each once.
       def keys(text: Text): List[Text] =
-        val hits = full.search(query(text)).hits.stdlib
-        List.from(hits.map(_.entity.key).filter(_.starts(t"sample.")).distinct)
+        full.search(query(text)).hits.map(_.entity.key).filter(_.starts(t"sample.")).distinct
 
       def count(text: Text): Int =
-        full.search(query(text)).hits.stdlib.count(_.entity.key.starts(t"sample."))
+        full.search(query(text)).hits.filter(_.entity.key.starts(t"sample.")).size
 
       suite(m"Parsing"):
         test(m"+List"):
@@ -2294,27 +2317,27 @@ class Logger() uses Io.out initially, Io.out:
         test(m"a kind keyword"):
           query(t"def parse")
 
-        . assert(_ == Query(kinds = sci.Set(Kind.Def), names = List(Name(t"parse", false))))
+        . assert(_ == Query(kinds = Set(Kind.Def), names = List(Name(t"parse", false))))
 
         test(m"case class is one keyword; case alone is a case"):
           (query(t"case class").kinds, query(t"case").kinds)
 
-        . assert(_ == (sci.Set(Kind.CaseClass), sci.Set(Kind.Case)))
+        . assert(_ == (Set(Kind.CaseClass), Set(Kind.Case)))
 
         test(m"a modifier keyword"):
           query(t"inline def")
 
-        . assert(_ == Query(kinds = sci.Set(Kind.Def), modifiers = sci.Set(t"inline")))
+        . assert(_ == Query(kinds = Set(Kind.Def), modifiers = Set(t"inline")))
 
         test(m"? is given and ~ is extension"):
           (query(t"?").kinds, query(t"given").kinds, query(t"~").kinds)
 
-        . assert(_ == (sci.Set(Kind.Given), sci.Set(Kind.Given), sci.Set(Kind.Extension)))
+        . assert(_ == (Set(Kind.Given), Set(Kind.Given), Set(Kind.Extension)))
 
         test(m"type is a type or a type parameter"):
           query(t"type").kinds
 
-        . assert(_ == sci.Set(Kind.Type, Kind.TypeParam))
+        . assert(_ == Set(Kind.Type, Kind.TypeParam))
 
         test(m"private warns"):
           query(t"private").warnings.size
@@ -2409,25 +2432,26 @@ class Logger() uses Io.out initially, Io.out:
           val shape: Int = lattice.id(t"sample.Shape").or(-1)
 
           ( lattice.parents(doc),
-            lattice.children(shape).contains(doc),
+            lattice.children(shape).has(doc),
             lattice.primaryParent(doc),
             lattice.parents(shape) )
 
-        . assert(_ == (scala.List(shapeId), true, shapeId, scala.Nil))
+        . assert(_ == (List(shapeId), true, shapeId, Nil))
 
       suite(m"Hierarchy"):
         import Hierarchy.{Edge, Graph, Node, Role}
 
         def node(key: Text, role: Role): Node =
-          val name: Text = Text(key.s.substring(key.s.lastIndexOf('.') + 1).nn)
-          val prefix: Text = Text(key.s.substring(0, (key.s.length - name.s.length - 1).max(0)).nn)
+          val name: Text = key.cut(t".").last
+          val prefix: Text = key.keep((key.length - name.length - 1).max(0))
           Node(key, name, prefix, key, role)
 
         def laid(graph: Graph): Hierarchy.Layout =
           Hierarchy.layout(graph).or(Hierarchy.Layout(Nil, Nil, Nil, 0, 0))
 
+        // A box the layout must have, which a test fails without.
         def box(layout: Hierarchy.Layout, key: Text): Hierarchy.Box =
-          layout.boxes.stdlib.find(_.node.key == key).get
+          layout.boxes.seek(_.node.key == key).or(panic(m"the layout has no box for $key"))
 
         val chain: Graph =
           val nodes: List[Node] =
@@ -2496,10 +2520,9 @@ class Logger() uses Io.out initially, Io.out:
         test(m"a type with three parents sits beneath their middle"):
           val layout: Hierarchy.Layout = laid(traits)
 
-          val parents: scala.List[Hierarchy.Box] =
-            scala.List(t"t.P", t"t.Q", t"t.R").map(box(layout, _))
+          val parents: List[Hierarchy.Box] = List(t"t.P", t"t.Q", t"t.R").map(box(layout, _))
 
-          val mean: Int = parents.map(_.centre).sum/3
+          val mean: Int = parents.map(_.centre).fold(0)(_ + _)/3
 
           ( parents.map(_.y).distinct.size,
             (box(layout, t"t.T").centre - mean).abs <= 1,
@@ -2521,10 +2544,13 @@ class Logger() uses Io.out initially, Io.out:
 
         test(m"a long edge passes its intermediate layer clear of the box there"):
           val layout: Hierarchy.Layout = laid(skipping)
-          val long: Hierarchy.Route = layout.routes.stdlib.find(_.edge == Edge(t"s.A", t"s.C")).get
           val b: Hierarchy.Box = box(layout, t"s.B")
-          val through: Int = long.points(2)._1
-          (long.points.length >= 5, through < b.x || through > b.x + b.w)
+
+          layout.routes.seek(_.edge == Edge(t"s.A", t"s.C")).let: (long: Hierarchy.Route) =>
+            val clear: Boolean = long.points.at(Ordinal.zerary(2)).lay(false): (through, _) =>
+              through < b.x || through > b.x + b.w
+
+            (long.points.size >= 5, clear)
 
         . assert(_ == (true, true))
 
@@ -2536,23 +2562,21 @@ class Logger() uses Io.out initially, Io.out:
             val top: stenography.Designator = stenography.Designator.Top(t"p")
             Api.Entity(top, name, true, template = template, bases = parent.let(List(_)).or(Nil))
 
-          val children: scala.List[Api.Entity] =
-            scala.List(t"C1", t"C2", t"C3", t"C4", t"C5").map(entity(_, t"p.P"))
+          val children: List[Api.Entity] =
+            List(t"C1", t"C2", t"C3", t"C4", t"C5").map(entity(_, t"p.P"))
 
-          val all: scala.List[Api.Entity] =
-            entity(t"P", Unset) :: entity(t"Lone", Unset) :: children
-
-          Api(all.map { e => e.key -> e }.toMap)
+          val all: List[Api.Entity] = List(entity(t"P", Unset), entity(t"Lone", Unset)) + children
+          Api(all.map { e => e.key -> e }.to[Map])
 
         val sibling: Optional[Graph] = family(t"p.C1").let: (e: Api.Entity) =>
           Hierarchy.of(family, e, Scope.document(Nil))
 
         test(m"three peers are drawn, and the rest noted"):
           sibling.let: (g: Graph) =>
-            ( g.nodes.stdlib.count(_.role == Role.Peer),
-              g.nodes.stdlib.filter(_.role == Role.More).map(_.name) )
+            ( g.nodes.filter(_.role == Role.Peer).size,
+              g.nodes.filter(_.role == Role.More).map(_.name) )
 
-        . assert(_ == (3, scala.List(t"…and 1 more")))
+        . assert(_ == (3, List(t"…and 1 more")))
 
         test(m"the parent's children are peers under it, and the drawing says so"):
           sibling.let(Hierarchy.alt(_))
@@ -2561,7 +2585,9 @@ class Logger() uses Io.out initially, Io.out:
 
         test(m"the SVG links each box in-app, by a relative path, with nothing honeycomb rejects"):
           val svg: Text = sibling.let(Hierarchy.layout(_)).let(Hierarchy.svg(_)).or(t"")
-          val digits: Boolean = svg.s.matches("(?s).*\\s[A-Za-z-]*[0-9][A-Za-z0-9-]*=\".*")
+          // An attribute whose name has a digit in it.
+          val attribute: Text = t"""[ \t\n\r\f][A-Za-z-]*[0-9][A-Za-z0-9-]*=""""
+          val digits: Boolean = unsafely(Regex(attribute)).seek(svg).present
 
           ( svg.contains(t"pyro-locate"),
             svg.contains(t"""href="p.C2""""),
@@ -2574,11 +2600,11 @@ class Logger() uses Io.out initially, Io.out:
 
         test(m"the note of how many more is no box, but ends its parent's line on the right"):
           val layout: Hierarchy.Layout = sibling.let(Hierarchy.layout(_)).or(laid(chain))
-          val right: Int = layout.boxes.stdlib.map { b => b.x + b.w }.max
+          val right: Int = layout.boxes.map { b => b.x + b.w }.fold(0)(_.max(_))
 
-          ( layout.boxes.stdlib.exists(_.node.role == Role.More),
+          ( layout.boxes.exists(_.node.role == Role.More),
             layout.remainders.map(_.text),
-            layout.remainders.stdlib.forall(_.to > right),
+            layout.remainders.all(_.to > right),
             layout.width > right )
 
         . assert(_ == (false, List(t"…and 1 more"), true, true))
@@ -2631,11 +2657,12 @@ class Logger() uses Io.out initially, Io.out:
           api0(t"sample.Doc").let: (entity: Api.Entity) =>
             val scope: Scope = Scope.of(entity, Nil)
             val page: List[Block] = ApiPages.page(api0, entity, Resolver(api0, scope), scope, Nil)
-            val at: Int = page.stdlib.indexWhere { case _: Block.Figure => true; case _ => false }
+            val at: Optional[Ordinal] =
+              page.where { case _: Block.Figure => true; case _ => false }
 
-            val after: Boolean = page.stdlib.lift(at - 1) match
-              case Some(_: Block.Code) => true
-              case _                   => false
+            val after: Boolean = at.let { (at: Ordinal) => page.at(at - 1) }.lay(false):
+              case _: Block.Code => true
+              case _             => false
 
             (after, figures(t"sample.Doc").map { f => Blocks.plain(f.figure.alt) })
 
@@ -2799,10 +2826,11 @@ class Logger() uses Io.out initially, Io.out:
         . assert(_ == cell)
 
         test(m"no signature in the model carries a compiler-made parameter name"):
-          full.entities.values.toList.filter(_.own).flatMap(_.declarations.stdlib)
-          . flatMap(_.clauses.stdlib)
+          full.entities.values.filter(_.own).bind(_.declarations)
+          . bind(_.clauses)
           . map(_.qualified)
-          . count(_.contains(t"$$"))
+          . filter(_.contains(t"$$"))
+          . size
 
         . assert(_ == 0)
 
@@ -2832,11 +2860,11 @@ class Logger() uses Io.out initially, Io.out:
                 template = Api.Declaration(Api.Kind.CaseClass),
                 overloads = List(Api.Declaration(Api.Kind.Object)) )
 
-          val api: Api = Api(sci.Map(exported.key -> exported, paired.key -> paired))
+          val api: Api = Api(Map(exported.key -> exported, paired.key -> paired))
 
           def kinds(entity: Api.Entity): List[Text] =
             ApiPages.rows(entity, true, api, scope, Resolver(api, scope)).map: row =>
-              Blocks.plain(row.cells.stdlib.head.content)
+              Blocks.plain(contents(row.cells.head))
 
           (kinds(exported), kinds(paired))
 
@@ -2849,11 +2877,11 @@ class Logger() uses Io.out initially, Io.out:
           val entity: Api.Entity =
             Api.Entity(Designator.Top(t"p"), t"Doc", true, term, template)
 
-          val api: Api = Api(sci.Map(entity.key -> entity))
+          val api: Api = Api(Map(entity.key -> entity))
           val resolver: Resolver = Resolver(api, scope)
 
           ApiPages.rows(entity, true, api, scope, resolver).bind: row =>
-            row.cells.stdlib.head.content.bind:
+            contents(row.cells.head).bind:
               case Inline.Icon(_, alt) => List(alt)
               case _                   => Nil
 
@@ -2865,11 +2893,11 @@ class Logger() uses Io.out initially, Io.out:
           val entity: Api.Entity =
             Api.Entity(Designator.Top(t"p"), t"Doc", true, template = declaration)
 
-          val api: Api = Api(sci.Map(entity.key -> entity))
+          val api: Api = Api(Map(entity.key -> entity))
           val resolver: Resolver = Resolver(api, scope)
           val row: Block.Row = ApiPages.row(entity, declaration, true, api, scope, resolver)
 
-          val first: Optional[Inline] = row.cells.stdlib.head.content.head
+          val first: Optional[Inline] = contents(row.cells.head).head
 
           first match
             case Inline.Icon(source, alt) => (source.starts(t"<svg"), alt)
@@ -3052,8 +3080,8 @@ class Logger() uses Io.out initially, Io.out:
         . assert(_ == List(t"sample.Doc.parse"))
 
         test(m"a name differing in case is exact"):
-          full.search(query(t"Parse")).hits.stdlib.filter(_.entity.key.starts(t"sample."))
-          . forall(_.exact)
+          full.search(query(t"Parse")).hits.filter(_.entity.key.starts(t"sample."))
+          . all(_.exact)
 
         . assert(_ == true)
 
@@ -3094,9 +3122,9 @@ class Logger() uses Io.out initially, Io.out:
         . assert(_ == List(t"sample.Doc#size", t"sample.Doc#title", t"sample.Util.limit"))
 
         test(m"the search builds quickly and widely"):
-          val start: Long = java.lang.System.nanoTime
+          val start: Instant over Monotonic = monotonic()
           val count: Int = full.search(query(t"+Any")).hits.size
-          ((java.lang.System.nanoTime - start)/1000000L < 2000L, count > 1000)
+          ((monotonic() - start).value < 2.0, count > 1000)
 
         . assert(_ == (true, true))
 
@@ -3108,29 +3136,31 @@ class Logger() uses Io.out initially, Io.out:
         case _                => Nil
 
       test(m"a plain excerpt numbers the line and its neighbours, underlining the span"):
-        val code: Block.Code =
-          codes(Excerpts.plain(text, 3, Block.Note.Style.Erroneous, 5, 11)).stdlib.head
-
-        (code.start, code.lines.size, code.notes.map { n => (n.line, n.start, n.end) })
+        codes(Excerpts.plain(text, 3, Block.Note.Style.Erroneous, 5, 11)).head.let:
+          (code: Block.Code) =>
+            (code.start, code.lines.size, code.notes.map { n => (n.line, n.start, n.end) })
 
       . assert(_ == (2, 3, List((1, 4, 15))))
 
       test(m"an excerpt at a target underlines its occurrence, or the whole line without one"):
-        val found: Block.Code =
-          codes(Excerpts.plainAt(text, 3, t"other.md", Block.Note.Style.Caution)).stdlib.head
+        def spans(code: Optional[Block.Code]): List[(Int, Int)] =
+          code.lay(Nil)(_.notes.map { n => (n.start, n.end) })
 
-        val whole: Block.Code =
-          codes(Excerpts.plainAt(text, 3, t"nowhere", Block.Note.Style.Caution)).stdlib.head
+        val found: Optional[Block.Code] =
+          codes(Excerpts.plainAt(text, 3, t"other.md", Block.Note.Style.Caution)).head
 
-        (found.notes.map { n => (n.start, n.end) }, whole.notes.map { n => (n.start, n.end) })
+        val whole: Optional[Block.Code] =
+          codes(Excerpts.plainAt(text, 3, t"nowhere", Block.Note.Style.Caution)).head
+
+        (spans(found), spans(whole))
 
       . assert(_ == (List((16, 24)), List((0, 31))))
 
       test(m"a Scala excerpt is highlighted and placed by line and column"):
         val source: Text = t"object A:\n  val x: Int = \"no\"\n"
         val (place, blocks) = Excerpts.scala(source, 25, 29, Block.Note.Style.Erroneous)
-        val lines = codes(blocks).stdlib.head.lines.stdlib
-        (place, lines.exists(_.tokens.stdlib.exists(_.accent == Token.Accent.Keyword)))
+        val lines = codes(blocks).head.lay(Nil)(_.lines)
+        (place, lines.exists(_.tokens.exists(_.accent == Token.Accent.Keyword)))
 
       . assert(_ == ((2, 16), true))
 
@@ -3156,7 +3186,7 @@ class Logger() uses Io.out initially, Io.out:
         val doc: Doc = parse(glossary)
 
         val problems = doc.problems.bind:
-          case Block.Diagnostic(_, location, message, excerpt, _) =>
+          case Block.Diagnostic(_, location, message, excerpt, _, _) =>
             val paragraphs: List[Inline] = message.bind:
               case Block.Paragraph(content) => content
               case _                        => Nil
@@ -3175,7 +3205,7 @@ class Logger() uses Io.out initially, Io.out:
         val corpus: Corpus = Corpus(List(Corpus.Section(t"docs", t"/docs", List(doc), Nil)))
 
         Links.check(corpus, Api.empty, Glossary.none).bind:
-          case Block.Diagnostic(_, _, _, excerpt, _) =>
+          case Block.Diagnostic(_, _, _, excerpt, _, _) =>
             codes(excerpt).bind(_.notes.map { n => (n.start, n.end) })
 
           case _ =>
@@ -3257,9 +3287,9 @@ entry .nowhere   nothing of the sort
 
       def problems(tone: Tone): List[Text] =
         merged.lay(Nil: List[Block]) { (m: (Api, List[Block])) => m(1) }.bind:
-          case Block.Diagnostic(tone0, location, message, _, _) if tone0 == tone =>
+          case Block.Diagnostic(tone0, location, message, _, _, _) if tone0 == tone =>
             val path: Text = location.let(_.path).or(t"?")
-            List(t"$path:${location.let(_.line).or(0).toString}: ${plain(message)}")
+            List(t"$path:${location.let(_.line).or(0).show}: ${plain(message)}")
 
           case _ =>
             Nil
@@ -3332,13 +3362,13 @@ entry .nowhere   nothing of the sort
       def failures(text: Text): List[Text] = Overlay.read(t"x.tel", text) match
         case overlay: Overlay =>
           val lines: List[Text] = overlay.problems.bind:
-            case Block.Diagnostic(_, location, message, _, _) =>
-              List(t"${location.let(_.line).or(0).toString}: ${plain(message)}")
+            case Block.Diagnostic(_, location, message, _, _, _) =>
+              List(t"${location.let(_.line).or(0).show}: ${plain(message)}")
 
             case _ =>
               Nil
 
-          List.from(lines.stdlib.sortBy(_.cut(t":").head.s.toInt))
+          lines.order { (line: Text) => safely(line.cut(t":").head.as[Int]).or(0) }
 
         case diagnostic: Block.Diagnostic => List(t"unread")
 
@@ -3590,8 +3620,6 @@ entry .Doc   a document
       . assert(_ == (samplePage, true, List(t"Doc", t"Shape", t"Util")))
 
     suite(m"Issues"):
-      import codepages.utf8Codepage
-
       def issue(number: Int, title: Text, open: Boolean = true, names: List[Text] = Nil, updated: Text = t"2026-11-08T10:00:00Z"): Issue =
         Issue(number, title, t"https://github.com/o/r/issues/${number.show}", open, updated, names)
 
@@ -3627,9 +3655,9 @@ entry .Doc   a document
               issue(13, t"closed", open = false, names = List(t"sample.Doc")) )
 
         val (index, unresolved) = Issue.index(issues, api0, Scope.document(Nil))
-        (index.get(t"sample.Doc").map(_.map(_.number)), unresolved)
+        (index.at(t"sample.Doc").let(_.map(_.number)), unresolved)
 
-      . assert(_ == (Some(List(12, 14)), List((12, t"sample.Gone"))))
+      . assert(_ == (List(12, 14), List((12, t"sample.Gone"))))
 
       test(m"a GitHub payload decodes to issues, pull requests left out"):
         val json: Text = t"""[
@@ -3692,14 +3720,24 @@ entry .Doc   a document
             case Inline.Link(Inline.Destination.External(_), _) => true
             case _                                               => false
 
-          val top: Optional[Text] = shown.stdlib.lift(2).collect { case Block.Paragraph(content) => Blocks.plain(content) }.getOrElse(Unset)
-          val links: Int = shown.stdlib.lift(2).collect { case Block.Paragraph(content) => content.stdlib.count(external) }.getOrElse(0)
+          val third: Optional[Block] = shown.at(Ordinal.zerary(2))
+
+          val top: Optional[Text] = third.let:
+            case Block.Paragraph(content) => Blocks.plain(content)
+            case _                        => Unset
+
+          val links: Int = third.lay(0):
+            case Block.Paragraph(content) => content.filter(external).size
+            case _                        => 0
+
           val foot: List[Text] = shown.reverse.keep(2).reverse.map:
             case Block.Heading(3, content, _) => Blocks.plain(content)
             case Block.Listing(_, items)      => t"listing of ${items.size.show}"
             case _                            => t"?"
 
-          (shown.head == page.head, shown.stdlib.lift(1) == page.stdlib.lift(1), top, links, foot, ApiPages.withIssues(page, Nil) == page)
+          val second: Ordinal = Ordinal.zerary(1)
+          val unchanged: Boolean = ApiPages.withIssues(page, Nil) == page
+          (shown.head == page.head, shown.at(second) == page.at(second), top, links, foot, unchanged)
 
       . assert(_ == (true, true, t"Open issues: #12 #15", 2, List(t"Issues", t"listing of 2"), true))
 
@@ -3845,7 +3883,7 @@ entry .Doc   a document
         case _                       => Nil
 
       def lines(problems: List[Block]): List[Optional[Int]] = problems.map:
-        case Block.Diagnostic(_, location, _, _, _) => location.let(_.line)
+        case Block.Diagnostic(_, location, _, _, _, _) => location.let(_.line)
         case _                                      => Unset
 
       val slugs: List[Text] = List(t"getting-started", t"set-up--run", t"set-up--run-1")
@@ -3976,7 +4014,7 @@ define  type class
         case _                                      => Unset
 
       def failures(problems: List[Block]): List[Optional[(Tone, Optional[Int])]] = problems.map:
-        case Block.Diagnostic(tone, location, _, _, _) => (tone, location.let(_.line))
+        case Block.Diagnostic(tone, location, _, _, _, _) => (tone, location.let(_.line))
         case _                                         => Unset
 
       val monadText: Text = t"A *monad* is a monoid in the category of endofunctors."
@@ -4090,10 +4128,10 @@ define  user interface
       . assert(_ == (List(t"monad"), Nil, 1))
 
       test(m"a synonym in brackets is its term"):
-        rich.definitions.cut(t"\n").stdlib.take(3).toList
+        rich.definitions.cut(t"\n").keep(3)
 
       . assert: lines =>
-          lines == scala.List
+          lines == List
             ( t"[monad]: glossary:monad", t"[Kleisli triple]: glossary:monad",
               t"[burrito]: glossary:monad" )
 
@@ -4121,7 +4159,7 @@ define  user interface
           Glossary.Term(t"functor", t"y", Unset, t"other.tel", 4, synonyms = List(t"Monad", t"map", t"map"))
 
         val (merged, problems) = Glossary.merge(List(glossary, Glossary(List(clash))))
-        (merged.terms.stdlib.last.synonyms, failures(problems))
+        (merged.terms.keep(1, Rtl).bind(_.synonyms), failures(problems))
 
       . assert(_ == (Nil, List((Tone.Failure, 4), (Tone.Failure, 4))))
 
@@ -4132,39 +4170,47 @@ define  user interface
       . assert(_ == (List((Tone.Failure, 3)), 2))
 
     suite(m"Latest"):
-      import java.util.concurrent as juc
-      import scala.jdk.CollectionConverters.*
+      import threads.virtualThreads
 
-      // The requests done, in order, with a latch for each request a test waits on; the
-      // first request is held, once begun, until `release` opens.
+      // Whether a promise is kept within ten seconds.
+      def kept(promise: Promise[Unit]): Boolean =
+        safely(supervise(promise.await(10.0*Second))).present
+
+      // The requests done, in order, with a promise for each request a test waits on; the
+      // first request is held, once begun, until `release` is kept.
       final class Recorder(held: Text):
-        val done: juc.ConcurrentLinkedQueue[Text] = juc.ConcurrentLinkedQueue()
-        val begun: juc.CountDownLatch = juc.CountDownLatch(1)
-        val release: juc.CountDownLatch = juc.CountDownLatch(1)
-        val latches: juc.ConcurrentHashMap[Text, juc.CountDownLatch] = juc.ConcurrentHashMap()
+        val done: Atomic.Ref[List[Text]] = Atomic.Ref(Nil)
+        val begun: Promise[Unit] = Promise()
+        val release: Promise[Unit] = Promise()
+        val latches: Atomic.Ref[Map[Text, Promise[Unit]]] = Atomic.Ref(Map())
 
-        def latch(request: Text): juc.CountDownLatch =
-          latches.computeIfAbsent(request, _ => juc.CountDownLatch(1)).nn
+        def latch(request: Text): Promise[Unit] =
+          val fresh: Promise[Unit] = Promise()
+
+          val all: Map[Text, Promise[Unit]] = latches.revise: (all: Map[Text, Promise[Unit]]) =>
+            if all.at(request).present then all else all.define(request, fresh)
+
+          all.at(request).or(fresh)
 
         val latest: Latest[Text] = Latest: (request: Text) =>
           if request == held then
-            begun.countDown()
-            release.await(10, juc.TimeUnit.SECONDS)
+            begun.offer(())
+            kept(release)
 
           // A request which fails, as a search might: the number is not one.
-          if request == t"fail" then java.lang.Integer.parseInt("fail")
-          done.add(request)
-          latch(request).countDown()
+          if request == t"fail" then unsafely(request.as[Int])
+          done.since(_ + List(request))
+          latch(request).offer(())
 
-        def await(request: Text): Boolean = latch(request).await(10, juc.TimeUnit.SECONDS)
-        def list: List[Text] = List.from(done.asScala)
+        def await(request: Text): Boolean = kept(latch(request))
+        def list: List[Text] = done()
 
       test(m"keystrokes made during a search are searched for once, as the last of them"):
         val recorder = Recorder(t"a")
         recorder.latest(t"a")
-        recorder.begun.await(10, juc.TimeUnit.SECONDS)
+        kept(recorder.begun)
         List(t"ab", t"abc", t"abcd", t"abcde").each(recorder.latest(_))
-        recorder.release.countDown()
+        recorder.release.offer(())
         recorder.await(t"abcde")
         recorder.list
 
@@ -4197,7 +4243,7 @@ define  user interface
 
       // Each problem, as its line and column in the file and its message.
       def problems(doc: Doc): List[(Optional[Int], Optional[Int], Text)] = doc.problems.map:
-        case Block.Diagnostic(_, location, message, _, _) =>
+        case Block.Diagnostic(_, location, message, _, _, _) =>
           val said: Text = message.map { case Block.Paragraph(content) => text(content); case _ => t"" }.join
           (location.let(_.line), location.let(_.column), said)
 
@@ -4328,11 +4374,10 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
 
     suite(m"Sections"):
       test(m"a fixture is found by the document's section and path before its file name"):
-        val directory = java.nio.file.Files.createTempDirectory("fuel-fixtures").nn
-        val nested = java.nio.file.Files.createDirectories(directory.resolve("modules")).nn
-        java.nio.file.Files.writeString(directory.resolve("logging.scala"), "val shared = 1")
-        java.nio.file.Files.writeString(nested.resolve("logging.scala"), "val own = 1")
-        val regime = Compilation.Regime(fixtures = directory.toString.nn.tt)
+        val directory: Text = scratch(t"fuel-fixtures")
+        writeFile(t"$directory/logging.scala", t"val shared = 1")
+        writeFile(t"$directory/modules/logging.scala", t"val own = 1")
+        val regime = Compilation.Regime(fixtures = directory)
 
         val own: Optional[Text] =
           Compilation.fixture(regime, t"modules", t"logging.md").let(_(1))
@@ -4346,7 +4391,6 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
 
       def configuration(text: Text): Tel =
         import strategies.throwUnsafely
-        import codepages.utf8Codepage
         import codepages.utf8Codepage
         t"tel 1.0\n\n$text".read[Tel]
 
@@ -4366,7 +4410,6 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
 
       test(m"a section's members are the same on its line as beneath it, each by its keyword"):
         import strategies.throwUnsafely
-        import codepages.utf8Codepage
         (configuration(inline).as[Workspace.Sections], sectionFaults(beneath))
 
       . assert: (sections, faults) =>
@@ -4385,7 +4428,6 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
 
       test(m"values after an original's file are its overlays, as its members' order has it"):
         import strategies.throwUnsafely
-        import codepages.utf8Codepage
         val text: Text = t"section guide doc\n  original en en a.tel api more\n"
 
         ( sectionFaults(text),
@@ -4399,10 +4441,8 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
       . assert(_ == t"modules")
 
       test(m"a section is named as the regime names its directory, and its documents with it"):
-        val directory = java.nio.file.Files.createTempDirectory("fuel-sections").nn
-        val root: Text = directory.resolve("en").nn.toString.nn.tt
-        java.nio.file.Files.createDirectories(directory.resolve("en"))
-        java.nio.file.Files.writeString(directory.resolve("en/intro.md"), "# Intro\n")
+        val root: Text = t"${scratch(t"fuel-sections")}/en"
+        writeFile(t"$root/intro.md", t"# Intro\n")
         val regime = Compilation.Regime(sections = List((t"guide", root)))
         val corpus: Corpus = Compilation.corpus(List(root), Checker.tokenized, regime)
 
@@ -4456,7 +4496,7 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
             format = t"toy" )
 
       val commands: Api =
-        Api(sci.Map(tool.key -> tool, compile.key -> compile, force.key -> force), Commands)
+        Api(Map(tool.key -> tool, compile.key -> compile, force.key -> force), Commands)
         . relinked
 
       // Scala's own: a package named as the format is, and a method named `/` in it.
@@ -4465,7 +4505,7 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
       val slash: Api.Entity =
         Api.Entity(Designator.Top(t"toy"), t"/", true, Api.Declaration(Api.Kind.Def))
 
-      val scala: Api = Api(sci.Map(pack.key -> pack, slash.key -> slash)).relinked
+      val scala: Api = Api(Map(pack.key -> pack, slash.key -> slash)).relinked
       val apis: Apis = Apis(List(scala, commands))
 
       def path(destination: Optional[Inline.Destination]): Optional[Text] = destination.let:
@@ -4595,11 +4635,11 @@ document
         case _                                 => Unset
 
       def lines(blocks: List[Block]): List[Optional[Int]] = blocks.map:
-        case Block.Diagnostic(_, location, _, _, _) => location.let(_.line)
+        case Block.Diagnostic(_, location, _, _, _, _) => location.let(_.line)
         case _                                      => Unset
 
       test(m"a schema's definitions, their members and its document's fields are its entities"):
-        (problems.size, List.from(api.entities.keys.toList.sortBy(_.s)))
+        (problems.size, api.entities.keys.to[List].sort)
 
       . assert: result =>
           result ==
@@ -4674,7 +4714,7 @@ entry .Channel
 
       test(m"a member is cautioned only when neither an overlay nor a description documents it"):
         val cautioned: List[Text] = merging.bind:
-          case Block.Diagnostic(Tone.Warning, _, message, _, _) =>
+          case Block.Diagnostic(Tone.Warning, _, message, _, _, _) =>
             List(Blocks.plain(message.bind { case Block.Paragraph(content) => content; case _ => Nil }))
 
           case _ =>
@@ -4724,7 +4764,7 @@ entry .Channel
       test(m"a search knows a schema's words: a kind, a modifier, and what a field holds"):
         def keys(text: Text): List[Text] = Query.read(text, TelsFormat.vocabulary) match
           case query: Query =>
-            List.from(api.search(query).hits.map(_.entity.key).stdlib.toList.sortBy(_.s))
+            api.search(query).hits.map(_.entity.key).sort
 
           case _            => Nil
 
@@ -4749,7 +4789,7 @@ entry .Channel
         val rows: List[(Optional[Text], Text)] = page.bind:
           case Block.Table(_, rows, _) =>
             rows.map: (row: Block.Row) =>
-              (row.id, Blocks.plain(row.cells.stdlib.last.content))
+              (row.id, Blocks.plain(contents(row.cells.last)))
 
           case _ =>
             Nil
@@ -4816,11 +4856,11 @@ entry .Channel
         Api.Entity(Designator.Top(t"sample"), t"Quiet", true, Api.Declaration(Api.Kind.Object))
 
       val api: Api =
-        Api(sci.Map(documented.key -> documented, member.key -> member, silent.key -> silent))
+        Api(Map(documented.key -> documented, member.key -> member, silent.key -> silent))
 
       test(m"the index has every documented entity's key and info, as plain text"):
         Server.publish(Corpus(Nil), api)
-        List.from(fuel.Help.index().entries.stdlib.sortBy(_.key.s).map { entry => (entry.key, entry.info) })
+        fuel.Help.index().entries.order(_.key).map { entry => (entry.key, entry.info) }
 
       . assert(_ == List
           ( (t"sample.Doc", t"one Markdown document, as Doc keeps it"),
@@ -4829,7 +4869,7 @@ entry .Channel
       test(m"the index is made again for a new edition"):
         Server.publish(Corpus(Nil), api)
         val before: Long = fuel.Help.index().edition
-        Server.publish(Corpus(Nil), Api(sci.Map(documented.key -> documented)))
+        Server.publish(Corpus(Nil), Api(Map(documented.key -> documented)))
         val after: fuel.Help.Message.Index = fuel.Help.index()
         (after.edition > before, after.entries.map(_.key))
 
@@ -4849,7 +4889,7 @@ entry .Channel
         t"- # Title\n+ # Titre\n\n- The first paragraph,\n- on two lines.\n+ Le premier paragraphe, sur une ligne.\n\n- - one\n+ - un\n- - two\n+ - deux\n\n```scala\nval x = 1\n```\n"
 
       def places(problems: List[Block]): List[(Text, Int, Tone)] = problems.bind:
-        case Block.Diagnostic(tone, location, _, _, _) =>
+        case Block.Diagnostic(tone, location, _, _, _, _) =>
           List((location.let(_.path).or(t""), location.let(_.line).or(0), tone))
 
         case _ =>
@@ -5043,18 +5083,14 @@ entry .Channel
       . assert(_ == (true, true, false))
 
       test(m"a corpus is read in a language: translated where it is, as written where not"):
-        val root: java.nio.file.Path = java.nio.file.Files.createTempDirectory("fuel-tongue").nn
+        val root: Text = scratch(t"fuel-tongue")
+        def write(path: Text, text: Text): Unit = writeFile(t"$root/$path", text)
 
-        def write(path: String, text: String): Unit =
-          val file: java.nio.file.Path = root.resolve(path).nn
-          java.nio.file.Files.createDirectories(file.getParent)
-          java.nio.file.Files.writeString(file, text)
+        write(t"en/intro.md", t"# Getting started\n\nSee [below](#getting-started).\n")
+        write(t"en/other.md", t"# Other\n")
+        write(t"fr/intro.md", t"- # Getting started\n+ # Pour commencer\n\n- See [below](#getting-started).\n+ Voir [plus bas](#getting-started).\n")
 
-        write("en/intro.md", "# Getting started\n\nSee [below](#getting-started).\n")
-        write("en/other.md", "# Other\n")
-        write("fr/intro.md", "- # Getting started\n+ # Pour commencer\n\n- See [below](#getting-started).\n+ Voir [plus bas](#getting-started).\n")
-
-        val base: Text = Text(root.toString)
+        val base: Text = root
 
         val targets: List[Translations.Target] =
           List
@@ -5151,6 +5187,13 @@ entry .Channel
       val unglossed: Text =
         t"tel 1.0\n\ndefine library\n  keyword lib\n  definition\n      - A collection of code.\n\n      - Other programs use it.\n\ndefine interface\n  definition\n      - A shared boundary.\n\ndefine apple\n  definition\n      - A fruit.\n"
 
+      // What `generate` writes of `terms`: the glossary as TEL reads it, which has no blank line
+      // after a source atom (§14), nor the line ending of a document's last line where that is
+      // in one.
+      def generated(text: Text): Text =
+        text.sub(t"use it.\n\ndefine", t"use it.\ndefine").sub(t"utilisent.\n\ndefine", t"utilisent.\ndefine")
+        . pipe { (text: Text) => if text.ends(t"\n") then text.skip(1, Rtl) else text }
+
       val glossed: Text =
         unglossed
         . sub(t"define library\n  keyword lib\n", t"define library\n  term bibliothèque\n  keyword bib\n")
@@ -5170,7 +5213,7 @@ entry .Channel
       test(m"a glossary's translation is its terms, their definitions to be translated"):
         GlossaryTranslations.generate(terms)
 
-      . assert(_ == unglossed)
+      . assert(_ == generated(unglossed))
 
       test(m"a glossary's translation which nobody has translated is one caution"):
         places(GlossaryTranslations.check(t"fr/glossary.tel", unglossed, terms)).map(_(2))
@@ -5191,7 +5234,7 @@ entry .Channel
 
       test(m"a translated term has its own name, keywords and definition, and its origin's anchor"):
         glossaire.terms.map: (term: Glossary.Term) =>
-          (term.name, term.slug, term.keywords, term.definition.cut(t"\n").stdlib.head)
+          (term.name, term.slug, term.keywords, term.definition.cut(t"\n").head)
 
       . assert: found =>
           found == List
@@ -5229,7 +5272,7 @@ entry .Channel
       . assert(_ == (List(t"apple", t"interface", t"library"), List(t"library", t"apple", t"interface")))
 
       test(m"a term the translation has no entry for is the term as it is defined"):
-        val partial: Text = glossed.cut(t"define interface").stdlib.head
+        val partial: Text = glossed.cut(t"define interface").head
         GlossaryTranslations.foreign(t"fr/glossary.tel", partial, defined).terms.map(_.name)
 
       . assert(_ == List(t"bibliothèque", t"interface", t"apple"))
@@ -5242,7 +5285,7 @@ entry .Channel
       test(m"a glossary's translation is made again with what was translated"):
         GlossaryTranslations.generate(terms.sub(t"A fruit.", t"A round fruit."), glossed)
 
-      . assert(_ == glossed.sub(t"      - A fruit.\n", t"      ! A fruit.\n      - A round fruit.\n"))
+      . assert(_ == generated(glossed.sub(t"      - A fruit.\n", t"      ! A fruit.\n      - A round fruit.\n")))
 
       val synonymous: Text =
         t"tel 1.0\n\ndefine  user interface\n  synonym UI\n  unlisted\n  definition\n      Where a person and a program meet.\n"
@@ -5250,7 +5293,7 @@ entry .Channel
       test(m"a translation carries a term's synonyms, writing a value with spaces after two"):
         GlossaryTranslations.generate(synonymous)
 
-      . assert(_ == t"tel 1.0\n\ndefine  user interface\n  synonym UI\n  definition\n      - Where a person and a program meet.\n")
+      . assert(_ == t"tel 1.0\n\ndefine  user interface\n  synonym UI\n  definition\n      - Where a person and a program meet.")
 
       test(m"a translated term has its own synonyms, is unlisted as its origin is, and says the name it translates"):
         val read: Glossary = Glossary.read(t"en/glossary.tel", synonymous) match
@@ -5261,9 +5304,8 @@ entry .Channel
           t"tel 1.0\n\ndefine  user interface\n  term  interface utilisateur\n  synonym IU\n  definition\n      - Where a person and a program meet.\n      + Là où une personne et un programme se rencontrent.\n"
 
         val note: Text => Text = name => t"In English: *$name*."
-        val found: Glossary.Term = GlossaryTranslations.foreign(t"fr/glossary.tel", translated, read, note).terms.stdlib.head
-
-        (found.name, found.synonyms, found.unlisted, found.definition)
+        GlossaryTranslations.foreign(t"fr/glossary.tel", translated, read, note).terms.head.let:
+          (found: Glossary.Term) => (found.name, found.synonyms, found.unlisted, found.definition)
 
       . assert: found =>
           found ==
@@ -5272,7 +5314,7 @@ entry .Channel
 
       test(m"a term named as the term it translates is, says nothing more"):
         val note: Text => Text = name => t"In English: *$name*."
-        GlossaryTranslations.foreign(t"fr/glossary.tel", glossed, defined, note).terms.map(_.definition.cut(t"\n").stdlib.last)
+        GlossaryTranslations.foreign(t"fr/glossary.tel", glossed, defined, note).terms.map(_.definition.cut(t"\n").keep(1, Rtl).join)
 
       . assert(_ == List(t"In English: *library*.", t"Une frontière commune.", t"In English: *apple*."))
 
@@ -5369,3 +5411,152 @@ entry .Channel
 
       . assert(_ == List(t"the `info` of `.Text#length`"))
 
+      def source(kind: Translating.Kind, text: Text): Translating.Source =
+        Translating.Source(t"/absent/en/sample", kind, text, List((t"fr", t"/absent/fr/sample")))
+
+      def remade(kind: Translating.Kind, text: Text, old: Text): Optional[Text] =
+        Translating.remake(source(kind, text), old)
+
+      // Each kind's update, made again, is the same; and a translation of its text as it stands
+      // is not changed by one.
+      def settled(kind: Translating.Kind, text: Text, changed: Text, old: Text): (Boolean, Boolean) =
+        val once: Optional[Text] = remade(kind, changed, old)
+        (once.let(remade(kind, changed, _)) == once, remade(kind, text, old) == old)
+
+      def hazards(kind: Translating.Kind, text: Text, old: Text, current: Text): List[Text] =
+        Translating.hazards(source(kind, text), t"fr", t"/absent/fr/sample", old, current)
+
+      test(m"a document's update is settled"):
+        settled(Translating.Kind.Document, english, english.sub(t"The first paragraph", t"The opening paragraph"), french)
+
+      . assert(_ == (true, true))
+
+      test(m"an overlay's update is settled"):
+        settled(Translating.Kind.Overlay, overlay, overlay.sub(t"its length", t"how long it is"), translated)
+
+      . assert(_ == (true, true))
+
+      test(m"the update of an overlay whose entry has its info on its line is settled"):
+        OverlayTranslations.generate(beside).lay((false, false)): (stub: Text) =>
+          settled(Translating.Kind.Overlay, beside, beside.sub(t"its size", t"how big it is"), stub)
+
+      . assert(_ == (true, true))
+
+      test(m"a glossary's update is settled"):
+        settled(Translating.Kind.Glossary, terms, terms.sub(t"A fruit.", t"A round fruit."), generated(glossed))
+
+      . assert(_ == (true, true))
+
+      test(m"a section file's update is settled"):
+        settled(Translating.Kind.Section, described, t"tel 1.0\n\ntitle  Handbook\n", redescribed)
+
+      . assert(_ == (true, true))
+
+      test(m"an update which keeps every translation and adds no failure may be written"):
+        val changed: Text = overlay.sub(t"its length", t"how long it is")
+        remade(Translating.Kind.Overlay, changed, translated).lay(List(t"none")): (current: Text) =>
+          hazards(Translating.Kind.Overlay, changed, translated, current)
+
+      . assert(_ == Nil)
+
+      test(m"an update may leave out the translation of an entry which has gone"):
+        val changed: Text = overlay.sub(t"entry #length", t"entry #size")
+        remade(Translating.Kind.Overlay, changed, translated).lay(List(t"none")): (current: Text) =>
+          hazards(Translating.Kind.Overlay, changed, translated, current)
+
+      . assert(_ == Nil)
+
+      test(m"an update which adds a failure is not written"):
+        hazards(Translating.Kind.Overlay, overlay, translated, translated.sub(t"sample.Other", t"sample.Autre"))
+
+      . assert(_ == List(t"it would have 1 failures which the translation does not have", t"updating it again would change it again"))
+
+      test(m"an update which loses a translation whose text is still there is not written"):
+        hazards(Translating.Kind.Overlay, overlay, translated, translated.sub(t"        + sa longueur\n", t""))
+
+      . assert(_ == List(t"it would lose 1 lines of translation whose text is still there"))
+
+      test(m"an update which an update would change again is not written"):
+        hazards(Translating.Kind.Section, described, redescribed, t"tel 1.0\n\ntitle\n    - Handbook\n    + Guide de l'utilisateur\n")
+
+      . assert(_ == List(t"updating it again would change it again"))
+
+
+      test(m"a glossary's translation keeps what was translated through two updates"):
+        val changed: Text = terms.sub(t"A fruit.", t"A round fruit.")
+        remade(Translating.Kind.Glossary, changed, glossed).let(remade(Translating.Kind.Glossary, changed, _)).let(GlossaryTranslations.entries(_).map(_.term))
+
+      . assert(_ == List(t"bibliothèque", t"interface", t"Écrou"))
+
+      test(m"a section file's title with a `!` line is read"):
+        SectionFile.title(t"tel 1.0\n\ntitle\n    ! User guide\n    - Handbook\n    + Guide\n").let(_.text)
+
+      . assert(_ == t"! User guide\n- Handbook\n+ Guide")
+
+      test(m"an overlay's translation with a `!` line at the end reads as an overlay"):
+        Overlay.read(t"x", t"base sample\ninfo\n    ! a package\n    - the package\n    + un paquet\n", OverlayTranslations.foreign) match
+          case overlay: Overlay => overlay.doc.info
+          case _                => Unset
+
+      . assert(_ == t"un paquet")
+
+      test(m"an update may remake a passage which says the same in both languages"):
+        val same: Text = t"tel 1.0\n\ntitle\n    - Soundness\n    + Soundness\n"
+        val changed: Text = t"tel 1.0\n\ntitle  The Soundness libraries\n"
+        remade(Translating.Kind.Section, changed, same).lay(List(t"none")): (current: Text) =>
+          hazards(Translating.Kind.Section, changed, same, current)
+
+      . assert(_ == Nil)
+
+    suite(m"Bolt codes"):
+      // A diagnostic's code, as it is written.
+      def codes(blocks: List[Block]): List[Text] = blocks.map:
+        case Block.Diagnostic(_, _, _, _, _, code) => code.lay(t"")(_.text)
+        case _                                     => t""
+
+      test(m"a query's error is named by its reason"):
+        def code(text: Text): Text = Query.read(text) match
+          case error: Query.Error => error.bolt.text
+          case _                  => t""
+
+        (code(t"+List[Int"), code(t"+"))
+
+      . assert(_ == (t"↯/f.26.6.1", t"↯/f.26.6.2"))
+
+      test(m"an error the compiler throws while reading is the API's second"):
+        import errorDiagnostics.emptyDiagnostics
+        Inspection.ReadError(Exception("unreadable")).bolt.text
+
+      . assert(_ == t"↯/f.26.2")
+
+      test(m"a term defined twice, and one which cannot be a label, are variants of a glossary's"):
+        val glossary: Glossary = Glossary(List(Glossary.Term(t"Monad", t"x", Unset, t"a.tel", 1)))
+        val monad: Glossary.Term = Glossary.Term(t"Monad", t"y", Unset, t"other.tel", 4)
+        val unlabelled: Glossary.Term = Glossary.Term(t"a[b]", t"z", Unset, t"other.tel", 9)
+        codes(Glossary.merge(List(glossary, Glossary(List(monad, unlabelled))))(1))
+
+      . assert(_ == List(t"↯/f.25.4.4", t"↯/f.25.4.3"))
+
+      test(m"a fault the schema finds in a glossary carries the TEL error's code"):
+        val text: Text = t"define monad\n  colour red\n  definition  A monoid.\n"
+
+        Glossary.faults(t"a.tel", text).map:
+          case Block.Diagnostic(_, _, _, _, _, code: fulminate.Bolt) =>
+            (code.carrier.text, code.text.starts(t"↯/f.25.4.1/"))
+
+          case _ =>
+            (t"", false)
+
+      . assert(_ == List((t"↯/f.25.4.1", true)))
+
+      test(m"a table without a row is a variant of a table's fault"):
+        codes(Doc.parse(t"a.md", t"```tabular\ncolumn  Planet\n```\n").problems)
+
+      . assert(_ == List(t"↯/f.25.8.5"))
+
+      test(m"passages nobody has translated are one caution, with their code"):
+        val english: Text = t"First.\n\nSecond.\n"
+        val source: Text = Translation.skeleton(english).serialize
+        codes(Translation.check(t"fr/a.md", source, english))
+
+      . assert(_ == List(t"↯/f.25.9.7"))

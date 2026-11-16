@@ -34,9 +34,8 @@ package fuel
 
 import soundness.*
 
-import scala.collection.immutable as sci
-
 import codepages.utf8Codepage
+import dysasymptotics.linearSize
 import pyrocosm.{Block, Tone}
 
 // The translation of a glossary: a glossary of the same terms, each named as the glossary it
@@ -60,6 +59,15 @@ import pyrocosm.{Block, Tone}
 // it changes; `check` holds one to the other; and `foreign` is the glossary a reader of the
 // language has.
 object GlossaryTranslations:
+  // The code of what is wrong with a glossary's translation, `↯/f.26.1.<variant>`: a term it
+  // has no entry for (1); an entry for no term (2), or for one which has an entry already (3);
+  // a definition whose text has gone (4), or which is not translated (5); a term not given its
+  // name in the language (6); a `term` which cannot be one (7), which names another term (8),
+  // or which is another entry's (9); a synonym which cannot be a name (10), or which is one
+  // already (11); and a `link` in place of the page of the site which explains the term (12).
+  private def bolt(variant: Int): fulminate.Bolt =
+    FuelBolts(FuelBolts.api, FuelBolts.glossaryTranslation, variant)
+
   // An entry of a glossary or of a translation of one, as the schema reads it: the name on its
   // `define` line; its `term` (the line's second value, or a child), `keyword`s, `link` and
   // `synonym`s; its definition's text; the line (from 1) of the entry; and the line its
@@ -74,96 +82,88 @@ object GlossaryTranslations:
       site:       Int,
       synonyms:   List[Text] = Nil )
 
-  private def parsed(text: Text): Optional[(Tel, Overlay.Lines)] =
-    import strategies.throwUnsafely
-
-    try
-      val tel: Tel = Overlay.headed(text).read[Tel]
-      (tel, Overlay.Lines(text, tel.childCompounds.to[List]))
-    catch case error: Tel.Error => Unset
-
   private def joined(atoms: List[Text]): Text = atoms.filter(_ != t"").join(t" ").trim
 
   // Every entry of a glossary, in the order of the file; none if it is not TEL.
   def entries(text: Text): List[Entry] =
-    parsed(text).lay(List[Entry]()): (tel: Tel, lines: Overlay.Lines) =>
-      tel.childCompounds.to[List].filter(_.keyword == t"define").map: (compound: Tel.Compound) =>
-        val children: List[Tel.Compound] = Overlay.childrenOf(compound)
+    import parsing.trackPositions
+
+    safely(text.read[Tel]).lay(List[Entry]()): (tel: Tel) =>
+      val defined: List[Tel.Compound] = tel.childCompounds.to[List].filter(_.keyword == t"define")
+
+      defined.indexed.map: (compound: Tel.Compound, index: Ordinal) =>
+        val at: List[Text] = List(t"define", index.n0.show)
+        val children: List[Tel.Compound] = Compounds.children(compound)
 
         // Each child's first value, by keyword: what the schema reads a value of one as.
         def all(keyword: Text): List[Text] =
           children.filter(_.keyword == keyword).map: (child: Tel.Compound) =>
-            Overlay.inlineAtoms(child).filter(_ != t"").head.or(t"")
+            Compounds.inline(child).filter(_ != t"").head.or(t"")
 
           . filter(_ != t"")
 
         def child(keyword: Text): Optional[Text] = all(keyword).head
-        val keywords: List[Text] = all(t"keyword")
-        val atoms: List[Text] = Overlay.inlineAtoms(compound).filter(_ != t"")
+        val atoms: List[Text] = Compounds.inline(compound).filter(_ != t"")
 
-        val body: Optional[Tel.Compound] = children.filter(_.keyword == t"definition").head
+        val definition: Optional[(Text, Int)] =
+          children.seek(_.keyword == t"definition").let: (body: Tel.Compound) =>
+            val brief: Text = joined(Compounds.inline(body))
+            val line: Int = Compounds.line(tel, at + List(t"definition"))
 
-        val definition: Optional[(Text, Int)] = body.let: (body: Tel.Compound) =>
-          val brief: Text = joined(Overlay.inlineAtoms(body))
+            Compounds.source(body).let { (text: Text) => (text, line + 1) }.or:
+              if brief == t"" then Unset else (brief, line)
 
-          Overlay.sourceAtom(body).let { (text: Text) => (text, lines(body) + 1) }.or:
-            if brief == t"" then Unset else (brief, lines(body))
+        val line: Int = Compounds.line(tel, at)
 
         Entry
-          ( atoms.head.or(t""), Glossary.second(atoms).or(child(t"term")), keywords, child(t"link"),
-            definition.let(_(0)), lines(compound), definition.let(_(1)).or(lines(compound)),
+          ( atoms.head.or(t""), Glossary.second(atoms).or(child(t"term")), all(t"keyword"),
+            child(t"link"), definition.let(_(0)), line, definition.let(_(1)).or(line),
             all(t"synonym") )
-
-  private def set(lines: sci.Vector[String], indent: Int): sci.Vector[String] =
-    lines.map { (line: String) => if line == "" then "" else " ".repeat(indent).nn + line }
 
   // The translation of a definitive glossary: each of its terms an entry, with the `term`,
   // the `keyword`s, the `synonym`s and the `link` the translation `old` gives it (and the
-  // definitive term's keywords and synonyms where it is new), each value with spaces after two;
-  // and its definition a `Translation` — that of `old`, brought up to date, or one nobody has
-  // translated. What comes before the first term in the definitive glossary comes first here.
-  // `Unset` if the glossary is not TEL.
+  // definitive term's keywords and synonyms where it is new); and its definition a
+  // `Translation` — that of `old`, brought up to date, or one nobody has translated. The
+  // glossary is read as TEL and written again with each term rewritten, so that what else it
+  // has, its comments among them, is kept. `Unset` if the glossary is not TEL.
   def generate(definitive: Text, old: Optional[Text] = Unset): Optional[Text] =
-    if parsed(definitive).absent then Unset else
-      val prior: sci.List[Entry] = old.lay(sci.List[Entry]())(entries(_).stdlib)
+    val prior: List[Entry] = old.lay(List[Entry]())(entries(_))
 
-      val head: sci.Vector[String] =
-        Translation.split(definitive).takeWhile(!_.startsWith("define"))
-        . reverse.dropWhile(_.trim.nn == "").reverse
+    def written(entry: Entry, compound: Tel.Compound): Tel.Compound =
+      val before: Optional[Entry] = prior.seek(_.name == entry.name)
+      val keywords: List[Text] = before.lay(entry.keywords)(_.keywords)
+      val synonyms: List[Text] = before.lay(entry.synonyms)(_.synonyms)
 
-      val written: sci.List[sci.Vector[String]] = entries(definitive).stdlib.map: (entry: Entry) =>
-        val before: Option[Entry] = prior.find(_.name == entry.name)
+      val definition: List[Tel.Compound] = entry.definition.lay(List[Tel.Compound]()): (text: Text) =>
+        val translation: Translation = before.let(_.definition).lay(Translation.skeleton(text)):
+          (old: Text) => Translation.update(Translation.parse(old), text)
 
-        def line(keyword: Text, value: Text): String = s"  ${Glossary.line(keyword, value).s}"
+        List(Tel.Compound(t"definition", Array(Tel.Atom.Source(translation.serialize)), Unset, Array.empty))
 
-        val term: sci.Vector[String] =
-          before.flatMap(_.term.option).toVector.map(line(t"term", _))
+      val children: List[Tel.Compound] =
+        before.let(_.term).lay(List[Tel.Compound]())(term => List(Glossary.compound(t"term", term))) +
+          keywords.map(Glossary.compound(t"keyword", _)) +
+          synonyms.map(Glossary.compound(t"synonym", _)) +
+          before.let(_.link).lay(List[Tel.Compound]())(link => List(Glossary.compound(t"link", link))) +
+          definition
 
-        val keywords: sci.Vector[String] =
-          before.map(_.keywords).getOrElse(entry.keywords).stdlib.toVector.map(line(t"keyword", _))
+      val block: Tel.Block = Tel.Block(Array.empty, Unset, children.to[Array], 0)
 
-        val synonyms: sci.Vector[String] =
-          before.map(_.synonyms).getOrElse(entry.synonyms).stdlib.toVector.map(line(t"synonym", _))
+      Tel.Compound
+        ( t"define", Array(Glossary.atom(entry.name)), compound.remark,
+          if children.nil then Array.empty else Array(block) )
 
-        val link: sci.Vector[String] =
-          before.flatMap(_.link.option).toVector.map(line(t"link", _))
+    safely:
+      val tel: Tel = definitive.read[Tel]
+      val defined: List[Tel.Compound] = tel.childCompounds.to[List].filter(_.keyword == t"define")
 
-        val definition: sci.Vector[String] =
-          entry.definition.option.toVector.flatMap: (text: Text) =>
-            val translation: Translation =
-              before.flatMap(_.definition.option) match
-                case Some(old) => Translation.update(Translation.parse(old), text)
-                case None      => Translation.skeleton(text)
+      val replacements: List[Tel.Mutation.Op] =
+        defined.zip(entries(definitive)).indexed.map:
+          case ((compound: Tel.Compound, entry: Entry), index: Ordinal) =>
+            val pointer: Tel.Pointer = Tel.Pointer.Empty / (t"define", index.n0)
+            Tel.Mutation.Op.Replace(pointer, written(entry, compound))
 
-            sci.Vector("  definition") ++ set(Translation.split(translation.serialize), 6)
-
-        sci.Vector(Glossary.line(t"define", entry.name).s) ++ term ++ keywords ++ synonyms ++
-          link ++ definition
-
-      val blocks: sci.List[sci.Vector[String]] =
-        if head.isEmpty then written else head :: written
-
-      Text(blocks.map(_.mkString("\n")).mkString("\n\n") + "\n")
+      Tel.Mutation(tel, replacements).show
 
   private def translated(entry: Entry): Boolean =
     entry.term.present || entry.definition.lay(false): (text: Text) =>
@@ -172,8 +172,8 @@ object GlossaryTranslations:
   // The entries of a translation which someone has translated and the definitive glossary no
   // longer has: what making the translation again leaves out.
   def lost(definitive: Text, old: Text): List[Entry] =
-    val kept: sci.Set[Text] = entries(definitive).stdlib.map(_.name).toSet
-    entries(old).filter { (entry: Entry) => !kept.contains(entry.name) && translated(entry) }
+    val kept: List[Text] = entries(definitive).map(_.name)
+    entries(old).filter { (entry: Entry) => !kept.has(entry.name) && translated(entry) }
 
   // The glossary a reader of a translation's language has, of the glossary `definitive` read
   // from the file it translates: each of its terms as the translation says it — its `term`,
@@ -185,28 +185,24 @@ object GlossaryTranslations:
   def foreign
     ( path: Text, text: Text, definitive: Glossary, original: Optional[Text => Text] = Unset )
   :   Glossary =
-    val theirs: sci.List[Entry] = entries(text).stdlib
+    val theirs: List[Entry] = entries(text)
 
     Glossary:
       definitive.terms.map: (term: Glossary.Term) =>
-        theirs.find(_.name == term.name) match
-          case None =>
-            term
+        theirs.seek(_.name == term.name).lay(term): (entry: Entry) =>
+          val name: Text = entry.term.lay(term.name): (name: Text) =>
+            if Glossary.nameable(name) then name else term.name
 
-          case Some(entry) =>
-            val name: Text = entry.term.lay(term.name): (name: Text) =>
-              if Glossary.nameable(name) then name else term.name
+          val read: Text =
+            entry.definition.let(Translation.parse(_).foreign.text).or(term.definition)
 
-            val read: Text =
-              entry.definition.let(Translation.parse(_).foreign.text).or(term.definition)
+          val definition: Text =
+            if name.lower == term.name.lower then read
+            else original.lay(read) { (note: Text => Text) => t"$read\n\n${note(term.name)}" }
 
-            val definition: Text =
-              if name.lower == term.name.lower then read
-              else original.lay(read) { (note: Text => Text) => t"$read\n\n${note(term.name)}" }
-
-            Glossary.Term
-              ( name, definition, entry.link.or(term.link), path, entry.line, entry.keywords,
-                term.name, entry.synonyms, term.unlisted )
+          Glossary.Term
+            ( name, definition, entry.link.or(term.link), path, entry.line, entry.keywords,
+              term.name, entry.synonyms, term.unlisted )
 
   // What is wrong with the translation of a glossary, read from `text` at `path`, of the
   // definitive glossary `definitive`: what is wrong with it as TEL; each definition which is
@@ -224,126 +220,130 @@ object GlossaryTranslations:
         Glossary.faults(path, text, translation = true)
 
       case _ =>
-        val theirs: sci.List[Entry] = entries(text).stdlib
-        val ours: sci.List[Entry] = entries(definitive).stdlib
+        val theirs: List[Entry] = entries(text)
+        val ours: List[Entry] = entries(definitive)
         val remedy: Text = t"`fuel translate --update` makes the translation again"
-        val all: sci.List[Text] = (ours.map(_.name) ++ names.stdlib).distinct
+        val all: List[Text] = (ours.map(_.name) + names).distinct
 
-        def finding(tone: Tone, line: Int, message: Text): sci.List[Translation.Finding] =
-          sci.List(Translation.Finding(tone, line, message))
+        def finding(tone: Tone, line: Int, message: Text, variant: Int)
+        :   List[Translation.Finding] =
 
-        val absent: sci.List[Translation.Finding] = ours.flatMap: (entry: Entry) =>
-          if theirs.exists(_.name == entry.name) then sci.Nil
-          else finding(Tone.Warning, 1, t"This has no entry for `${entry.name}`: $remedy.")
+          List(Translation.Finding(tone, line, message, bolt(variant)))
 
-        val entered: sci.List[Translation.Finding] =
-          theirs.zipWithIndex.flatMap: (entry: Entry, index: Int) =>
-            val earlier: sci.List[Entry] = theirs.take(index)
+        def optional(value: Optional[Text]): List[Text] = value.lay(List[Text]())(List(_))
 
-            ours.find(_.name == entry.name) match
-              case None =>
-                finding
-                  ( Tone.Warning, entry.line,
-                    t"The glossary this translates has no term `${entry.name}`: $remedy." )
+        val absent: List[Translation.Finding] = ours.bind: (entry: Entry) =>
+          if theirs.exists(_.name == entry.name) then Nil
+          else finding(Tone.Warning, 1, t"This has no entry for `${entry.name}`: $remedy.", 1)
 
-              case Some(_) if earlier.exists(_.name == entry.name) =>
-                finding(Tone.Failure, entry.line, t"`${entry.name}` has an entry already.")
+        val entered: List[Translation.Finding] = theirs.indexed.bind:
+          (entry: Entry, index: Ordinal) =>
+            val earlier: List[Entry] = theirs.keep(index.n0)
 
-              case Some(original) =>
-                val prose: sci.List[Translation.Finding] =
-                  (original.definition.option, entry.definition.option) match
-                    case (Some(defined), Some(found)) =>
-                      (Translation.findings(found, defined) + Mirror.findings(found)).stdlib
-                      . map(_.shifted(entry.site - 1))
+            val unknown: List[Translation.Finding] =
+              finding
+                ( Tone.Warning, entry.line,
+                  t"The glossary this translates has no term `${entry.name}`: $remedy.", 2 )
 
-                    case (Some(_), None) =>
+            ours.seek(_.name == entry.name).lay(unknown): (original: Entry) =>
+              if earlier.exists(_.name == entry.name) then
+                finding(Tone.Failure, entry.line, t"`${entry.name}` has an entry already.", 3)
+              else
+                val gone: List[Translation.Finding] =
+                  entry.definition.lay(List[Translation.Finding]()): _ =>
+                    finding
+                      ( Tone.Warning, entry.site,
+                        t"The text this translates has gone: $remedy.", 4 )
+
+                val prose: List[Translation.Finding] = original.definition.lay(gone):
+                  (defined: Text) =>
+                    val lacking: List[Translation.Finding] =
                       finding
                         ( Tone.Warning, entry.line,
                           t"This lacks the definition of `${entry.name}`, which is not " +
-                            t"translated: $remedy." )
+                            t"translated: $remedy.",
+                          5 )
 
-                    case (None, Some(_)) =>
-                      finding
-                        ( Tone.Warning, entry.site, t"The text this translates has gone: $remedy." )
+                    entry.definition.lay(lacking): (found: Text) =>
+                      (Translation.findings(found, defined) + Mirror.findings(found))
+                      . map(_.shifted(entry.site - 1))
 
-                    case _ =>
-                      sci.Nil
-
-                val unnamed: sci.List[Translation.Finding] =
-                  if entry.term.present then sci.Nil else
+                val unnamed: List[Translation.Finding] =
+                  if entry.term.present then Nil else
                     val message: Text =
                       t"`${entry.name}` is not translated: a `term` beneath it says what it " +
                         t"is in this language."
 
-                    val tone: Tone = Tone.Warning
-                    sci.List(Translation.Finding(tone, entry.line, message, untranslated = true))
+                    List:
+                      Translation.Finding
+                        ( Tone.Warning, entry.line, message, bolt(6), untranslated = true )
 
-                val named: sci.List[Translation.Finding] =
-                  entry.term.option.toList.flatMap: (term: Text) =>
-                    val slug: Text = Blocks.slug(term)
+                val named: List[Translation.Finding] = optional(entry.term).bind: (term: Text) =>
+                  val slug: Text = Blocks.slug(term)
+                  val shared: Optional[Entry] = earlier.seek(_.term.lay(false)(Blocks.slug(_) == slug))
 
-                    val shared: Option[Entry] =
-                      earlier.find(_.term.lay(false)(Blocks.slug(_) == slug))
+                  val friend: Optional[Text] =
+                    all.seek { (name: Text) => name != entry.name && Blocks.slug(name) == slug }
 
-                    val friend: Option[Text] =
-                      all.find { (name: Text) => name != entry.name && Blocks.slug(name) == slug }
-
-                    if !Glossary.nameable(term) then
+                  if !Glossary.nameable(term) then
+                    finding
+                      ( Tone.Failure, entry.line,
+                        t"`$term` cannot be a glossary term: a term is written in brackets, so " +
+                          t"it cannot hold one.",
+                        7 )
+                  else shared.lay(optional(friend).bind { (name: Text) =>
+                    finding
+                      ( Tone.Warning, entry.line,
+                        t"`$term` is also the name of another term, `$name`, as the glossary " +
+                          t"defines it: in this language `[$term]` is `${entry.name}`.",
+                        8 ) }):
+                    (shared: Entry) =>
                       finding
                         ( Tone.Failure, entry.line,
-                          t"`$term` cannot be a glossary term: a term is written in brackets, " +
-                            t"so it cannot hold one." )
-                    else if shared.isDefined then
-                      finding
-                        ( Tone.Failure, entry.line,
-                          t"`$term` is the term of `${shared.get.name}` already, so `[$term]` " +
-                            t"would not say which is meant." )
-                    else friend.toList.flatMap: (name: Text) =>
-                      finding
-                        ( Tone.Warning, entry.line,
-                          t"`$term` is also the name of another term, `$name`, as the glossary " +
-                            t"defines it: in this language `[$term]` is `${entry.name}`." )
+                          t"`$term` is the term of `${shared.name}` already, so `[$term]` would " +
+                            t"not say which is meant.",
+                          9 )
 
                 // A synonym which cannot be a name, or which is a name in this language already:
                 // this term's, or another's term or synonym.
-                val synonymous: sci.List[Translation.Finding] =
-                  val others: sci.List[Text] =
-                    theirs.filter(_.name != entry.name).flatMap: (other: Entry) =>
-                      other.term.option.toList ++ other.synonyms.stdlib
+                val synonymous: List[Translation.Finding] =
+                  val others: List[Text] =
+                    theirs.filter(_.name != entry.name).bind: (other: Entry) =>
+                      optional(other.term) + other.synonyms
 
-                  entry.synonyms.stdlib.zipWithIndex.flatMap: (synonym: Text, index: Int) =>
+                  entry.synonyms.indexed.bind: (synonym: Text, index: Ordinal) =>
                     val slug: Text = Blocks.slug(synonym)
-                    val own: sci.List[Text] =
-                      entry.term.option.toList ++ entry.synonyms.stdlib.take(index)
+                    val own: List[Text] = optional(entry.term) + entry.synonyms.keep(index.n0)
 
                     if !Glossary.nameable(synonym) then
                       finding
                         ( Tone.Failure, entry.line,
                           t"`$synonym` cannot be a synonym: a name is written in brackets, so it " +
-                            t"cannot hold one." )
-                    else if (own ++ others).exists(Blocks.slug(_) == slug) then
+                            t"cannot hold one.",
+                          10 )
+                    else if (own + others).exists(Blocks.slug(_) == slug) then
                       finding
                         ( Tone.Failure, entry.line,
                           t"`$synonym` is a name in this language already, so `[$synonym]` " +
-                            t"would not say which term is meant." )
-                    else sci.Nil
+                            t"would not say which term is meant.",
+                          11 )
+                    else Nil
 
-                val linked: sci.List[Translation.Finding] =
-                  entry.link.option.toList.flatMap: (link: Text) =>
-                    val local: Boolean = original.link.lay(false)(_.starts(t"/"))
+                val linked: List[Translation.Finding] = optional(entry.link).bind: (link: Text) =>
+                  val local: Boolean = original.link.lay(false)(_.starts(t"/"))
 
-                    if !local || original.link.lay(false)(_ == link) then sci.Nil
-                    else
-                      finding
-                        ( Tone.Warning, entry.line,
-                          t"`${entry.name}` is explained by a page of the site, " +
-                            t"`${original.link.or(t"")}`, which is the same page in every " +
-                            t"language: this `link` is in place of it." )
+                  if !local || original.link.lay(false)(_ == link) then Nil
+                  else
+                    finding
+                      ( Tone.Warning, entry.line,
+                        t"`${entry.name}` is explained by a page of the site, " +
+                          t"`${original.link.or(t"")}`, which is the same page in every " +
+                          t"language: this `link` is in place of it.",
+                        12 )
 
-                unnamed ++ prose ++ named ++ synonymous ++ linked
+                unnamed + prose + named + synonymous + linked
 
-        val diagnostics: List[Block.Diagnostic] =
-          Translation.report(path, text, List.from(absent ++ entered))
+        val diagnostics: List[Block.Diagnostic] = Translation.report(path, text, absent + entered)
 
         diagnostics.map { (diagnostic: Block.Diagnostic) => diagnostic: Block }
 
@@ -351,22 +351,16 @@ object GlossaryTranslations:
   // term nobody has given a `term` one more to translate, and a term the translation lacks
   // one more change to make.
   def progress(text: Text, definitive: Text): Translation.Progress =
-    val theirs: sci.List[Entry] = entries(text).stdlib
+    val theirs: List[Entry] = entries(text)
 
-    entries(definitive).stdlib.foldLeft(Translation.Progress(0, 0, 0, 0, 0)):
+    entries(definitive).fold(Translation.Progress(0, 0, 0, 0, 0)):
       (total: Translation.Progress, entry: Entry) =>
-        theirs.find(_.name == entry.name) match
-          case None =>
-            total.copy(stale = total.stale + 1)
-
-          case Some(found) =>
-            val prose: Translation.Progress =
-              (entry.definition.option, found.definition.option) match
-                case (Some(defined), Some(text)) =>
+        theirs.seek(_.name == entry.name).lay(total.copy(stale = total.stale + 1)):
+          (found: Entry) =>
+            val prose: Translation.Progress = entry.definition.lay(Translation.Progress(0, 0, 0, 0, 0)):
+              (defined: Text) =>
+                found.definition.lay(Translation.Progress(0, 0, 0, 0, 1)): (text: Text) =>
                   Translation.progress(Translation.parse(text), defined)
-
-                case (Some(_), None) => Translation.Progress(0, 0, 0, 0, 1)
-                case _               => Translation.Progress(0, 0, 0, 0, 0)
 
             val named: Int = if found.term.present then 1 else 0
 

@@ -34,6 +34,8 @@ package fuel
 
 import soundness.*
 
+import dysasymptotics.{linearAccess, linearSize}
+
 // A range of a fragment's text named by its first and last few characters — `Mi..es` for a
 // run beginning `Mi` and ending `es` — or by a literal run of text, as Amok named them: short
 // enough to write in a preamble, stable under edits elsewhere in the fragment; refined, when
@@ -64,36 +66,26 @@ case class Selection
   // The offsets of the match: where `start` occurs for the `occurrence`th time (on the line,
   // when one is named), to the end of the first `end` after it; or the literal alone.
   def findIn(code: Text): Optional[(Int, Int)] =
-    val text: String = code.s
+    // The offset of the first `part` at or after `from`.
+    def seek(part: Text, from: Int): Optional[Int] =
+      code.skip(from).offsetOf(part).let(_.n0 + from)
 
     // The region searched: the whole text, or the named line of it.
-    val region: Optional[(Int, Int)] = line.lay((0, text.length)): (line: Int) =>
-      var offset: Int = 0
-      var number: Int = 1
+    val region: Optional[(Int, Int)] = line.lay((0, code.length)): (line: Int) =>
+      val lines: List[Text] = code.cut(t"\n")
 
-      while number < line && offset >= 0 do
-        offset = text.indexOf('\n', offset)
-        if offset >= 0 then offset += 1
-        number += 1
-
-      if line < 1 || offset < 0 then Unset else
-        val stop: Int = text.indexOf('\n', offset)
-        (offset, if stop < 0 then text.length else stop)
+      if line < 1 then Unset else lines.at((line - 1).z).let: (text: Text) =>
+        val offset: Int = lines.keep(line - 1).fold(0)(_ + _.length + 1)
+        (offset, offset + text.length)
 
     region.let: (region: (Int, Int)) =>
-      def nth(remaining: Int, from: Int): Int =
-        val index: Int = text.indexOf(start.s, from)
+      def nth(remaining: Int, from: Int): Optional[Int] =
+        seek(start, from).let: (index: Int) =>
+          if index + start.length > region(1) then Unset
+          else if remaining <= 1 then index
+          else nth(remaining - 1, index + 1)
 
-        if index < 0 || index + start.length > region(1) then -1
-        else if remaining <= 1 then index
-        else nth(remaining - 1, index + 1)
-
-      val from: Int = nth(occurrence, region(0))
-
-      if from < 0 then Unset else end match
-        case end: Text =>
-          val to: Int = text.indexOf(end.s, from + start.length)
-          if to < 0 || to + end.length > region(1) then Unset else (from, to + end.length)
-
-        case _ =>
-          (from, from + start.length)
+      nth(occurrence, region(0)).let: (from: Int) =>
+        end.lay((from, from + start.length): Optional[(Int, Int)]): (end: Text) =>
+          seek(end, from + start.length).let: (to: Int) =>
+            if to + end.length > region(1) then Unset else (from, to + end.length)

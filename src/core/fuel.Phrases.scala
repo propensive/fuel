@@ -51,7 +51,7 @@ object Phrases:
   // The locale Fuel's words are read in, for a language the documents are in: its own, where
   // Fuel has words for it, as `fr` for `fr-CA`; English otherwise.
   def locale(tongue: Optional[Text]): Locale[Spoken] =
-    tongue.let(_.cut(t"-").stdlib.head.lower).or(t"en") match
+    tongue.let(_.cut(t"-").head).let(_.lower).or(t"en") match
       case t"fr" => Locale(fr)
       case t"de" => Locale(de)
       case _     => Locale(en)
@@ -68,7 +68,7 @@ object Phrases:
   // A translated term's entry: the name the original text gives it, as `In English: *library*.`,
   // by the language it is written in where Fuel knows that language's name.
   def original(language: Optional[Text], name: Text): Phrase =
-    language.let(_.cut(t"-").stdlib.head.lower).or(t"") match
+    language.let(_.cut(t"-").head).let(_.lower).or(t"") match
       case t"en" =>
         en(t"In English: *$name*.") | fr(t"En anglais : *$name*.") | de(t"Auf Englisch: *$name*.")
 
@@ -150,16 +150,16 @@ object Phrases:
   def resultsFor(count: Int): Phrase =
     if count == 1 then en(t"1 result for ") | fr(t"1 résultat pour ") | de(t"1 Ergebnis für ")
     else
-      en(t"${count.toString.tt} results for ") | fr(t"${count.toString.tt} résultats pour ") |
-        de(t"${count.toString.tt} Ergebnisse für ")
+      en(t"${count.show} results for ") | fr(t"${count.show} résultats pour ") |
+        de(t"${count.show} Ergebnisse für ")
 
   def firstShown(shown: Int): Phrase =
-    en(t"; the first ${shown.toString.tt} are shown. Narrow the query to see others.") |
+    en(t"; the first ${shown.show} are shown. Narrow the query to see others.") |
       fr
-        ( t" ; les ${shown.toString.tt} premiers sont affichés. Précisez la requête pour voir " +
+        ( t" ; les ${shown.show} premiers sont affichés. Précisez la requête pour voir " +
           t"les autres." ) |
       de
-        ( t"; die ersten ${shown.toString.tt} werden gezeigt. Grenzen Sie die Abfrage ein, um " +
+        ( t"; die ersten ${shown.show} werden gezeigt. Grenzen Sie die Abfrage ein, um " +
           t"weitere zu sehen." )
 
   // What applies to a Scala type beyond its members.

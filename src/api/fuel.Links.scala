@@ -43,6 +43,14 @@ import pyrocosm.{Block, Tone}
 // since it means the network — a URL, which must answer. Each problem is a diagnostic at the
 // line the link is on.
 object Links:
+  // The code of a link's problem, `↯/f.26.3.<variant>`: a place another document lacks (1); a
+  // document a section lacks (2); a place this document lacks (3); a member an API's page lacks
+  // (4); an API's page, a glossary's term or a page which does not exist (5, 6, 7); a sigilled
+  // reference which names nothing (8); and a URL which did not answer in time (9), which is not
+  // one (10), which could not be fetched (11), or which answered with a failure (12). A URL's
+  // own error carries its code.
+  private def bolt(variant: Int): fulminate.Bolt = FuelBolts(FuelBolts.api, FuelBolts.link, variant)
+
   def check(corpus: Corpus, api: Api, glossary: Glossary, external: Boolean = false): List[Block] =
     check(corpus, Apis.of(api), glossary, external)
 
@@ -71,7 +79,7 @@ object Links:
       case Linkage.Target.Url(url)             => url
       case Linkage.Target.Sigil(text)          => text
 
-    def report(tone: Tone, message: Text): Block =
+    def report(tone: Tone, message: Text, code: fulminate.Bolt): Block =
       val style: Block.Note.Style =
         if tone == Tone.Failure then Block.Note.Style.Erroneous else Block.Note.Style.Caution
 
@@ -79,11 +87,9 @@ object Links:
         if doc.text == t"" then Nil else Excerpts.plainAt(doc.text, reference.line, written, style)
 
       val location: Block.Location = Block.Location(doc.path, reference.line)
-      Block.Diagnostic(tone, location, List(Block.paragraph(message)), excerpt)
+      Block.Diagnostic(tone, location, List(Block.paragraph(message)), excerpt, code = code)
 
-    def failure(message: Text): Block = report(Tone.Failure, message)
-
-    def decode(text: Text): Text = Text(java.net.URLDecoder.decode(text.s, "UTF-8").nn)
+    def failure(message: Text, code: fulminate.Bolt): Block = report(Tone.Failure, message, code)
 
     // A document, and a place on it when the link names one.
     def document(section: Text, path: Text, fragment: Optional[Text]): Optional[Block] =
@@ -91,10 +97,10 @@ object Links:
         case target: Doc =>
           fragment.let: (fragment: Text) =>
             if target.anchors.has(fragment) then Unset
-            else failure(t"There is no `#$fragment` on `$path`.")
+            else failure(t"There is no `#$fragment` on `$path`.", bolt(1))
 
         case _ =>
-          failure(t"There is no document `$path` in the section `$section`.")
+          failure(t"There is no document `$path` in the section `$section`.", bolt(2))
 
     reference.target match
       case Linkage.Target.Document(section, path, fragment) =>
@@ -102,57 +108,79 @@ object Links:
 
       case Linkage.Target.Anchor(fragment) =>
         if doc.anchors.has(fragment) then Unset
-        else failure(t"There is no `#$fragment` on this page.")
+        else failure(t"There is no `#$fragment` on this page.", bolt(3))
 
       case Linkage.Target.Site(path, fragment) =>
         if path.starts(t"/doc/") then
-          val rest: List[Text] = path.skip(5).cut(t"/").map(decode)
+          val rest: List[Text] = path.skip(5).cut(t"/").map(_.urlDecode)
           document(rest.head.or(t""), rest.skip(1).join(t"/"), fragment)
         else if path.starts(t"/api/") then
           apis.locate(path.skip(5)) match
             case entity: Api.Entity =>
               fragment.let: (fragment: Text) =>
                 if apis.of(entity).children(entity).exists(_.name == fragment) then Unset
-                else failure(t"`${entity.address}` has no member `$fragment`.")
+                else failure(t"`${entity.address}` has no member `$fragment`.", bolt(4))
 
             case _ =>
-              failure(t"There is no API page at `$path`.")
+              failure(t"There is no API page at `$path`.", bolt(5))
         else if path == t"/glossary" then
           fragment.let: (fragment: Text) =>
             if glossary(fragment).present then Unset
-            else failure(t"The glossary has no term `$fragment`.")
+            else failure(t"The glossary has no term `$fragment`.", bolt(6))
         else
-          failure(t"There is no page at `$path`.")
+          failure(t"There is no page at `$path`.", bolt(7))
 
       case Linkage.Target.Url(url) =>
-        if !external then Unset else fetch(url).let(failure(_))
+        if !external then Unset else fetch(url).let(failure(_, _))
 
       // Without an API there is nothing a sigilled reference could resolve against, so it is
       // a caution: the page is shown, and a compile with the API will say.
       case Linkage.Target.Sigil(reference) =>
         val what: Text = if reference.starts(t"#") then t"type" else t"term"
         val message: Text = t"`$reference` names no $what in scope."
-        if apis.isEmpty then report(Tone.Warning, message) else failure(message)
+        if apis.isEmpty then report(Tone.Warning, message, bolt(8))
+        else failure(message, bolt(8))
 
-  // A URL fetched, with a short patience: what is wrong with it, or nothing. Only HTTP is
-  // fetched; a `mailto:` or another scheme is taken as it is.
-  private def fetch(url: Text): Optional[Text] =
+  // A URL fetched: what is wrong with it, with its code, or nothing. Only HTTP is fetched; a
+  // `mailto:` or another scheme is taken as it is. Telekinesis sets no limit on how long a server
+  // may take to answer, so the fetch runs as a task which is awaited for twenty seconds at most,
+  // and cancelled if it has not answered by then.
+  private def fetch(url: Text): Optional[(Text, fulminate.Bolt)] =
     if !url.starts(t"http://") && !url.starts(t"https://") then Unset else
-      try
-        val client: java.net.http.HttpClient =
-          java.net.http.HttpClient.newBuilder.nn
-          . connectTimeout(java.time.Duration.ofSeconds(10)).nn
-          . followRedirects(java.net.http.HttpClient.Redirect.NORMAL).nn
-          . build.nn
+      import probates.cancelProbate
+      import threads.virtualThreads
 
-        val request: java.net.http.HttpRequest =
-          java.net.http.HttpRequest.newBuilder(java.net.URI.create(url.s)).nn
-          . timeout(java.time.Duration.ofSeconds(20)).nn
-          . GET.nn
-          . build.nn
+      val late: (Text, fulminate.Bolt) = (t"`$url` did not answer within 20 seconds.", bolt(9))
 
-        val status: Int =
-          client.send(request, java.net.http.HttpResponse.BodyHandlers.discarding).nn.statusCode
+      // An `Async.Error` the supervision raises itself is taken, as the await's is, as lateness.
+      recover:
+        case error: Async.Error => late
 
-        if status < 400 then Unset else t"`$url` answered ${status.show}."
-      catch case error: Exception => t"`$url` could not be fetched: ${error.toString.tt}"
+      . protect:
+        supervise:
+          val task = async(answer(url))
+
+          recover:
+            case error: Async.Error =>
+              task.cancel()
+              late
+
+          . protect(task.await(20.0*Second))
+
+  // What is wrong with an HTTP URL, as its answer says, or nothing. Redirects are followed, as
+  // far as telekinesis follows them.
+  private def answer(url: Text): Optional[(Text, fulminate.Bolt)] =
+    import httpBackends.javaNetHttp
+    import internetAccess.online
+    import logging.silentLogging
+
+    recover:
+      case error: Url.Error =>
+        (t"`$url` is not a valid URL.", bolt(10).carrying(error.bolt))
+
+      case error: Connect.Error =>
+        (t"`$url` could not be fetched: ${error.message}", bolt(11).carrying(error.bolt))
+
+    . protect:
+      val code: Int = url.as[HttpUrl].fetch().status.code
+      if code < 400 then Unset else (t"`$url` answered ${code.show}.", bolt(12))

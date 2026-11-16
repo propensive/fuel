@@ -32,9 +32,11 @@
                                                                                                   */
 package fuel
 
-import scala.collection.immutable as sci
-
 import soundness.{Format as _, *}
+
+import soundness.collationComparable
+import soundness.collations.codepointCollation
+import soundness.sortingAlgorithms.timsort
 
 import stenography.{Designator, Syntax}
 
@@ -256,44 +258,39 @@ object Api:
       val mark: Text = if parent.isType then t"~" else t"."
       t"${path(parent.parent, parent.name)}$mark${encode(name)}"
 
-  private def encode(name: Text): Text = Text(java.net.URLEncoder.encode(name.s, "UTF-8").nn)
-  private def decode(name: Text): Text = Text(java.net.URLDecoder.decode(name.s, "UTF-8").nn)
+  private def encode(name: Text): Text = name.urlEncode
 
-  // The key a path names, back from its separators; each name's form is its separator's.
+  // The key a path names, back from its separators; each name's form is its separator's: a
+  // name before `~` is a type's, and one before `.`, or at the end, a term's.
   def unpath(path: Text): Locator =
-    def recur(index: Int, start: Int, designator: Optional[Locator]): Locator =
-      def next: Text = decode(path.s.substring(start, index).nn.tt)
-      def extend(isType: Boolean): Locator = Locator(designator, next, isType)
+    def recur(rest: Text, designator: Optional[Locator]): Locator =
+      val separator: Optional[Ordinal] = rest.where { (char: Char) => char == '.' || char == '~' }
 
-      if index >= path.s.length then extend(false)
-      else path.s.charAt(index) match
-        case '.'  => recur(index + 1, index + 1, extend(false))
-        case '~'  => recur(index + 1, index + 1, extend(true))
-        case _    => recur(index + 1, start, designator)
+      separator.lay(Locator(designator, rest.urlDecode, false)): (index: Ordinal) =>
+        val name: Text = rest.keep(index.n0).urlDecode
+        val isType: Boolean = rest.skip(index.n0).starts(t"~")
+        recur(rest.skip(index.n0 + 1), Locator(designator, name, isType))
 
-    recur(0, 0, Unset)
+    recur(path, Unset)
 
-  def empty: Api = Api(sci.Map())
+  def empty: Api = Api(Map())
 
-// The entities of one format, by key (a standard map, which the inspection builds and the
-// overlay amends); `roots` are the packages with no parent. The `format` is what the entities
-// are declared in, which says how they are drawn and what their pages show.
-case class Api(entities: sci.Map[Text, Api.Entity], format: Format = ScalaFormat):
-  def apply(key: Text): Optional[Api.Entity] = entities.get(key) match
-    case Some(entity) => entity
-    case _            => Unset
+// The entities of one format, by key (which the inspection builds and the overlay amends);
+// `roots` are the packages with no parent. The `format` is what the entities are declared in,
+// which says how they are drawn and what their pages show.
+case class Api(entities: Map[Text, Api.Entity], format: Format = ScalaFormat):
+  def apply(key: Text): Optional[Api.Entity] = entities.at(key)
 
   // A locator as this format has it: one whose top-level names have one form names the term.
   def normal(locator: Locator): Locator = if format.typedRoots then locator else locator.rooted
 
-  def has(designator: Locator): Boolean = entities.contains(Api.key(normal(designator)))
+  def has(designator: Locator): Boolean = entities.at(Api.key(normal(designator))).present
   def locate(path: Text): Optional[Api.Entity] = apply(Api.key(normal(Api.unpath(path))))
 
   def children(entity: Api.Entity): List[Api.Entity] =
     entity.members.bind: (key: Text) => apply(key).let(List(_)).or(Nil)
 
-  def roots: List[Api.Entity] =
-    List.from(entities.values.filter(_.parent.absent).toList.sortBy(_.name.s))
+  def roots: List[Api.Entity] = entities.values.filter(_.parent.absent).order(_.name)
 
   // The entity a designator names, if it exists as a term or a type member of its parent: a
   // designator written with `.` may name a type (`gossamer.Text`), so both are tried.
@@ -335,11 +332,8 @@ case class Api(entities: sci.Map[Text, Api.Entity], format: Format = ScalaFormat
 
   // A member a type inherits by its name: the first of its bases, nearest first, to declare one.
   def inherited(entity: Api.Entity, name: Text): Optional[Api.Entity] =
-    def first(bases: List[Text]): Optional[Api.Entity] = bases match
-      case base :: rest => apply(t"$base#$name").or(first(rest))
-      case _            => Unset
-
-    first(entity.bases)
+    entity.bases.seek { (base: Text) => apply(t"$base#$name").present }.let: (base: Text) =>
+      apply(t"$base#$name")
 
   // Whether an extension reaches its receiver without an import: from the companion of the
   // type or of a base of it, or from an object enclosing the type, which is a prefix of it and
@@ -351,8 +345,8 @@ case class Api(entities: sci.Map[Text, Api.Entity], format: Format = ScalaFormat
 
   // The keys of the extensions some type reaches without an import, which a bare reference to
   // an extension may name.
-  lazy val unimported: sci.Set[Text] =
-    entities.values.flatMap(_.extensions.stdlib.filter(implicitly).map(_.key)).toSet
+  lazy val unimported: Set[Text] =
+    entities.values.bind(_.extensions.filter(implicitly).map(_.key)).to[Set]
 
   // The entities which forward to each entity, by the key of what they forward to: the
   // packages and objects a name may be reached through besides its own. A forwarder is an
@@ -371,27 +365,22 @@ case class Api(entities: sci.Map[Text, Api.Entity], format: Format = ScalaFormat
 
           case _ => Unset
 
-  lazy val exporters: sci.Map[Text, List[Api.Entity]] =
-    val forwarders = entities.values.toList.filter(forwards(_).present)
-
-    forwarders.groupBy { (e: Api.Entity) => forwards(e).or(t"") }.map: (key, group) =>
-      (key, List.from(group))
+  lazy val exporters: Map[Text, List[Api.Entity]] =
+    entities.values.filter(forwards(_).present).group { (e: Api.Entity) => forwards(e).or(t"") }
 
   // Every entity of a simple name, for a reference to be resolved among and for search.
-  lazy val byName: sci.Map[Text, List[Api.Entity]] =
-    entities.values.toList.groupBy(_.name).map: (name, group) =>
-      val sorted: List[Api.Entity] = List.from(group.sortBy(_.key.s))
-      (name, sorted)
+  lazy val byName: Map[Text, List[Api.Entity]] =
+    entities.values.group(_.name).map { (group: List[Api.Entity]) => group.order(_.key) }
 
   // Every entity with a keyword, by the keyword in lower case: what a search for the keyword
   // finds, besides the entities of that name.
-  lazy val byKeyword: sci.Map[Text, List[Api.Entity]] =
-    val pairs: scala.List[(Text, Api.Entity)] = entities.values.toList.flatMap: (e: Api.Entity) =>
-      e.doc.lay(scala.Nil: scala.List[(Text, Api.Entity)]): (doc: Api.Entry) =>
-        doc.keywords.stdlib.toList.map { (keyword: Text) => (keyword.lower, e) }
+  lazy val byKeyword: Map[Text, List[Api.Entity]] =
+    val pairs: List[(Text, Api.Entity)] = entities.values.bind: (e: Api.Entity) =>
+      e.doc.lay(List[(Text, Api.Entity)]()): (doc: Api.Entry) =>
+        doc.keywords.map { (keyword: Text) => (keyword.lower, e) }
 
-    pairs.groupBy(_(0)).map: (keyword, group) =>
-      (keyword, List.from(group.map(_(1)).sortBy(_.key.s)))
+    pairs.group(_(0)).map: (group: List[(Text, Api.Entity)]) =>
+      group.map(_(1)).order(_.key)
 
   // A shape with every alias it names expanded to what the alias stands for, its parameters
   // substituted, to a depth which ends a cycle; an export forwarder is followed to its target.
@@ -410,11 +399,10 @@ case class Api(entities: sci.Map[Text, Api.Entity], format: Format = ScalaFormat
       then expand(Api.Shape.Named(exported.or(key), expanded), depth - 1)
       else alias.lay(Api.Shape.Named(key, expanded)): (d: Api.Declaration) =>
         if depth <= 0 then Api.Shape.Other else
-          val binding: sci.Map[Text, Api.Shape] =
-            sci.Map.from(d.aliasParams.stdlib.zip(expanded.stdlib))
+          val binding: Map[Text, Api.Shape] = d.aliasParams.zip(expanded).to[Map]
 
           def over(shape: Api.Shape): Api.Shape = shape match
-            case Api.Shape.Param(name, _)   => binding.getOrElse(name, shape)
+            case Api.Shape.Param(name, _)   => binding.at(name).or(shape)
             case Api.Shape.Named(k, as)     => Api.Shape.Named(k, as.map(over))
             case other                      => other
 
@@ -427,17 +415,15 @@ case class Api(entities: sci.Map[Text, Api.Entity], format: Format = ScalaFormat
   lazy val lattice: Lattice = Lattice.build(this)
   lazy val search: Search = Search.build(this)
 
-  def add(entity: Api.Entity): Api = copy(entities = entities.updated(entity.key, entity))
+  def add(entity: Api.Entity): Api = copy(entities = entities.define(entity.key, entity))
 
   // Two models as one: an entity in both keeps the project's own declaration, and its members
   // are those of either; the members are relinked afterwards.
   def merge(other: Api): Api =
-    val combined: sci.Map[Text, Api.Entity] = other.entities.foldLeft(entities): (acc, pair) =>
-      val (key, entity) = pair
-
-      acc.get(key) match
-        case Some(existing) =>
-          val merged: Api.Entity =
+    val combined: Map[Text, Api.Entity] =
+      other.entities.keys.to[List].fold(entities): (acc: Map[Text, Api.Entity], key: Text) =>
+        other.entities.at(key).lay(acc): (entity: Api.Entity) =>
+          val merged: Api.Entity = acc.at(key).lay(entity): (existing: Api.Entity) =>
             if entity.own && !existing.own then entity.copy(doc = existing.doc.or(entity.doc))
             else
               existing.copy
@@ -445,23 +431,24 @@ case class Api(entities: sci.Map[Text, Api.Entity], format: Format = ScalaFormat
                   template   = existing.template.or(entity.template),
                   overloads  = existing.overloads + entity.overloads )
 
-          acc.updated(key, merged)
-
-        case None => acc.updated(key, entity)
+          acc.define(key, merged)
 
     copy(entities = combined).relinked
 
   // Every entity's `members`, from the parents its children name, sorted by name.
   def relinked: Api =
-    def parented(entity: Api.Entity): scala.List[(Text, Api.Entity)] =
-      entity.parent.let { (p: Locator) => scala.List((Api.key(p), entity)) }.or(scala.Nil)
+    def parented(entity: Api.Entity): List[(Text, Api.Entity)] =
+      entity.parent.lay(List[(Text, Api.Entity)]()): (p: Locator) =>
+        List((Api.key(p), entity))
 
-    val children: sci.Map[Text, scala.List[Api.Entity]] =
-      entities.values.toList.flatMap(parented).groupMap(_(0))(_(1))
+    val children: Map[Text, List[(Text, Api.Entity)]] = entities.values.bind(parented).group(_(0))
 
-    val linked: sci.Map[Text, Api.Entity] = entities.map: (key, entity) =>
-      val known: scala.List[Api.Entity] = children.getOrElse(key, scala.Nil)
-      (key, entity.copy(members = List.from(known.sortBy(_.name.s).map(_.key))))
+    // Each entity is replaced where it is, so the map keeps its order.
+    val linked: Map[Text, Api.Entity] =
+      entities.keys.to[List].fold(entities): (acc: Map[Text, Api.Entity], key: Text) =>
+        acc.at(key).lay(acc): (entity: Api.Entity) =>
+          val known: List[Api.Entity] = children.at(key).or(Nil).map(_(1))
+          acc.define(key, entity.copy(members = known.order(_.name).map(_.key)))
 
     copy(entities = linked)
 

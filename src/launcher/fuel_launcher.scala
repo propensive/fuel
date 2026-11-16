@@ -35,6 +35,7 @@ package fuel
 import soundness.{Client as _, *}
 
 // The invocation point, alone in its own build module; see build.mill for why the `launcher`
-// depends on `fuel-client` as a published coordinate.
+// depends on `fuel-client` as a published coordinate. `main` has the signature the JVM requires
+// of an entry point, an array of strings.
 object fuel uses parasite.threads, surveillance.Watcher:
   def main(args: Array[String]): Unit = externalize(Client.run())

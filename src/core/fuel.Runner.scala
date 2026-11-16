@@ -36,7 +36,7 @@ import java.io as ji
 
 import soundness.*
 
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 import pyrocosm.{Block, Diversions}
 import yossarian.*
 
@@ -47,6 +47,10 @@ import yossarian.*
 object Runner:
   case class Outcome(text: Text, error: Optional[Throwable])
 
+  // Soundness has no means to capture the standard streams, Java's and Scala's `Console`,
+  // interleaved into one text (soundness#2503), to start a thread with a stack of a given size,
+  // or to keep whatever a fragment throws — an `Error` as well as an `Exception` — as a value;
+  // so this is done with the JDK's own, here alone.
   def run(body: => Unit): Outcome =
     val sink: ji.ByteArrayOutputStream = ji.ByteArrayOutputStream()
     val stream: ji.PrintStream = ji.PrintStream(sink, true, "UTF-8")
@@ -81,15 +85,14 @@ object Runner:
 
     if !raw.contains(t"\u001b") && !raw.contains(t"\r") then (raw, none) else
       val lines: List[Text] = raw.cut(t"\n")
-      val count: Int = if raw.s.endsWith("\n") then lines.size - 1 else lines.size
+      val count: Int = if raw.ends(t"\n") then lines.size - 1 else lines.size
       val width: Int = lines.fold(1): (longest: Int, line: Text) => longest.max(line.length)
 
       safely(Pty(width + 1, count + 1).consume(raw)) match
         case pty: Pty => read(pty.buffer, count)
         case _        => (stripped(raw), none)
 
-  private def stripped(raw: Text): Text =
-    raw.s.replaceAll("\u001b\\[[0-9;?]*[a-zA-Z]", "").nn.replaceAll("\u001b.", "").nn.tt
+  private def stripped(raw: Text): Text = raw.sub(r"\e\[[0-9;?]*[a-zA-Z]", t"").sub(r"\e.", t"")
 
   // The first `count` rows of a screen, each trimmed of the blank cells after its last and
   // ended by a newline, as runs of one style; the runs are left out when none styles anything.

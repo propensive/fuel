@@ -32,9 +32,9 @@
                                                                                                   */
 package fuel
 
-import scala.collection.immutable as sci
+import soundness.{Query as _, *}
 
-import soundness.{Format as _, Query as _, *}
+import dysasymptotics.linearSize
 
 // The APIs of a project, one for each format it documents, Scala's first: each keeps its own
 // entities by their own keys, and its own search, and an entity is named among them all by its
@@ -52,26 +52,26 @@ case class Apis(all: List[Api]):
     case _          => Api.empty
 
   def others: List[Api] = all.filter(_.format != primary.format)
-  def isEmpty: Boolean = !all.exists(!_.entities.isEmpty)
+  def isEmpty: Boolean = all.all(_.entities.nil)
 
   def apply(format: Text): Optional[Api] = all.seek(_.format.id == format)
   def of(entity: Api.Entity): Api = apply(entity.format).or(primary)
 
   // Every format's own words of a search, together.
-  def vocabulary: sci.Map[Text, Query.Word] =
-    all.stdlib.foldLeft(sci.Map[Text, Query.Word]()): (words, api) =>
-      words ++ api.format.vocabulary
+  def vocabulary: Map[Text, Query.Word] =
+    all.fold(Map[Text, Query.Word]()): (words: Map[Text, Query.Word], api: Api) =>
+      words + api.format.vocabulary
 
   // A search of every format's API, Scala's hits first: each format answers for itself, and
   // what one has to say of the query is kept only where it found something, or — when none
   // did — is Scala's.
   def search(query: Query, glossary: Glossary = Glossary.none): Search.Outcome =
     val outcomes: List[Search.Outcome] =
-      all.filter(!_.entities.isEmpty).map(_.search(query, glossary))
+      all.filter(!_.entities.nil).map(_.search(query, glossary))
 
     val found: List[Search.Outcome] = outcomes.filter(!_.hits.nil)
     val saying: List[Search.Outcome] =
-      if found.nil then List.from(outcomes.stdlib.take(1)) else found
+      if found.nil then outcomes.keep(1) else found
 
     Search.Outcome
       ( outcomes.bind(_.hits),

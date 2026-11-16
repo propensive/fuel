@@ -34,10 +34,10 @@ package fuel
 
 // Excluded from the umbrella: `Language` and `Token`, which are Pyrocosm's here (the model's own,
 // which `Block.Code` carries), not cosmopolite's and harlequin's.
-import soundness.{Language as _, Token as _, *}
+import soundness.{Language as _, *}
 
-import dysasymptotics.{linearAccess, linearSize}
-import pyrocosm.{Block, Digests, Inline, Language, Token, Tone}
+import dysasymptotics.linearSize
+import pyrocosm.{Block, Digests, Filing, Inline, Language, Token, Tone}
 
 object Embedding:
   // A Scala fence, highlighted by the checker — typechecked, in a compile with a classpath —
@@ -90,10 +90,13 @@ object Embedding:
     private var history: List[Joined] = Nil
 
     // Where a fence with a `path` writes its content: a directory of this document's own, made
-    // when first needed, which a `run` fragment's relative paths resolve against, through the
-    // `WorkingDirectory` its unit is given.
+    // as the first file is written into it, which a `run` fragment's relative paths resolve
+    // against, through the `WorkingDirectory` its unit is given.
     private lazy val samples: Text =
-      Text(java.nio.file.Files.createTempDirectory("fuel-samples").nn.toString)
+      import temporaryDirectories.javaBaseTemporaryDirectory
+      import strategies.throwUnsafely
+
+      (temporaryDirectory[Path on Linux] / t"fuel-samples-${Uuid().show}").encode
 
     private var sampled: Boolean = false
 
@@ -105,15 +108,15 @@ object Embedding:
 
       if escapes then
         val message: Text = t"A `path` is a file within the document's own directory, as `data/config.json`; `$relative` is not."
-        report(Block.Location(path, line), message)
+        report(Block.Location(path, line), message, bolt(FuelBolts.sample, 1))
       else
-        try
-          val file: java.nio.file.Path = java.nio.file.Path.of(samples.s, relative.s).nn
-          java.nio.file.Files.createDirectories(file.getParent.nn)
-          java.nio.file.Files.writeString(file, content.s)
-          sampled = true
-        catch case error: Exception =>
-          report(Block.Location(path, line), t"The file `$relative` could not be written: ${error.toString.tt}")
+        val written: Boolean =
+          safely(t"$samples/$relative".as[Path on Linux]).lay(false)(Filing.replace(_, content))
+
+        if written then sampled = true
+        else
+          val message: Text = t"The file `$relative` could not be written."
+          report(Block.Location(path, line), message, bolt(FuelBolts.sample, 2))
 
     // The given a `run` fragment resolves a relative path against, once a sample has been
     // written: written in full, since a fragment's own imports are its own to say.
@@ -164,8 +167,21 @@ object Embedding:
     private def fragment(name: Text): Text =
       fragments.seek(_(0) == name).lay(t""): (entry: (Text, Text)) => entry(1)
 
-    private def report(location: Block.Location, text: Text): Unit =
-      problems0 = Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(text))) :: problems0
+    private def report(location: Block.Location, text: Text, code: fulminate.Bolt): Unit =
+      val paragraphs: List[Block] = List(Block.paragraph(text))
+      problems0 = Block.Diagnostic(Tone.Failure, location, paragraphs, code = code) :: problems0
+
+    // The code of a fence's problem, `↯/f.25.<error>.<variant>`: of the sample file it writes
+    // (`FuelBolts.sample`), of the fixture compiled before it (`fixture`), of a frame of its
+    // animation (`frame`), of its run (`run`), or of the fragment itself (`fragment`).
+    private def bolt(error: Int, variant: Int): fulminate.Bolt =
+      FuelBolts(FuelBolts.core, error, variant)
+
+    // A message of the compiler's, without the code Proscala begins it with under
+    // `-Zbolt-codes`, and the code `base`, carrying that code where it has one.
+    private def compiled(message: Text, base: fulminate.Bolt): (Text, fulminate.Bolt) =
+      val (code, length) = fulminate.Bolt.prefix(message)
+      (message.skip(length), base.carrying(code))
 
     // What is compiled around a fragment: the text before it, whose length shifts every
     // diagnostic and whose lines are dropped from the rendering; the text after it; and the
@@ -189,8 +205,7 @@ object Embedding:
     // characters, scope it: two documents of the same name in different sections are apart.
     private val scope: Text =
       val qualified: Text = section.lay(path) { (section: Text) => t"$section/$path" }
-      val pattern = java.util.regex.Pattern.compile("[^A-Za-z0-9]").nn
-      Text(pattern.matcher(qualified.s).nn.replaceAll("_").nn)
+      qualified.sub(r"[^A-Za-z0-9]", t"_")
 
     private def objectName(index: Int): Text = t"fuel_${scope}_${index.show}"
 
@@ -303,16 +318,18 @@ object Embedding:
           then history = List(Joined.Object(objectName(0), defined(text), imported(text)))
           else if errors.nil then
             val message: Text = t"The fixture could not be entered into the session."
-            report(Block.Location(fixturePath), message)
+            report(Block.Location(fixturePath), message, bolt(FuelBolts.fixture, 1))
           else
             errors.each: (diagnostic: harlequin.Diagnostic) =>
               val from: Int = (diagnostic.span.offset.let(_.n0).or(0) - framed.shift).max(0)
               val note: Block.Note = Notes.of(text, from, from, Block.Note.Style.Erroneous)
-              report(Block.Location(fixturePath, note.line + 1, note.start + 1), diagnostic.message)
+              val location = Block.Location(fixturePath, note.line + 1, note.start + 1)
+              val (message, code) = compiled(diagnostic.message, bolt(FuelBolts.fixture, 2))
+              report(location, message, code)
 
         case error: Throwable =>
           val message: Text = t"The fixture could not be compiled: ${error.toString.tt}"
-          report(Block.Location(fixturePath), message)
+          report(Block.Location(fixturePath), message, bolt(FuelBolts.fixture, 3))
 
         case _ =>
           ()
@@ -340,15 +357,14 @@ object Embedding:
 
     // The lines of a fragment marked as not compiling, which are compiled alone, each in its
     // place, and must fail.
-    private val negative: java.util.regex.Pattern =
-      val pattern: String =
-        """//\s*(?:does\s+not|doesn't|will\s+not|won't|cannot|can't)\s+compile\b"""
-
-      java.util.regex.Pattern.compile(pattern, java.util.regex.Pattern.CASE_INSENSITIVE).nn
+    // A line is marked, in any case, by a comment which says it does not compile.
+    private def negative(line: Text): Boolean =
+      val comment = r"//\s*(does\s+not|doesn't|will\s+not|won't|cannot|can't)\s+compile\b"
+      comment.seek(line.lower).present
 
     private def negatives(code: Text): List[Int] =
       val marked: List[(Text, Ordinal)] = code.cut(t"\n").indexed.filter:
-        (line: Text, index: Ordinal) => negative.matcher(line.s).nn.find()
+        (line: Text, index: Ordinal) => negative(line)
 
       marked.map(_(1).n0)
 
@@ -434,16 +450,22 @@ object Embedding:
       val framed: Framing = framing(preamble, context, wrapper)
 
       // The preamble's frames which have code: one without its `code` child is a problem
-      // at its line in the file — the nth `frame` line of the preamble, since a TEL node
-      // does not know its line — and is dropped.
-      val frameLines: List[Int] = header.lay(Nil): (text: Text) =>
-        text.cut(t"\n").indexed.filter(_(0).starts(t"frame")).map(_(1).n0)
+      // at its line in the file — the line of the preamble's nth `frame`, which begins on the
+      // file's line `fence + 2` — and is dropped.
+      val positioned: Optional[Tel] = header.let: (text: Text) =>
+        import codepages.utf8Codepage
+        import parsing.trackPositions
+        safely(text.read[Tel])
 
       val described: List[Preamble.Frame] =
         preamble.frames.indexed.bind: (frame: Preamble.Frame, index: Ordinal) =>
           if frame.code.present then List(frame) else
-            val location = Block.Location(path, fence + 2 + frameLines.at(index).or(0))
-            report(location, t"Frame ${(index.n0 + 1).toString.tt} has no `code`.")
+            val line: Int =
+              positioned.lay(1)(Compounds.line(_, List(t"frame", index.n0.show)))
+
+            val location = Block.Location(path, fence + 1 + line)
+            val message: Text = t"Frame ${(index.n0 + 1).show} has no `code`."
+            report(location, message, bolt(FuelBolts.frame, 1))
             Nil
 
       // An animated fence: its frames, then the code after `##` as the last if there is any.
@@ -458,13 +480,16 @@ object Embedding:
         val line: Int = header.lay(fence + 1): (text: Text) =>
           fence + 2 + text.cut(t"\n").indexed.seek(_(0).trim == t"run").let(_(1).n0).or(0)
 
-        val reason: Optional[Text] =
-          if mode == Preamble.Mode.Parse then t"A fragment which is only parsed cannot be run."
-          else if context == harlequin.Scala.Context.Type then t"A type cannot be run."
-          else if !frames.nil then t"An animated fragment cannot be run."
+        val reason: Optional[(Text, Int)] =
+          if mode == Preamble.Mode.Parse
+          then (t"A fragment which is only parsed cannot be run.", 1)
+          else if context == harlequin.Scala.Context.Type then (t"A type cannot be run.", 2)
+          else if !frames.nil then (t"An animated fragment cannot be run.", 3)
           else Unset
 
-        reason.let: (text: Text) => report(Block.Location(path, line), text)
+        reason.let: (text: Text, variant: Int) =>
+          report(Block.Location(path, line), text, bolt(FuelBolts.run, variant))
+
         reason.absent
       }
 
@@ -472,7 +497,8 @@ object Embedding:
       def withCode(frames: List[Preamble.Frame], label: Text): List[Preamble.Frame] =
         frames.indexed.bind: (frame: Preamble.Frame, index: Ordinal) =>
           if frame.code.present then List(frame) else
-            report(Block.Location(path, fence + 1), t"Frame ${(index.n0 + 1).show} of `$label` has no `code`.")
+            val message: Text = t"Frame ${(index.n0 + 1).show} of `$label` has no `code`."
+            report(Block.Location(path, fence + 1), message, bolt(FuelBolts.frame, 2))
             Nil
 
       // One version of the fragment: animated when it has frames, compiled when Scala, else
@@ -514,7 +540,7 @@ object Embedding:
               val message: Text =
                 t"With `alternative`s, every version of the code is in one; the code after `##` is not shown."
 
-              report(Block.Location(path, fence + 1), message)
+              report(Block.Location(path, fence + 1), message, bolt(FuelBolts.fragment, 1))
 
             def of(alternative: Preamble.Alternative, joining: Boolean, run: Boolean, id: Text)
             :   List[Block] =
@@ -529,32 +555,35 @@ object Embedding:
                   run,
                   id )
 
-            val all: scala.List[Preamble.Alternative] = preamble.alternatives.stdlib.toList
+            val all: List[Preamble.Alternative] = preamble.alternatives
 
             // The others are compiled before the fence's own, which joins the session: each is
             // compiled as the object the fence's own is entered as, so one compiled after the
             // join would displace it, and every later fence would find a stale object.
-            val others: scala.List[(Preamble.Alternative, List[Block])] =
-              all.zipWithIndex.drop(1).map: (alternative, index) =>
-                (alternative, of(alternative, false, false, t"$id-${(index + 1).show}"))
+            val others: List[(Preamble.Alternative, List[Block])] =
+              all.indexed.skip(1).map: (alternative: Preamble.Alternative, index: Ordinal) =>
+                (alternative, of(alternative, false, false, t"$id-${(index.n0 + 1).show}"))
 
-            val own: scala.List[(Preamble.Alternative, List[Block])] =
-              all.take(1).map: alternative =>
+            val own: List[(Preamble.Alternative, List[Block])] =
+              all.keep(1).map: (alternative: Preamble.Alternative) =>
                 (alternative, of(alternative, true, runnable, id))
 
-            val versions: scala.List[(Preamble.Alternative, List[Block])] = own ++ others
+            val versions: List[(Preamble.Alternative, List[Block])] = own + others
 
-            val alternatives: List[Block.Alternative] = List.from:
-              versions.flatMap: (alternative, blocks) =>
+            val alternatives: List[Block.Alternative] =
+              versions.bind: (alternative: Preamble.Alternative, blocks: List[Block]) =>
                 blocks.head match
                   case code: Block.Code =>
                     val label: List[Inline] = Blocks.inline(alternative.label, linker)
-                    scala.List(Block.Alternative(label, code.language, code.lines, code.notes, code.animation))
+
+                    List:
+                      Block.Alternative
+                        ( label, code.language, code.lines, code.notes, code.animation )
 
                   case _ =>
-                    scala.Nil
+                    Nil
 
-            versions.headOption.map(_(1)).getOrElse(Nil) match
+            versions.head.lay(List[Block]())(_(1)) match
               case (code: Block.Code) :: rest => code.copy(alternatives = alternatives) :: rest
               case other                      => other
 
@@ -604,13 +633,12 @@ object Embedding:
 
       language match
         case t"scala" =>
-          try
+          caught:
             if checked then checker.check(framing.unit(code), mode, framing.context)
             else Checker.tokenized.check(code, mode, framing.context)
-          catch case error: Throwable => error
 
         case t"java" =>
-          try harlequin.Java.highlight(code) catch case error: Throwable => error
+          caught(harlequin.Java.highlight(code))
 
         case _ =>
           Unset
@@ -648,7 +676,7 @@ object Embedding:
           val code: Text = frame.code.or(t"")
           val own: Text = frame.language.or(language)
           val scala: Boolean = own == t"scala"
-          val number: Text = (index.n0 + 1).toString.tt
+          val number: Text = (index.n0 + 1).show
 
           val highlighted: Optional[SourceCode | Throwable] =
             highlight(own, code, framing, mode, checked && scala)
@@ -656,14 +684,15 @@ object Embedding:
           val raw: List[Block.Line] = highlighted match
             case error: Throwable =>
               val message: Text = t"Frame $number could not be highlighted: ${error.toString.tt}"
-              report(Block.Location(path, start), message)
+              report(Block.Location(path, start), message, bolt(FuelBolts.frame, 3))
               lines(code)
 
             case source: SourceCode =>
               if checked && scala && preamble.errors == Preamble.Errors.Fail then
                 source.diagnostics.each: (diagnostic: harlequin.Diagnostic) =>
                   if diagnostic.importance == harlequin.Diagnostic.Importance.Error then
-                    report(Block.Location(path, start), t"Frame $number: ${diagnostic.message}")
+                    val (message, code) = compiled(diagnostic.message, bolt(FuelBolts.frame, 4))
+                    report(Block.Location(path, start), t"Frame $number: $message", code)
 
               framing.own(linked(source), code.cut(t"\n").size)
 
@@ -737,7 +766,7 @@ object Embedding:
       attempt match
         case error: Throwable =>
           val message: Text = t"The fragment could not be highlighted: ${error.toString.tt}"
-          report(Block.Location(path, start), message)
+          report(Block.Location(path, start), message, bolt(FuelBolts.fragment, 2))
           List(Block.Code(Language.Scala, lines(code), Nil, start, Unset, id))
 
         case source: SourceCode =>
@@ -781,7 +810,8 @@ object Embedding:
           checker.enter(t"$name.scala", unit)
 
       if !entered then
-        report(Block.Location(path, start), t"The fragment could not be compiled to be run.")
+        val message: Text = t"The fragment could not be compiled to be run."
+        report(Block.Location(path, start), message, bolt(FuelBolts.run, 4))
         Nil
       else
         val outcome: Runner.Outcome = Runner.run(checker.run(t"$name$$"))
@@ -795,14 +825,15 @@ object Embedding:
           val location: Block.Location = Block.Location(path, start)
 
           val diagnostic: Block =
-            Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(message)))
+            val code: fulminate.Bolt = bolt(FuelBolts.run, 5)
+            Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(message)), code = code)
 
           if preamble.errors == Preamble.Errors.Fail then problems0 = diagnostic :: problems0
           List(diagnostic)
 
         if preamble.errors == Preamble.Errors.Show && outcome.error.absent then
           val message: Text = t"This fragment is marked `errors show`, but it ran without error."
-          report(Block.Location(path, start), message)
+          report(Block.Location(path, start), message, bolt(FuelBolts.run, 6))
 
         output + failure
 
@@ -819,7 +850,8 @@ object Embedding:
       val location = Block.Location(path, start + note.line, note.start + 1)
       val excerpt: Block.Code = Block.Code.excerpt(Language.Scala, lines, List(note))
       val numbered: Block.Code = excerpt.copy(start = excerpt.start.let(_ + start - 1))
-      Block.Diagnostic(tone, location, List(Block.paragraph(message)), List(numbered))
+      val (text, code) = compiled(message, bolt(FuelBolts.fragment, 4))
+      Block.Diagnostic(tone, location, List(Block.paragraph(text)), List(numbered), code = code)
 
     // One line marked as not compiling, compiled in its place: it must fail, and its first
     // error is a note on it, in the block whose line is now taken from that run, so that its
@@ -853,7 +885,7 @@ object Embedding:
 
           if error.absent then
             val message: Text = t"This line is marked `// does not compile`, but it compiled."
-            report(Block.Location(path, start + index), message)
+            report(Block.Location(path, start + index), message, bolt(FuelBolts.fragment, 3))
 
           val none: List[Block] = Nil
 
@@ -936,7 +968,7 @@ object Embedding:
         case Preamble.Errors.Show =>
           if checked && errors.nil && !preamble.run then
             val message: Text = t"This fragment is marked `errors show`, but it compiled."
-            report(Block.Location(path, start), message)
+            report(Block.Location(path, start), message, bolt(FuelBolts.fragment, 5))
 
         case _ =>
           ()
@@ -955,27 +987,34 @@ object Embedding:
   // The top-level definitions of a fragment, by their declarations — what a later fragment
   // defining one of them again hides from its import, and what a reference in prose names —
   // each a type (a class, trait, enum or type) or a term.
-  private val declaration: java.util.regex.Pattern =
-    val modifiers: String =
-      """(?:final|lazy|private|protected|inline|transparent|opaque|infix|open|case|abstract|""" +
-        """sealed|override|implicit)"""
+  private val modifiers: Set[Text] =
+    Set
+      ( t"final", t"lazy", t"private", t"protected", t"inline", t"transparent", t"opaque",
+        t"infix", t"open", t"case", t"abstract", t"sealed", t"override", t"implicit" )
 
-    val keywords: String = """(val|var|def|object|class|trait|type|enum|given)"""
-    val name: String = """(?:\[[^\]]*\]\s*)?([A-Za-z_][\w$]*|`[^`]+`)"""
-    java.util.regex.Pattern.compile(s"^(?:$modifiers\\s+)*$keywords\\s+$name").nn
+  // A line without the modifiers it begins with.
+  private def unmodified(line: Text): Text = line match
+    case r"$word([a-z]+)\s+$rest([\s\S]*)" if modifiers.has(word) => unmodified(rest)
+    case _                                                     => line
 
+  // The name a declaration's text after its keyword begins with, perhaps after a type's
+  // parameters (an extension's, say): plain or in backticks.
+  private def named(text: Text): Optional[Text] = text match
+    case r"(\[[^\]]*\]\s*)?$name([A-Za-z_][\w\x24]*|`[^`]+`)[\s\S]*" => name
+    case _                                                         => Unset
+
+  // A declaration is its modifiers, its keyword and its name; whatever follows is not read.
   def definitions(code: Text): List[(Text, Linker.Kind)] =
-    code.cut(t"\n").bind: (line: Text) =>
-      val matcher = declaration.matcher(line.s).nn
-
-      if !matcher.find() then Nil else
-        val keyword: String = matcher.group(1).nn
-
+    code.cut(t"\n").map(unmodified).bind:
+      case r"$keyword(val|var|def|object|class|trait|type|enum|given)\s+$rest([\s\S]*)" =>
         val kind: Linker.Kind = keyword match
-          case "class" | "trait" | "type" | "enum" => Linker.Kind.Type
-          case _                                   => Linker.Kind.Term
+          case t"class" | t"trait" | t"type" | t"enum" => Linker.Kind.Type
+          case _                                       => Linker.Kind.Term
 
-        List((matcher.group(2).nn.tt, kind))
+        named(rest).lay(Nil) { (name: Text) => List((name, kind)) }
+
+      case _ =>
+        Nil
 
   // What a Scala (or `fuel`) fence, the `count`th in its document, will have on the page before
   // it is compiled: its anchor — the preamble's `id`, else its number — and the definitions of
@@ -1025,7 +1064,7 @@ object Embedding:
 
   // A fence's content ends with the newline that closed its last line, which is not a line.
   def trimmed(content: Text): Text =
-    if content.ends(t"\n") then Text(content.s.substring(0, content.s.length - 1).nn) else content
+    if content.ends(t"\n") then content.skip(1, Rtl) else content
 
   private def modelLines(source: SourceCode): List[Block.Line] =
     import pyrocosm.modelLines
@@ -1065,3 +1104,9 @@ object Notes:
     val (endLine, end) = place(to.max(from))
     val last: Optional[Int] = if endLine > line then endLine else Unset
     Block.Note(line, start, end, style, caption, last)
+
+// What a block throws, kept as a value: Soundness has no means to keep whatever foreign code —
+// the compiler, the highlighter — throws, an `Error` as well as an `Exception`, so that it is
+// reported rather than ending the document, so this is the one place it is caught.
+private[fuel] def caught[result](block: => result): result | Throwable =
+  try block catch case error: Throwable => error
