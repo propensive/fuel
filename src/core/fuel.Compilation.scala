@@ -78,11 +78,13 @@ object Compilation:
     import filesystemBackends.javaBaseFilesystem
     import filesystemOptions.dereferenceSymlinks
     import sortingAlgorithms.timsort
+    import soundness.collationComparable
+    import collations.codepointCollation
     import galilei.glob
 
     safely:
       val base: Path on Linux = root.as[Path on Linux]
-      base.glob(Glob.parse(t"**/*.md")).map(_.encode).order: (path: Text) => path.s
+      base.glob(Glob.parse(t"**/*.md")).map(_.encode).sort
 
     . or(Nil)
 
@@ -147,9 +149,10 @@ object Compilation:
     import charsets.utf8Charset
     import textSanitizers.skipSanitizer
 
-    val directory: Text = Text(path.s.substring(0, path.s.lastIndexOf('/').max(0)).nn)
+    val slash: Optional[Ordinal] = path.offsetOf(t"/", Rtl)
+    val directory: Text = slash.lay(t"") { (slash: Ordinal) => path.keep(slash.n0) }
     val section: Text = name(directory, regime)
-    val leaf: Text = Text(path.s.substring(path.s.lastIndexOf('/') + 1).nn)
+    val leaf: Text = slash.lay(path) { (slash: Ordinal) => path.skip(slash.n0 + 1) }
     val fixture: Optional[(Text, Text)] = Compilation.fixture(regime, section, leaf)
 
     safely(path.as[Path on Linux]).let { (file: Path on Linux) => safely(file.read[Text]) }.let:
@@ -208,15 +211,16 @@ object Compilation:
 
       if anchors(doc.blocks).size != theirs.size then doc else
         val (blocks, _) =
-          doc.blocks.stdlib.foldLeft((List[Block](), theirs)): (state, block) =>
-            val (done, left) = state
+          doc.blocks.fold((List[Block](), theirs)):
+            (state: (List[Block], List[Optional[Text]]), block: Block) =>
+              val (done, left) = state
 
-            block match
-              case Block.Heading(level, content, _) =>
-                (done + List(Block.Heading(level, content, left.head.or(Unset))), left.skip(1))
+              block match
+                case Block.Heading(level, content, _) =>
+                  (done + List(Block.Heading(level, content, left.head.or(Unset))), left.skip(1))
 
-              case other =>
-                (done + List(other), left)
+                case other =>
+                  (done + List(other), left)
 
         doc.copy(blocks = blocks, anchors = definitive.anchors)
 
@@ -251,7 +255,8 @@ object Compilation:
   // A file that could not be read or parsed, as a diagnostic.
   def unreadable(path: Text): Block =
     val message: Block = Block.paragraph(t"The file could not be read.")
-    Block.Diagnostic(Tone.Failure, Block.Location(path), List(message))
+    val code: fulminate.Bolt = FuelBolts(FuelBolts.core, FuelBolts.unreadable)
+    Block.Diagnostic(Tone.Failure, Block.Location(path), List(message), code = code)
 
   def corpus(roots: List[Text], checker: Checker = Checker.tokenized, regime: Regime = Regime())
   :   Corpus =

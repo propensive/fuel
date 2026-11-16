@@ -34,6 +34,8 @@ package fuel
 
 import soundness.*
 
+import dysasymptotics.linearSize
+
 // What a compound of a parsed TEL document says, as Fuel reads it: its inline atoms, its source
 // atom, and the compounds beneath it, in the order written.
 object Compounds:
@@ -52,3 +54,10 @@ object Compounds:
   // read with its positions; 1 where it has none.
   def line(tel: Tel, path: List[Text]): Int =
     tel.locateKey(Telp(path)).lay(1)(_.line)
+
+  // Each of `compounds`, the children of the compound at `at`, with its own path: its keyword,
+  // and its occurrence (from 0) among the children before it with that keyword.
+  def paths(at: List[Text], compounds: List[Tel.Compound]): List[(Tel.Compound, List[Text])] =
+    compounds.indexed.map: (compound: Tel.Compound, index: Ordinal) =>
+      val occurrence: Int = compounds.keep(index.n0).count(_.keyword == compound.keyword)
+      (compound, at + List(compound.keyword, occurrence.show))

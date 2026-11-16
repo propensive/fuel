@@ -231,6 +231,13 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
     numbered from the file (`start`). A note is one `Block.Note`, across lines or a caret, with its caption as
     phrasing; harlequin's offset-mode spans are placed by Fuel's own `Notes.of`, since
     `Block.Note.of` declines them.
+  - **Bolt codes**: every diagnostic carries a code (`Block.Diagnostic#code`), and every error
+    type overrides `bolt`: `↯/f.25` to `↯/f.28`, fuel's core, API, client and launcher, after
+    Pyrocosm's own subdivisions (`FuelBolts`). An error is a kind of thing checked (a glossary,
+    a table, a link, a fence's run…), and each distinct message a variant of it; a problem
+    found in a TEL error carries that error's code (`↯/f.25.4.1/s.…`), and a compiler's message
+    the code Proscala begins it with, where it has one. A failure printed other than as a
+    diagnostic follows its code's label. The registry is `f.tel` in propensive/bolt.
   - All compiler use (tokenizing included) runs on one dedicated thread with a large stack, in
     `Checking.exclusive`: dotc pins a context base to the thread of its first run, so a later
     run from another thread fails with `RecursionOverflow` and no frames. The daemon serves each

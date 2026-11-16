@@ -32,7 +32,7 @@
                                                                                                   */
 package fuel
 
-import soundness.{Token as _, *}
+import soundness.*
 
 import pyrocosm.{Inline, Token, model}
 import stenography.Syntax
@@ -48,8 +48,9 @@ object Linker:
   // that a path (`.pyrocosm/fuel/config.tel`) or a selector is code as written, not a
   // reference.
   def kind(reference: Text): Optional[Kind] =
-    val pattern: String = "[A-Za-z_][\\w$]*(?:[.#][A-Za-z_][\\w$]*)*"
-    val named: Boolean = reference.length > 1 && reference.s.substring(1).nn.matches(pattern)
+    val named: Boolean = reference.length > 1 && reference.skip(1).match
+      case r"[A-Za-z_][\w\x24]*([.#][A-Za-z_][\w\x24]*)*" => true
+      case _                                             => false
 
     if !named then Unset
     else if reference.starts(t"#") then Kind.Type
@@ -65,15 +66,15 @@ object Linker:
     def ambiguities: List[Text] = Nil
 
   // A highlighted token as the model's, with the link its type gives it.
-  def token(linker: Linker, token: harlequin.Token): Token =
+  def token(linker: Linker, token: harlequin.SourceCode.Token): Token =
     val plain: Token = token.model
 
-    token.meta.lay(plain): (meta: harlequin.Token.Meta) =>
+    token.meta.lay(plain): (meta: harlequin.SourceCode.Token.Meta) =>
       plain.copy(link = linker.link(token.text, meta.tpe))
 
   def lines(linker: Linker, source: SourceCode): List[pyrocosm.Block.Line] =
     Comments.mark:
-      source.lines.to[List].map: (line: List[harlequin.Token]) =>
+      source.lines.to[List].map: (line: List[harlequin.SourceCode.Token]) =>
         pyrocosm.Block.Line(chain(line.map(token(linker, _))))
 
   // A line of code with each qualified name chained: a linked token, a `.` or `#`, and a linked

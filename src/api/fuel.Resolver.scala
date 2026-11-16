@@ -32,11 +32,7 @@
                                                                                                   */
 package fuel
 
-import java.util.concurrent as juc
-
-import scala.collection.immutable as sci
-
-import soundness.{Token as _, *}
+import soundness.*
 
 import dysasymptotics.linearSize
 import pyrocosm.{Inline, Purview, Token}
@@ -125,7 +121,10 @@ extends Linker:
   @volatile
   private var defined: List[(Text, Linker.Kind, Text)] = Nil
 
-  private val ambiguous: juc.ConcurrentLinkedQueue[Text] = juc.ConcurrentLinkedQueue()
+  // The references found ambiguous, latest first.
+  private val ambiguous: Atomic.Ref[List[Text]] = Atomic(Nil: List[Text])
+
+  private def ambiguity(reference: Text): Unit = ambiguous.since(reference :: _)
 
   def define(anchor: Text, names: List[(Text, Linker.Kind)]): Unit =
     val latest: List[(Text, Linker.Kind, Text)] =
@@ -137,7 +136,7 @@ extends Linker:
   // one does, leads to the fragment which defined it last.
   private def fenced(name: Text, kind: Optional[Linker.Kind]): Optional[Inline.Destination] =
     page.let: (url: Text) =>
-      val leaf: Text = Text(name.s.takeWhile { c => c != '.' && c != '#' })
+      val leaf: Text = name.keep { char => char != '.' && char != '#' }
 
       def matches(entry: (Text, Linker.Kind, Text)): Boolean =
         entry(0) == leaf && kind.lay(true)(_ == entry(1))
@@ -161,18 +160,14 @@ extends Linker:
 
         !ofType && (entity.definition.present || ofTerm)
 
-  def ambiguities: List[Text] =
-    val all: scala.collection.Iterator[Text] =
-      scala.jdk.CollectionConverters.IteratorHasAsScala(ambiguous.iterator.nn).asScala
-
-    List.from(all.toList.distinct)
+  def ambiguities: List[Text] = ambiguous().reverse.distinct
 
   // `import a.b.*`, `import a.b.C` and `import a.b.{C, D as E}`: the package or object itself
   // for a wildcard, else the named members' parent (which is enough to resolve their leaves).
   def learn(imports: List[Text]): Unit =
     val learned: List[Locator] = imports.bind: (line: Text) =>
       val body: Text = line.trim.skip(t"import ".length).trim
-      val cleaned: Text = Text(body.s.replace("{", "").nn.replace("}", "").nn)
+      val cleaned: Text = body.sub(t"{", t"").sub(t"}", t"")
 
       cleaned.cut(t",").bind: (clause: Text) =>
         val path: Text = clause.trim.cut(t" ").head
@@ -190,19 +185,19 @@ extends Linker:
 
   // The keys of the packages and objects whose members are in scope, which an extension
   // declared in one of them is reached through.
-  private def reachable: sci.Set[Text] = sci.Set.from(scope.all.stdlib.map(Api.key(_)))
+  private def reachable: Set[Text] = scope.all.map(Api.key(_)).to[Set]
 
   // Whether an extension reaches its receiver here: without an import (it is in the companion
-  // of the receiver or of a base, or in an object enclosing it), or through what is in scope — the object or package which
-  // declares it, or one which exports it.
+  // of the receiver or of a base, or in an object enclosing it), or through what is in scope —
+  // the object or package which declares it, or one which exports it.
   private def admitted(applicable: Api.Applicable): Boolean =
-    val keys: sci.Set[Text] = reachable
+    val keys: Set[Text] = reachable
 
-    def exported: Boolean =
-      api.exporters.get(applicable.key).exists: (forwarders: List[Api.Entity]) =>
-        forwarders.exists(_.parent.lay(false) { (p: Locator) => keys.contains(Api.key(p)) })
+    def exported: Boolean = api.exporters.at(applicable.key).or(Nil).exists:
+      (forwarder: Api.Entity) =>
+        forwarder.parent.lay(false) { (p: Locator) => keys.has(Api.key(p)) }
 
-    api.implicitly(applicable) || applicable.importFrom.lay(false)(keys.contains(_)) || exported
+    api.implicitly(applicable) || applicable.importFrom.lay(false)(keys.has(_)) || exported
 
   // The extensions of a name which apply to a receiver, written as its members
   // (`Angle#principal`): the receiver's own (an alias seen through) and those of every value,
@@ -215,9 +210,7 @@ extends Linker:
       (applicable: Api.Applicable) =>
         api(applicable.key).let(_.name == name).or(false) && admitted(applicable)
 
-    val tiers: scala.List[Int] = applicable.stdlib.map(_.tier)
-
-    tiers.minOption.fold(Nil: List[Api.Entity]): (lowest: Int) =>
+    applicable.map(_.tier).minimum.lay(Nil): (lowest: Int) =>
       val closest: List[Api.Applicable] = applicable.filter(_.tier == lowest)
       closest.bind { (a: Api.Applicable) => api(a.key).let(List(_)).or(Nil) }.distinct
 
@@ -225,15 +218,15 @@ extends Linker:
   // receiver without an import, or which is declared in what is in scope.
   private def bare(designator: Locator): List[Api.Entity] =
     if designator.parent.present then Nil else
-      val keys: sci.Set[Text] = reachable
+      val keys: Set[Text] = reachable
 
-      api.byName.getOrElse(designator.name, Nil).filter: (entity: Api.Entity) =>
+      api.byName.at(designator.name).or(Nil).filter: (entity: Api.Entity) =>
         val extension: Boolean = entity.declarations.exists(_.kind == Api.Kind.Extension)
 
         val inScope: Boolean =
-          entity.parent.lay(false) { (p: Locator) => keys.contains(Api.key(p)) }
+          entity.parent.lay(false) { (p: Locator) => keys.has(Api.key(p)) }
 
-        extension && (api.unimported.contains(entity.key) || inScope)
+        extension && (api.unimported.has(entity.key) || inScope)
 
   // A locator rebased under a prefix: its first segment becomes a child of the prefix.
   private def under(prefix: Locator, designator: Locator): Locator =
@@ -311,15 +304,17 @@ extends Linker:
     def accented(token: Token): Token =
       accent.lay(token): (accent: Token.Accent) => token.copy(accent = accent)
 
-    val qualified: Boolean = name.s.indexOf('.') > 0 || name.s.indexOf('#') > 0
+    // Whether a character is in the name, after its start.
+    def inner(char: Char): Boolean = name.where(_ == char).lay(false)(_.n0 > 0)
+    val qualified: Boolean = inner('.') || inner('#')
 
     if whole.absent then List(Token.plain(reference))
     else if !qualified then List(accented(Token.plain(name).copy(link = whole)))
     else
       // The segments with the separators between them, in order: `a.b#C` is `a`, `.`, `b`,
       // `#`, `C`.
-      def hashed(segment: Text): List[Text] = segment.cut(t"#").flatMap(List(t"#", _)).skip(1)
-      val parts: List[Text] = name.cut(t".").map(hashed).flatMap(List(t".") + _).skip(1)
+      def hashed(segment: Text): List[Text] = segment.cut(t"#").bind(List(t"#", _)).skip(1)
+      val parts: List[Text] = name.cut(t".").map(hashed).bind(List(t".") + _).skip(1)
 
       def recur(parts: List[Text], written: Text, first: Boolean): List[Token] = parts match
         case part :: rest if part == t"." || part == t"#" =>
@@ -351,9 +346,9 @@ extends Linker:
     val sigil: Text = if kind.present then text.keep(1) else t""
 
     // Every character a name may hold; a space, a bracket or a quote is none of them.
-    def legal(char: Char): Boolean = char.isLetterOrDigit || ".#_$`".indexOf(char) >= 0
+    def legal(char: Char): Boolean = char.isLetterOrDigit || t".#_$$`".contains(char)
 
-    def plausible: Boolean = !name.s.isEmpty && name.s.forall(legal)
+    def plausible: Boolean = name != t"" && name.all(legal)
 
     // Another format's resolver: its API, and the imports which name it, without its `id`.
     def foreign(other: Api): Resolver =
@@ -375,7 +370,7 @@ extends Linker:
         case one :: Nil => one
         case Nil        => Unset
         case many =>
-          if record then ambiguous.add(text)
+          if record then ambiguity(text)
           Unset
 
     def here: Optional[Inline.Destination] =
@@ -386,7 +381,7 @@ extends Linker:
           case many =>
             // The same page reached by several routes is no ambiguity.
             if many.map(_.key).distinct.size == 1 then many.head.let(destination) else
-              if record then ambiguous.add(text)
+              if record then ambiguity(text)
               Unset
 
     apis.let(_.split(name)) match

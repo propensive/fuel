@@ -58,7 +58,7 @@ object Output:
     def encode(fragment: Fragment): Data = fragment.bintel
 
     def decode(data: Data): Optional[Fragment] =
-      try Bintel.read[Fragment](data) catch case _: Exception => Unset
+      safely(Bintel.read[Fragment](data))
 
   // One fence's output: its blocks (the code, and the diagnostics which follow it), the
   // problems it raised, and what it left to its session — whether it joined it, the names it
@@ -81,8 +81,11 @@ object Output:
 
     def encode(prose: Prose): Data = prose.bintel
 
-    def decode(data: Data): Optional[Prose] =
-      try Bintel.read[Prose](data) catch case _: Exception => Unset
+    // Read through the throwing tactic, which `safely` catches: its own tactic would be
+    // captured by the derived codec.
+    private def read(data: Data): Prose = Bintel.read[Prose](data)
+
+    def decode(data: Data): Optional[Prose] = safely(read(data))
 
   // A document's prose: its blocks, each fence a sentinel to be filled from its fragment, the
   // problems of its prose alone (references which named several entities), the links it makes
@@ -100,7 +103,7 @@ object Output:
     def encode(document: Document): Data = document.bintel
 
     def decode(data: Data): Optional[Document] =
-      try Bintel.read[Document](data) catch case _: Exception => Unset
+      safely(Bintel.read[Document](data))
 
   // A document as it was compiled: its path within its section, its title, its blocks with
   // every fence filled, and its problems.
@@ -113,7 +116,7 @@ object Output:
     def encode(page: Page): Data = page.bintel
 
     def decode(data: Data): Optional[Page] =
-      try Bintel.read[Page](data) catch case _: Exception => Unset
+      safely(Bintel.read[Page](data))
 
   // An API entity's page: the entity's key (`gossamer.Text#length`), its path beneath `/api/`
   // (`gossamer.Text~length`), its blocks, and the problems its examples and references raised.
@@ -129,7 +132,7 @@ object Output:
     def encode(manifest: Manifest): Data = manifest.bintel
 
     def decode(data: Data): Optional[Manifest] =
-      try Bintel.read[Manifest](data) catch case _: Exception => Unset
+      safely(Bintel.read[Manifest](data))
 
   // The manifest, `index.fuel`: what produced the output — Fuel's version, the hash of the
   // classpath, and the hash of every input the whole output depends on — each document (by its

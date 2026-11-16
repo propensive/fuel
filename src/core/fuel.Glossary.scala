@@ -35,7 +35,7 @@ package fuel
 import soundness.*
 
 import codepages.utf8Codepage
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 import errorDiagnostics.emptyDiagnostics
 import pyrocosm.{Block, Inline, Tone}
 import soundness.collationComparable
@@ -88,7 +88,7 @@ object Glossary:
 
   // Whether a name can be a term's: a term is written in brackets, so it cannot hold one.
   def nameable(name: Text): Boolean =
-    name != t"" && !name.s.contains("[") && !name.s.contains("]")
+    name != t"" && !name.contains(t"[") && !name.contains(t"]")
 
   val none: Glossary = Glossary(Nil)
 
@@ -123,6 +123,13 @@ object Glossary:
     def +(error: Tel.Error, pointer: Text, span: Span): Faults =
       Faults(items :+ (error, pointer, span))
 
+  // The code of a glossary's problem, `↯/f.25.4.<variant>`: a fault the schema finds, which
+  // carries the TEL error's own code (1); a `term` where only a translation has one (2); a name
+  // which cannot be a term (3), or which is defined already (4); a name of one character (5);
+  // and a synonym which cannot be a name (6), or which is one already (7).
+  private[fuel] def bolt(variant: Int): fulminate.Bolt =
+    FuelBolts(FuelBolts.core, FuelBolts.glossary, variant)
+
   // What a fault the schema finds means in a glossary.
   private def explain(error: Tel.Error, pointer: Text): Text =
     import Tel.Error.Reason
@@ -147,7 +154,6 @@ object Glossary:
   // glossary which is not a translation, a `term`, which only a translation says — most often
   // the second word of a name written after one space, which the schema reads as the term.
   def faults(path: Text, text: Text, translation: Boolean = false): List[Block] =
-    import strategies.throwUnsafely
     import parsing.trackPositions
 
     safely(text.read[Tel]).lay(Nil): (tel: Tel) =>
@@ -162,7 +168,8 @@ object Glossary:
       val schemed: List[Block] = faults.items.map: (error, pointer, span) =>
         val line: Int = if span.exists then span.startLine.lay(1)(_.n1) else 1
         val location: Block.Location = Block.Location(path, line.max(1))
-        Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(explain(error, pointer))))
+        val message: List[Block] = List(Block.paragraph(explain(error, pointer)))
+        Block.Diagnostic(Tone.Failure, location, message, code = bolt(1).carrying(error.bolt))
 
       val named: List[Block] =
         if translation then Nil else entries(text).filter(_(2).present).map: (name, line, term) =>
@@ -171,7 +178,8 @@ object Glossary:
               t"several words follows two spaces, as `define  $name ${term.or(t"")}`."
 
           Block.Diagnostic
-            ( Tone.Failure, Block.Location(path, line), List(Block.paragraph(message)) )
+            ( Tone.Failure, Block.Location(path, line), List(Block.paragraph(message)),
+              code = bolt(2) )
 
       schemed + named
 
@@ -213,7 +221,7 @@ object Glossary:
     recover:
       case error: Tel.Error => Block.Diagnostic.of(error, path, text)
 
-    . protect:
+    . protect[Glossary | Block.Diagnostic]:
         val tel: Tel = text.read[Tel]
 
         // A node, and the compound it wraps (whose atoms are the name), paired by order:
@@ -242,8 +250,9 @@ object Glossary:
   // bracket); and a caution for a name of one character, which a `[1]` or an `[x]` in prose
   // would match, since labels are matched case-insensitively.
   def merge(glossaries: List[Glossary]): (Glossary, List[Block]) =
-    def report(tone: Tone, term: Term, message: Text): Block =
-      Block.Diagnostic(tone, Block.Location(term.file, term.line), List(Block.paragraph(message)))
+    def report(tone: Tone, term: Term, message: Text, variant: Int): Block =
+      val location: Block.Location = Block.Location(term.file, term.line)
+      Block.Diagnostic(tone, location, List(Block.paragraph(message)), code = bolt(variant))
 
     def recur(rest: List[Term], kept: List[Term], problems: List[Block]): (Glossary, List[Block]) =
       rest match
@@ -253,14 +262,14 @@ object Glossary:
               t"`${term.name}` cannot be a glossary term: a term is written in brackets, so it " +
                 t"cannot hold one."
 
-            recur(tail, kept, problems + List(report(Tone.Failure, term, message)))
+            recur(tail, kept, problems + List(report(Tone.Failure, term, message, 3)))
           else
             kept.seek(_.slug == term.slug) match
               case earlier: Term =>
                 val message: Text =
                   t"`${term.name}` is defined already, at ${earlier.file}:${earlier.line.show}."
 
-                recur(tail, kept, problems + List(report(Tone.Failure, term, message)))
+                recur(tail, kept, problems + List(report(Tone.Failure, term, message, 4)))
 
               case _ =>
                 val message: Text =
@@ -268,7 +277,8 @@ object Glossary:
                     t"matches, in either case."
 
                 val short: List[Block] =
-                  if term.name.length == 1 then List(report(Tone.Warning, term, message)) else Nil
+                  if term.name.length != 1 then Nil
+                  else List(report(Tone.Warning, term, message, 5))
 
                 // A synonym which cannot be a name, or which is a name already: the term's own,
                 // another of its synonyms, or another term's name or synonym.
@@ -283,7 +293,7 @@ object Glossary:
                         t"`$synonym` cannot be a synonym: a name is written in brackets, so it " +
                           t"cannot hold one."
 
-                      report(Tone.Failure, term, message) :: synonyms(more, seen)
+                      report(Tone.Failure, term, message, 6) :: synonyms(more, seen)
                     else
                       seen.seek(entry => Blocks.slug(entry(0)) == Blocks.slug(synonym)) match
                         case (_, other: Term) =>
@@ -292,7 +302,7 @@ object Glossary:
                             else t"`${other.name}`'s already, at ${other.file}:${other.line.show}"
 
                           val message: Text = t"`$synonym` is a name $whose."
-                          report(Tone.Failure, term, message) :: synonyms(more, seen)
+                          report(Tone.Failure, term, message, 7) :: synonyms(more, seen)
 
                         case _ =>
                           synonyms(more, seen + List((synonym, term)))

@@ -34,8 +34,6 @@ package fuel
 
 import soundness.*
 
-import scala.collection.immutable as sci
-
 import codepages.utf8Codepage
 import dysasymptotics.{linearAccess, linearSize}
 import errorDiagnostics.emptyDiagnostics
@@ -87,13 +85,21 @@ object Tables:
     import strategies.throwUnsafely
     Tels.tels[Table](t"tabular")
 
-  // A fault in a fence's content: its message, and where it is, by line and column of the
-  // content (from 1), with the length of the text it concerns, where those are known.
+  // A fault in a fence's content: its message and its code, and where it is, by line and
+  // column of the content (from 1), with the length of the text it concerns, where those are
+  // known.
   case class Fault
     ( message: Text,
-      line:    Optional[Int] = Unset,
-      column:  Optional[Int] = Unset,
-      length:  Optional[Int] = Unset )
+      code:    fulminate.Bolt,
+      line:    Optional[Int]  = Unset,
+      column:  Optional[Int]  = Unset,
+      length:  Optional[Int]  = Unset )
+
+  // The code of a table's fault, `↯/f.25.8.<variant>`: a fault the schema finds, which carries
+  // the TEL error's own code (1); an alignment which is not one (2); a row of more cells than
+  // the table has columns (3); and a table without a `column` (4), or a `row` (5).
+  private def bolt(variant: Int): fulminate.Bolt =
+    FuelBolts(FuelBolts.core, FuelBolts.table, variant)
 
   // The faults the schema finds, as they are accrued: each TEL error, with the path of what it
   // concerns and where that is.
@@ -104,10 +110,9 @@ object Tables:
 
   // A cell which is a number: digits, perhaps signed, grouped, with a fraction, an exponent or
   // a percentage.
-  private val number: java.util.regex.Pattern =
-    java.util.regex.Pattern.compile("[-+−]?[0-9][0-9,_]*(\\.[0-9]+)?([eE][-+]?[0-9]+)?%?").nn
-
-  private def numeric(cell: Text): Boolean = number.matcher(cell.s).nn.matches
+  private def numeric(cell: Text): Boolean = cell match
+    case r"[-+−]?[0-9][0-9,_]*(\.[0-9]+)?([eE][-+]?[0-9]+)?%?" => true
+    case _                                                      => false
 
   private def alignment(word: Text): Optional[Block.Alignment] = word match
     case t"start" => Block.Alignment.Start
@@ -157,26 +162,34 @@ object Tables:
     import strategies.throwUnsafely
     import parsing.trackPositions
 
-    val (text, added) = pyrocosm.Tels.headed(content)
+    val parsed: Tel | Tel.Error =
+      recover:
+        case error: Tel.Error => error
 
-    val parsed: Tel | Tel.Error = try text.read[Tel] catch case error: Tel.Error => error
+      . protect[Tel | Tel.Error](content.read[Tel])
 
     parsed match
       case error: Tel.Error =>
         error
 
       case tel: Tel =>
-        // A position in the headed text, as a line and column of the content.
-        def place(line: Int, column: Int, length: Optional[Int], message: Text): Fault =
-          Fault(message, line - added, column, length)
+        // A position in the content, as a line and column (from 1).
+        def place
+          ( line: Int, column: Int, length: Optional[Int], message: Text, code: fulminate.Bolt )
+        :   Fault =
+
+          Fault(message, code, line, column, length)
 
         // At the compound a path names, or, where that is an atom rather than a compound, at
         // the nearest compound above it.
-        def at(pointer: List[Text], message: Text): Fault =
-          if pointer.nil then Fault(message)
-          else tel.locateKey(Telp(pointer)).lay(at(pointer.reverse.skip(1).reverse, message)):
-            (position: Tel.Error.Position) =>
-              place(position.line, position.column, Unset, message)
+        def at(pointer: List[Text], message: Text, code: fulminate.Bolt): Fault =
+          if pointer.nil then Fault(message, code)
+          else
+            val parent: List[Text] = pointer.reverse.skip(1).reverse
+
+            tel.locateKey(Telp(pointer)).lay(at(parent, message, code)):
+              (position: Tel.Error.Position) =>
+                place(position.line, position.column, Unset, message, code)
 
         val faults: Faults =
           validate[Tel.Focus](Faults()):
@@ -189,13 +202,14 @@ object Tables:
         // A fault without a place of its own — a missing member — is put at its parent's.
         val found: List[Fault] = faults.items.map: (error, pointer, span) =>
           val message: Text = explain(error, pointer)
+          val code: fulminate.Bolt = bolt(1).carrying(error.bolt)
 
           if span.exists then
             val line: Int = span.startLine.lay(1)(_.n1)
             val column: Int = span.startColumn.lay(1)(_.n1)
-            place(line, column, span.length, message)
+            place(line, column, span.length, message, code)
           else
-            at(pointer.cut(t"/").filter(_ != t"").reverse.skip(1).reverse, message)
+            at(pointer.cut(t"/").filter(_ != t"").reverse.skip(1).reverse, message, code)
 
         if !found.nil then found else
           val table: Table = tel.as[Table]
@@ -206,7 +220,7 @@ object Tables:
               if alignment(word).present then Nil
               else
                 val message: Text = t"A column is aligned `start` or `end`, not `$word`."
-                List(at(List(t"column", index.n0.show, t"align"), message))
+                List(at(List(t"column", index.n0.show, t"align"), message, bolt(2)))
 
           val wide: List[Fault] = table.row.indexed.bind: (row: Row, index: Ordinal) =>
             if row.cell.size <= width then Nil
@@ -214,11 +228,12 @@ object Tables:
               val message: Text =
                 t"This row has ${row.cell.size.show} cells, but the table has ${width.show} columns."
 
-              List(at(List(t"row", index.n0.show), message))
+              List(at(List(t"row", index.n0.show), message, bolt(3)))
 
           val empty: List[Fault] =
-            (if table.column.nil then List(Fault(t"A table needs a `column`.")) else Nil) +
-              (if table.row.nil then List(Fault(t"A table needs a `row`.")) else Nil)
+            val column: List[Fault] = List(Fault(t"A table needs a `column`.", bolt(4)))
+            val row: List[Fault] = List(Fault(t"A table needs a `row`.", bolt(5)))
+            (if table.column.nil then column else Nil) + (if table.row.nil then row else Nil)
 
           val all: List[Fault] = empty + misaligned + wide
           if !all.nil then all else render(table, linker)
@@ -300,4 +315,4 @@ final class Tables(path: Text, linker: Linker = Linker.none) extends Embedding:
                     case other            => other
 
               val message: List[Block] = List(Block.paragraph(fault.message))
-              Block.Diagnostic(Tone.Failure, location, message, excerpt)
+              Block.Diagnostic(Tone.Failure, location, message, excerpt, code = fault.code)

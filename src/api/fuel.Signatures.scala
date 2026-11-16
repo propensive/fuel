@@ -32,8 +32,9 @@
                                                                                                   */
 package fuel
 
-import soundness.{Language as _, Token as _, *}
+import soundness.{Language as _, *}
 
+import dysasymptotics.linearSize
 import pyrocosm.{Block, Inline, Language, Token}
 import stenography.{Designator, Syntax}
 
@@ -93,7 +94,7 @@ object Signatures:
       if through then exported0(designator) else Unset
 
     def exported0(designator: Designator): Optional[Designator] =
-      val forwarders: List[Api.Entity] = api.exporters.get(Api.key(designator)).getOrElse(Nil)
+      val forwarders: List[Api.Entity] = api.exporters.at(Api.key(designator)).or(Nil)
 
       def via(parents: List[Locator]): Optional[Api.Entity] =
         forwarders.seek: (e: Api.Entity) => e.parent.let(parents.has(_)).or(false)
@@ -208,7 +209,8 @@ object Signatures:
             List(keyword(t"case"), space) + pattern + List(space, symbol(t"=>"), space) + result
 
       val open: List[Token] = List(space, keyword(t"match"), space, symbol(t"{"), space)
-      within(scrutinee, syntax, api, scope) + open + joined(rendered, t"; ") + List(space, symbol(t"}"))
+      val close: List[Token] = List(space, symbol(t"}"))
+      within(scrutinee, syntax, api, scope) + open + joined(rendered, t"; ") + close
 
     case Syntax.Structural(_, _, _) =>
       List(Token(syntax.qualified, Token.Accent.Typal))
@@ -241,7 +243,7 @@ object Signatures:
         case _ => List(symbol(t":"), space) + tokens(result, api, scope)
 
     val parents: List[Token] =
-      List.from(trailing(declaration, api, scope)).bind { line => List(space) + line }
+      trailing(declaration, api, scope).bind { (line: List[Token]) => List(space) + line }
 
     declaration.kind match
       case Api.Kind.Extension =>
@@ -253,22 +255,25 @@ object Signatures:
 
       // A given object provides its first parent, which is how it was written.
       case Api.Kind.Given if declaration.result.absent && !declaration.parents.nil =>
-        val provided: List[Token] = tokens(declaration.parents.stdlib.head, api, scope)
+        val provided: List[Token] = provision(declaration, api, scope)
         modifiers + List(keyword(t"given"), space, named, symbol(t":"), space) + provided
 
       case kind =>
         modifiers + List(keyword(kind.keyword), space, named) + clauses + result + parents
 
+  // What a given object provides: its first parent, which is how it was written.
+  private def provision(declaration: Api.Declaration, api: Api, scope: Scope): List[Token] =
+    declaration.parents.head.lay(List[Token]())(tokens(_, api, scope))
+
   // What follows a template's parameters, a line each when it is laid out: `extends`, `derives`
   // and `uses`.
   private def trailing(declaration: Api.Declaration, api: Api, scope: Scope)
-  :   scala.List[List[Token]] =
+  :   List[List[Token]] =
 
-    def clause(word: Text, items: List[Syntax]): scala.List[List[Token]] =
-      if items.nil then scala.Nil
-      else scala.List(List(keyword(word), space) + listed(items, api, scope))
+    def clause(word: Text, items: List[Syntax]): List[List[Token]] =
+      if items.nil then Nil else List(List(keyword(word), space) + listed(items, api, scope))
 
-    clause(t"extends", declaration.parents) ++ clause(t"derives", declaration.derives) ++
+    clause(t"extends", declaration.parents) + clause(t"derives", declaration.derives) +
       clause(t"uses", declaration.uses)
 
   // An export's signature on its page: the clause which made it, naming what it forwards to —
@@ -303,19 +308,24 @@ object Signatures:
   // (an alias) or by nothing (a bound). `typed` is the type parameters alone, which a table's
   // cell begins with, and `cases` a match type's cases, each its pattern and its result, which
   // follow the signature a line each.
-  private case class Clause(items: scala.List[List[Token]], contextual: Boolean)
+  private case class Clause(items: List[List[Token]], contextual: Boolean)
 
   private case class Parts
     ( head:    List[Token],
-      clauses: scala.List[Clause],
+      clauses: List[Clause],
       marker:  Optional[Text],
       result:  List[Token],
-      trails:  scala.List[List[Token]],
-      typed:   List[Token]                               = Nil,
-      cases:   scala.List[(List[Token], List[Token])] = scala.Nil )
+      trails:  List[List[Token]],
+      typed:   List[Token]                     = Nil,
+      cases:   List[(List[Token], List[Token])] = Nil )
 
-  private def width(tokens: List[Token]): Int = tokens.stdlib.map(_.text.s.length).sum
-  private def spaces(count: Int): Token = plain(Text(" ".repeat(count.max(0)).nn))
+  private def width(tokens: List[Token]): Int =
+    tokens.fold(0) { (sum: Int, token: Token) => sum + token.text.length }
+
+  private def spaces(count: Int): Token = plain(List.fill(count.max(0))(t" ").join)
+
+  // The greatest of some widths, or 0 for none.
+  private def widest(widths: List[Int]): Int = widths.fold(0)(_.max(_))
 
   // A term clause's items, each without its `using`, which a clause carries once.
   private def clauseOf(sequence: Syntax, api: Api, scope: Scope): Optional[Clause] = sequence match
@@ -324,9 +334,9 @@ object Signatures:
         case Syntax.Named(using, _, _) => using
         case _                         => false
 
-      val contextual: Boolean = !items.nil && items.stdlib.forall(isUsing)
+      val contextual: Boolean = !items.nil && items.all(isUsing)
 
-      val rendered: scala.List[List[Token]] = items.stdlib.map:
+      val rendered: List[List[Token]] = items.map:
         case Syntax.Named(_, name, tpe) => tokens(Syntax.Named(false, name, tpe), api, scope)
         case other                      => tokens(other, api, scope)
 
@@ -343,20 +353,21 @@ object Signatures:
       case Syntax.Sequence('[', _) => true
       case _                       => false
 
-    val (typeClauses, termClauses) = declaration.clauses.stdlib.partition(isTypeClause)
-    val typed: List[Token] = List.from(typeClauses).bind(tokens(_, api, scope))
+    val typeClauses: List[Syntax] = declaration.clauses.filter(isTypeClause)
+    val termClauses: List[Syntax] = declaration.clauses.filter(!isTypeClause(_))
+    val typed: List[Token] = typeClauses.bind(tokens(_, api, scope))
 
     // A type declared infix is written as it is used, between its two parameters.
     val shape: List[Token] = (declaration.written.has(t"infix"), typeClauses) match
-      case (true, scala.List(Syntax.Sequence('[', first :: second :: Nil))) =>
+      case (true, List(Syntax.Sequence('[', first :: second :: Nil))) =>
         val operator: List[Token] = List(space, named, space)
         tokens(first, api, scope) + operator + tokens(second, api, scope)
 
       case _ =>
         List(named) + typed
 
-    val clauses: scala.List[Clause] =
-      termClauses.flatMap: c => clauseOf(c, api, scope).let(scala.List(_)).or(scala.Nil)
+    val clauses: List[Clause] =
+      termClauses.bind { (c: Syntax) => clauseOf(c, api, scope).lay(List[Clause]())(List(_)) }
 
     val unmarked: (Optional[Text], List[Token]) = (Unset, Nil: List[Token])
 
@@ -373,29 +384,29 @@ object Signatures:
 
         case _ => (t":", tokens(result, api, scope))
 
-    val cases: scala.List[(List[Token], List[Token])] = declaration.kind match
+    val cases: List[(List[Token], List[Token])] = declaration.kind match
       case Api.Kind.Type => declaration.result match
-        case Syntax.Match(_, items) => items.stdlib.map(caseOf(_, api, scope))
-        case _                      => scala.Nil
+        case Syntax.Match(_, items) => items.map(caseOf(_, api, scope))
+        case _                      => Nil
 
-      case _ => scala.Nil
+      case _ => Nil
 
-    val trails: scala.List[List[Token]] = trailing(declaration, api, scope)
+    val trails: List[List[Token]] = trailing(declaration, api, scope)
 
     declaration.kind match
       case Api.Kind.Extension =>
         val head: List[Token] = group(declaration.group, api, scope) + List(space) + modifiers
         val declared: List[Token] = head + List(keyword(t"def"), space, named) + typed
-        Parts(declared, clauses, marker, result, scala.Nil, typed)
+        Parts(declared, clauses, marker, result, Nil, typed)
 
       case Api.Kind.Package =>
-        Parts(List(keyword(t"package"), space, named), scala.Nil, Unset, Nil, scala.Nil)
+        Parts(List(keyword(t"package"), space, named), Nil, Unset, Nil, Nil)
 
       // A given object provides its first parent, which is how it was written.
       case Api.Kind.Given if declaration.result.absent && !declaration.parents.nil =>
-        val provided: List[Token] = tokens(declaration.parents.stdlib.head, api, scope)
+        val provided: List[Token] = provision(declaration, api, scope)
         val head: List[Token] = modifiers + List(keyword(t"given"), space, named)
-        Parts(head, scala.Nil, t":", provided, scala.Nil)
+        Parts(head, Nil, t":", provided, Nil)
 
       case kind =>
         val head: List[Token] = modifiers + List(keyword(kind.keyword), space) + shape
@@ -404,32 +415,32 @@ object Signatures:
   // A clause written tight, as part of a line: `(a: A, using b: B)`.
   private def compact(clause: Clause): List[Token] =
     val using: List[Token] = if clause.contextual then List(keyword(t"using"), space) else Nil
-    enclosed(t"(", using + joined(List.from(clause.items), t", "), t")")
+    enclosed(t"(", using + joined(clause.items, t", "), t")")
 
   // A clause on lines of its own, indented two: `( a: A, b: B )` where it fits, else an item a
   // line, the types aligned, the closing bracket with the last.
-  private def formal(clause: Clause, width: Int): scala.List[List[Token]] =
+  private def formal(clause: Clause, width: Int): List[List[Token]] =
     val using: List[Token] = if clause.contextual then List(keyword(t"using"), space) else Nil
     val open: List[Token] = List(spaces(2), parens(t"("), space) + using
-    val items: List[Token] = joined(List.from(clause.items), t", ")
+    val items: List[Token] = joined(clause.items, t", ")
     val oneLine: List[Token] = open + items + List(space, parens(t")"))
 
-    if this.width(oneLine) <= width || clause.items.length <= 1 then scala.List(oneLine) else
+    if this.width(oneLine) <= width || clause.items.size <= 1 then List(oneLine) else
       // An item's name is what precedes its `:`; the types begin in one column.
       def split(item: List[Token]): (List[Token], List[Token]) =
-        val at: Int = item.stdlib.indexWhere(_.text == t":")
         val none: List[Token] = Nil
 
-        if at < 0 then (none, item)
-        else (List.from(item.stdlib.take(at + 1)), List.from(item.stdlib.drop(at + 2)))
+        item.where(_.text == t":").lay((none, item)): (at: Ordinal) =>
+          (item.keep(at.n0 + 1), item.skip(at.n0 + 2))
 
-      val parts: scala.List[(List[Token], List[Token])] = clause.items.map(split)
-      val aligned: Boolean = parts.forall(!_(0).nil)
-      val column: Int = parts.map { p => this.width(p(0)) }.maxOption.getOrElse(0)
+      val parts: List[(List[Token], List[Token])] = clause.items.map(split)
+      val aligned: Boolean = parts.all(!_(0).nil)
+      val column: Int = widest(parts.map { (name, _) => this.width(name) })
       val indent: Int = this.width(open)
 
-      parts.zipWithIndex.map: (part, index) =>
+      parts.indexed.map: (part: (List[Token], List[Token]), ordinal: Ordinal) =>
         val (name, tpe) = part
+        val index: Int = ordinal.n0
         val lead: List[Token] = if index == 0 then open else List(spaces(indent))
 
         val body: List[Token] =
@@ -437,7 +448,7 @@ object Signatures:
           else name + (if name.nil then Nil else List(space)) + tpe
 
         val tail: List[Token] =
-          if index == parts.length - 1 then List(space, parens(t")")) else List(symbol(t","))
+          if index == parts.size - 1 then List(space, parens(t")")) else List(symbol(t","))
 
         lead + body + tail
 
@@ -445,7 +456,7 @@ object Signatures:
   // fits; else the head with its first clause where that fits, each further clause on lines of
   // its own, the result after its marker and three spaces (`:   Result`) at the head's column,
   // and the parents flush beneath.
-  private def layout(parts: Parts, width: Int): scala.List[List[Token]] =
+  private def layout(parts: Parts, width: Int): List[List[Token]] =
     val bare: List[Token] = if parts.result.nil then Nil else List(space) + parts.result
 
     val marked: List[Token] =
@@ -453,32 +464,32 @@ object Signatures:
         val before: List[Token] = if m == t"=" then List(space) else Nil
         before + List(symbol(m), space) + parts.result
 
-    val extending: List[Token] = List.from(parts.trails).bind { line => List(space) + line }
-    val clauses: List[Token] = List.from(parts.clauses).bind(compact)
+    val extending: List[Token] = parts.trails.bind { (line: List[Token]) => List(space) + line }
+    val clauses: List[Token] = parts.clauses.bind(compact)
     val oneLine: List[Token] = parts.head + clauses + marked + extending
 
-    if this.width(oneLine) <= width then scala.List(oneLine) else
+    if this.width(oneLine) <= width then List(oneLine) else
       // The first clause stays with the head where the two fit a line.
-      val firstFits: Boolean =
-        parts.clauses.headOption.exists: clause => this.width(parts.head + compact(clause)) <= width
+      val (first, rest) = parts.clauses.head match
+        case clause: Clause if this.width(parts.head + compact(clause)) <= width =>
+          (parts.head + compact(clause), parts.clauses.skip(1))
 
-      val (first, rest) =
-        if firstFits then (parts.head + compact(parts.clauses.head), parts.clauses.tail)
-        else (parts.head, parts.clauses)
+        case _ =>
+          (parts.head, parts.clauses)
 
-      val clauseLines: scala.List[List[Token]] = rest.flatMap(formal(_, width))
+      val clauseLines: List[List[Token]] = rest.bind(formal(_, width))
       def introduced(marker: Text): List[Token] = List(symbol(marker), spaces(3))
 
-      val resultLine: scala.List[List[Token]] =
-        if parts.result.nil then scala.Nil
-        else scala.List(parts.marker.lay(List(spaces(4)))(introduced) + parts.result)
+      val resultLine: List[List[Token]] =
+        if parts.result.nil then Nil
+        else List(parts.marker.lay(List(spaces(4)))(introduced) + parts.result)
 
-      val firstLine: scala.List[List[Token]] = if first.nil then scala.Nil else scala.List(first)
-      firstLine ++ clauseLines ++ resultLine ++ parts.trails
+      val firstLine: List[List[Token]] = if first.nil then Nil else List(first)
+      firstLine + clauseLines + resultLine + parts.trails
 
   // A match type's cases, a line each, indented two, with their arrows aligned.
-  private def caseLines(parts: Parts): scala.List[List[Token]] =
-    val column: Int = parts.cases.map { (pattern, _) => width(pattern) }.maxOption.getOrElse(0)
+  private def caseLines(parts: Parts): List[List[Token]] =
+    val column: Int = widest(parts.cases.map { (pattern, _) => width(pattern) })
 
     parts.cases.map: (pattern, result) =>
       val arrow: List[Token] =
@@ -493,8 +504,8 @@ object Signatures:
   :   Block.Code =
 
     val parts0: Parts = parts(name, declaration, api, scope)
-    val lines: scala.List[List[Token]] = layout(parts0, width) ++ caseLines(parts0)
-    Block.Code(Language.Scala, List.from(lines.map(Block.Line(_))))
+    val lines: List[List[Token]] = layout(parts0, width) + caseLines(parts0)
+    Block.Code(Language.Scala, lines.map(Block.Line(_)))
 
   // A declaration's type parameters, clauses and result, without its keyword or its name, as a
   // snippet for a table's cell: its lines joined by line breaks, which a fixed table keeps.
@@ -506,16 +517,16 @@ object Signatures:
 
     // Without a head there is nothing for a clause to be indented beneath: each line comes in by
     // the two columns of that indent.
-    def dedent(line: List[Token]): List[Token] = line.stdlib match
-      case scala.::(lead, rest) if lead.text.s.isBlank =>
-        val indent: Int = lead.text.s.length
-        if indent <= 2 then List.from(rest) else List.from(spaces(indent - 2) :: rest)
+    def dedent(line: List[Token]): List[Token] = line match
+      case lead :: rest if lead.text.trim == t"" =>
+        val indent: Int = lead.text.length
+        if indent <= 2 then rest else List(spaces(indent - 2)) + rest
 
       case _ => line
 
-    val lines: scala.List[List[Token]] = layout(headless, width).map(dedent) ++ caseLines(all)
+    val lines: List[List[Token]] = layout(headless, width).map(dedent) + caseLines(all)
 
-    val broken: scala.List[Token] = lines.zipWithIndex.flatMap: (line, i) =>
-      (if i == 0 then scala.Nil else scala.List(plain(t"\n"))) ++ line.stdlib
+    val broken: List[Token] = lines.indexed.bind: (line: List[Token], i: Ordinal) =>
+      (if i.n0 == 0 then Nil else List(plain(t"\n"))) + line
 
-    code(List.from(broken))
+    code(broken)

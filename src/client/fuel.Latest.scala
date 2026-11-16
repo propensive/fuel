@@ -34,8 +34,6 @@ package fuel
 
 import soundness.*
 
-import java.util.concurrent as juc
-
 // Work of which only the latest request matters, done apart from the thread that asks for it:
 // a request made while one is in hand replaces any other still waiting, so the next to be done
 // is always the latest, and those it overtook are never done at all. The search field asks for
@@ -44,29 +42,29 @@ import java.util.concurrent as juc
 // intermediate text included. A worker runs only while there is something to do, on a virtual
 // thread, and ends when nothing is waiting, so there is nothing to stop when a tab goes.
 final class Latest[request](work: request -> Unit):
-  private val waiting: juc.atomic.AtomicReference[Option[request]] =
-    juc.atomic.AtomicReference(None)
-
-  private val running: juc.atomic.AtomicBoolean = juc.atomic.AtomicBoolean(false)
+  private val waiting: Atomic.Ref[Optional[request]] = Atomic.Ref.vacant[request]
+  private val running: Atomic.Bool = Atomic.Bool(false)
 
   def apply(request: request): Unit =
-    waiting.set(Some(request))
-    if running.compareAndSet(false, true) then start()
+    waiting() = request
+    if running.replace(false, true) then start()
 
+  // The worker belongs to no invocation, so it is forked unsupervised, as a virtual thread.
   private def start(): Unit =
-    val runnable: Runnable = () => drain()
-    java.lang.Thread.ofVirtual().nn.start(runnable)
+    VirtualSupervisor.fork(() => Unset)(drain())
+    ()
 
   // A failure of one request is the work's to report; it does not stop the next.
   private def drain(): Unit =
-    waiting.getAndSet(None).nn match
-      case Some(request) =>
-        try work(request) catch case _: Exception => ()
-        drain()
+    val next: Optional[request] = waiting.swap(Unset)
 
-      // Nothing waits: the worker ends, unless a request arrived after `waiting` was found
-      // empty and before `running` was cleared, which then found the worker still running and
-      // left the request to it.
-      case None =>
-        running.set(false)
-        if waiting.get.nn.isDefined && running.compareAndSet(false, true) then drain()
+    if next.present then
+      next.let { (request: request) => safely(work(request)) }
+      drain()
+
+    // Nothing waits: the worker ends, unless a request arrived after `waiting` was found
+    // empty and before `running` was cleared, which then found the worker still running and
+    // left the request to it.
+    else
+      running() = false
+      if waiting().present && running.replace(false, true) then drain()

@@ -32,20 +32,17 @@
                                                                                                   */
 package fuel
 
-import java.nio.file as jnf
-
-import scala.collection.immutable as sci
-
 import soundness.*
 
 import alphabets.hexLowerCase
-import dysasymptotics.{linearAccess, linearSize}
-import errorDiagnostics.emptyDiagnostics
+import dysasymptotics.linearSize
 import filesystemBackends.javaBaseFilesystem
 import httpBackends.javaNetHttp
 import internetAccess.online
 import logging.silentLogging
 import providers.javaBaseProvider
+import pyrocosm.Filing
+import systems.javaBaseSystem
 
 // Montreal Forced Aligner, installed and run by fuel: a recording of a presentation's
 // transcript is aligned against the transcript, and the alignment — the time each word is
@@ -91,8 +88,8 @@ object Aligner:
     system.let { system => architecture.let { architecture => t"$system-$architecture" } }
 
   def platform: Optional[Text] =
-    def property(name: String): Text = Optional(java.lang.System.getProperty(name)).let(_.tt).or(t"")
-    platform(property("os.name"), property("os.arch"))
+    def property(name: Text): Text = summon[System](name).or(t"")
+    platform(property(t"os.name"), property(t"os.arch"))
 
   def micromambaUrl(platform: Text): Text =
     t"https://github.com/mamba-org/micromamba-releases/releases/download/$micromambaVersion/micromamba-$platform"
@@ -100,26 +97,28 @@ object Aligner:
   // Whether a file is a recording rather than an alignment: by its extension, or by the magic
   // at its start — RIFF (WAV), fLaC, ID3 or a sync word (MP3), OggS, FORM (AIFF), or `ftyp` at
   // the fourth byte (M4A/AAC).
-  private val audioExtensions: sci.Set[Text] =
-    sci.Set(t"wav", t"wave", t"flac", t"mp3", t"m4a", t"aac", t"aiff", t"aif", t"ogg", t"opus", t"wma")
+  private val audioExtensions: Set[Text] =
+    Set
+      ( t"wav", t"wave", t"flac", t"mp3", t"m4a", t"aac", t"aiff", t"aif", t"ogg", t"opus",
+        t"wma" )
 
-  // Whether the file at `path` is a recording, by its first bytes.
+  private def extension(path: Text): Text = path.cut(t".").reverse.head.or(t"").lower
+
+  // Whether the file at `path` is a recording: by its name, or else by its first bytes, which
+  // are read only then, since a recording is long.
   def isAudio(path: Text): Boolean =
-    val head: Data =
-      try
-        val stream: java.io.InputStream = jnf.Files.newInputStream(jnf.Path.of(path.s)).nn
-        try Array.unsafeFrozen(stream.readNBytes(12).nn) finally stream.close()
-      catch case _: Exception => Array.empty[Byte]
-
-    isAudio(path, head)
+    audioExtensions.has(extension(path))
+    || isAudio(path, place(path).let(Filing.data(_)).or(Array.empty[Byte]))
 
   def isAudio(path: Text, head: Data): Boolean =
-    val extension: Text = path.cut(t".").reverse.head.or(t"").lower
     def ascii(offset: Int, text: Text): Boolean =
-      head.length >= offset + text.length
-      && List.range(0, text.length).all { i => head.readUnchecked(offset + i) == text.s.charAt(i).toByte }
+      val bytes: Data = text.sysData
 
-    audioExtensions.contains(extension)
+      head.length >= offset + bytes.length
+      && List.range(0, bytes.length).all: (index: Int) =>
+          head.readUnchecked(offset + index) == bytes.readUnchecked(index)
+
+    audioExtensions.has(extension(path))
     || ascii(0, t"RIFF") || ascii(0, t"fLaC") || ascii(0, t"ID3") || ascii(0, t"OggS")
     || ascii(0, t"FORM") || ascii(4, t"ftyp")
 
@@ -143,34 +142,35 @@ object Aligner:
     + beams + List(corpus, model, model, output)
 
   // The variables MFA and micromamba are given, over the environment's own.
-  def variables(home: Home): sci.Map[Text, Text] =
-    sci.Map(t"MAMBA_ROOT_PREFIX" -> home.mamba, t"MFA_ROOT_DIR" -> home.root, t"MAMBA_NO_BANNER" -> t"1")
+  def variables(home: Home): Map[Text, Text] =
+    Map
+      ( t"MAMBA_ROOT_PREFIX" -> home.mamba,
+        t"MFA_ROOT_DIR"      -> home.root,
+        t"MAMBA_NO_BANNER"   -> t"1" )
 
-  private def exists(path: Text): Boolean = jnf.Files.exists(jnf.Path.of(path.s))
+  // A file by its absolute path.
+  private def place(path: Text): Optional[Path on Linux] = safely(path.as[Path on Linux])
 
-  // Bytes written whole to, and read whole from, a file by its absolute path.
-  private def write(path: jnf.Path, data: Data): Unit =
-    unsafely(path.toString.tt.as[Path on Linux].write(data))
-
-  private def read(path: jnf.Path): Optional[Data] =
-    safely(path.toString.tt.as[Path on Linux].read[Data])
-
-  // A process run to completion: its exit status and its output, both streams, the errors
-  // drained apart so that neither fills while the other is read.
+  // A process run to completion: its exit status and its output, standard output and errors
+  // interleaved as they were written, which is how micromamba and MFA are read when they fail.
+  // Its variables are MFA's and micromamba's, over the JVM's own, and `HOME` the environment's.
+  // A gap in Soundness: guillotine reads a process's output and its errors apart, and has no
+  // way to read them interleaved (soundness#2503), so the JDK's `ProcessBuilder` is used here,
+  // and here alone. A process which cannot be started has no output, and a status of -1.
   private def run(arguments: List[Text], home: Home)(using Environment): (Int, Text) =
-    val builder: java.lang.ProcessBuilder =
-      java.lang.ProcessBuilder(arguments.map(_.s).stdlib*)
+    val home0: Optional[Text] = summon[Environment].variable(t"HOME")
 
-    val environment: java.util.Map[String, String] = builder.environment().nn
-    variables(home).foreach { (name, value) => environment.put(name.s, value.s) }
-    summon[Environment].variable(t"HOME").let { home => environment.put("HOME", home.s) }
-    builder.redirectErrorStream(true)
-
-    try
+    safely:
+      val builder: java.lang.ProcessBuilder = java.lang.ProcessBuilder(arguments.map(_.s)*)
+      val environment: java.util.Map[String, String] = builder.environment().nn
+      variables(home).each { (name, value) => environment.put(name.s, value.s) }
+      home0.let { home => environment.put("HOME", home.s) }
+      builder.redirectErrorStream(true)
       val process: java.lang.Process = builder.start().nn
       val output: Text = String(process.getInputStream.nn.readAllBytes().nn, "UTF-8").nn.tt
       (process.waitFor(), output)
-    catch case error: java.io.IOException => (-1, error.getMessage.nn.tt)
+
+    . or((-1, t"${arguments.head.or(t"the command")} could not be started"))
 
   private def tail(output: Text, lines: Int = 12): Text =
     output.cut(t"\n").filter(_.trim != t"").reverse.keep(lines).reverse.map { line => t"  $line" }.join(t"\n")
@@ -191,25 +191,24 @@ object Aligner:
     def step(name: Text)(block: => Optional[Text]): Optional[Text] = block.let { error => t"$name: $error" }
 
     val binary: Optional[Text] = step(t"fetching micromamba"):
-      if exists(home.micromamba) then Unset else platform match
+      if onDisk(home.micromamba) then Unset else platform match
         case platform: Text =>
           Out.println(t"fuel: fetching micromamba $micromambaVersion for $platform")
           val url: Text = micromambaUrl(platform)
 
           safely(url.as[HttpUrl].fetch().receive[Data]).lay(t"$url could not be downloaded"):
             (data: Data) =>
-              val path: jnf.Path = jnf.Path.of(home.micromamba.s).nn
-              jnf.Files.createDirectories(path.getParent.nn)
-              write(path, data)
-              jnf.Files.setPosixFilePermissions(path, jnf.attribute.PosixFilePermissions.fromString("rwxr-xr-x"))
-              Unset
+              val installed: Boolean = place(home.micromamba).lay(false): (path: Path on Linux) =>
+                Filing.replace(path, data) && safely(path.executable() = true).present
+
+              if installed then Unset else t"${home.micromamba} could not be written"
 
         case _ =>
           t"micromamba has no executable for this platform"
 
     val environment: Optional[Text] = binary.or:
       step(t"installing Montreal Forced Aligner"):
-        if exists(home.mfa) then Unset else
+        if onDisk(home.mfa) then Unset else
           Out.println(t"fuel: installing Montreal Forced Aligner into ${home.env} (once; about 2 GB, a few minutes)")
           run(createCommand(home), home) match
             case (0, _)      => Unset
@@ -222,7 +221,7 @@ object Aligner:
 
     environment.or:
       List(t"acoustic", t"dictionary").bind: (kind: Text) =>
-        if exists(modelFile(kind)) then Nil else
+        if onDisk(modelFile(kind)) then Nil else
           Out.println(t"fuel: downloading the $model $kind model")
           run(downloadCommand(home, kind), home) match
             case (0, _)      => Nil
@@ -240,49 +239,48 @@ object Aligner:
   def align(home: Home, audio: Text, transcript: Text, cache: Text)(using Stdio, Environment)
   :   Outcome =
 
-    val source: jnf.Path = jnf.Path.of(audio.s).nn
-
-    read(source).lay(Outcome.Failed(t"$audio could not be read")):
+    place(audio).let(Filing.data(_)).lay(Outcome.Failed(t"$audio could not be read")):
       (bytes: Data) =>
         val digest: Text = key(bytes, transcript)
-        val kept: jnf.Path = jnf.Path.of(t"$cache/align/$digest.json".s).nn
+        val kept: Optional[Path on Linux] = place(t"$cache/align/$digest.json")
 
-        if jnf.Files.exists(kept) then
-          Outcome.Aligned(jnf.Files.readString(kept).nn.tt, true)
-        else
-          val extension: Text = audio.cut(t".").reverse.head.or(t"wav")
-          val work: jnf.Path = jnf.Path.of(t"$cache/align/$digest".s).nn
-          val corpus: jnf.Path = work.resolve("corpus").nn
-          val output: jnf.Path = work.resolve("aligned").nn
-          jnf.Files.createDirectories(corpus)
-          write(corpus.resolve(t"talk.$extension".s).nn, bytes)
-          jnf.Files.writeString(corpus.resolve("talk.txt").nn, transcript.s)
+        kept.let(Filing.text(_)).lay(fresh(home, audio, transcript, cache, digest, bytes)):
+          (json: Text) => Outcome.Aligned(json, true)
 
-          def attempt(wide: Boolean): (Int, Text) =
-            run(alignCommand(home, corpus.toString.tt, output.toString.tt, wide), home)
+  // An alignment made afresh, in a working directory beside where it is kept, which is
+  // removed once the alignment is.
+  private def fresh
+    ( home: Home, audio: Text, transcript: Text, cache: Text, digest: Text, bytes: Data )
+    ( using Stdio, Environment )
+  :   Outcome =
 
-          val name: Text = audio.cut(t"/").reverse.head.or(audio)
-          Out.println(t"fuel: aligning $name to the transcript with Montreal Forced Aligner")
-          val produced: jnf.Path = output.resolve("talk.json").nn
+    val suffix: Text = audio.cut(t".").reverse.head.or(t"wav")
+    val work: Text = t"$cache/align/$digest"
+    val corpus: Text = t"$work/corpus"
+    val output: Text = t"$work/aligned"
+    place(t"$corpus/talk.$suffix").let(Filing.replace(_, bytes))
+    place(t"$corpus/talk.txt").let(Filing.replace(_, transcript))
 
-          val result: (Int, Text) = attempt(false) match
-            case (0, text) if jnf.Files.exists(produced) => (0, text)
-            case (status, text) =>
-              Out.println(t"fuel: no alignment at the usual beam; trying wider beams")
-              attempt(true)
+    def attempt(wide: Boolean): (Int, Text) =
+      run(alignCommand(home, corpus, output, wide), home)
 
-          result match
-            case (0, _) if jnf.Files.exists(produced) =>
-              val json: Text = jnf.Files.readString(produced).nn.tt
-              jnf.Files.writeString(kept, json.s)
-              remove(work)
-              Outcome.Aligned(json, false)
+    val name: Text = audio.cut(t"/").reverse.head.or(audio)
+    Out.println(t"fuel: aligning $name to the transcript with Montreal Forced Aligner")
+    val produced: Optional[Path on Linux] = place(t"$output/talk.json")
+    def made: Boolean = produced.lay(false)(Filing.exists(_))
 
-            case (_, text) =>
-              Outcome.Failed(t"Montreal Forced Aligner could not align $name:\n${tail(text)}")
+    val result: (Int, Text) = attempt(false) match
+      case (0, text) if made => (0, text)
+      case (status, text) =>
+        Out.println(t"fuel: no alignment at the usual beam; trying wider beams")
+        attempt(true)
 
-  private def remove(path: jnf.Path): Unit =
-    if jnf.Files.isDirectory(path) then
-      val children = jnf.Files.list(path).nn
-      try children.forEach(child => remove(child.nn)) finally children.close()
-    jnf.Files.deleteIfExists(path)
+    result match
+      case (0, _) if made =>
+        val json: Text = produced.let(Filing.text(_)).or(t"")
+        place(t"$cache/align/$digest.json").let(Filing.replace(_, json))
+        place(work).let(Filing.wipe(_))
+        Outcome.Aligned(json, false)
+
+      case (_, text) =>
+        Outcome.Failed(t"Montreal Forced Aligner could not align $name:\n${tail(text)}")

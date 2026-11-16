@@ -46,6 +46,13 @@ from an aligner that could not be installed or run (status 9), from a translatio
 consistent with the text it translates (status 10, from `fuel translate`) and from a command
 line it did not understand (status 2).
 
+Every error, diagnostic and failure fuel reports is named by a bolt code, the scheme of all of
+Propensive's projects: `↯/f.25` to `↯/f.28` are fuel's (its core, API, client and launcher), as
+`FuelBolts` declares, and `[↯/f.27.5.7] usage: fuel show <file>` is printed after its code's
+label. A code which carries another names the error reported on account of it: a glossary's
+fault the TEL schema finds, `↯/f.25.4.1/s.…`, carries the TEL error's own code. The record of
+what every code means is `f.tel` in [propensive/bolt](https://github.com/propensive/bolt).
+
 `fuel compile` reads every `*.md` in each configured section's directory, parses it as
 CommonMark, and converts it to Pyrocosm blocks: a fenced block whose info string is `scala` or
 `java` is highlighted through [Harlequin](https://soundness.dev/harlequin/); any other fence is
@@ -119,10 +126,10 @@ session on that classpath with the configured `scalac-option`s, so a fragment th
 typecheck fails the compile (exit status 4). A macro the fragments call is run against that
 classpath, never fuel's own copy of a library it uses (Proscala's `-Zisolated-macros`). Every problem — a fragment that does not typecheck,
 a preamble that is not TEL, a file that cannot be read — is a Pyrocosm diagnostic: `fuel
-compile` prints it as the terminal renders one (`path:line:col: error`, the message, and the
-lines concerned numbered from the file, with the place underlined), and in the served document
-it follows the fragment, whose lines are numbered from the file too. Every link is checked
-too, once every document is compiled: a link to another document (`guide/x.md`, `../x.md`,
+compile` prints it as the terminal renders one (`path:line:col: error` and its bolt code, the
+message, and the lines concerned numbered from the file, with the place underlined), and in the
+served document it follows the fragment, whose lines are numbered from the file too. Every
+link is checked too, once every document is compiled: a link to another document (`guide/x.md`, `../x.md`,
 resolved against the document's directory as the files on disk relate, so that
 `../philosophy/x.md` from `doc/modules` leads into the section `doc/philosophy`) or to a place
 on one (`#set-up`, a heading's slug as GitHub makes it, or a fence's `id`), to an API page

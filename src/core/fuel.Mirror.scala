@@ -34,8 +34,6 @@ package fuel
 
 import soundness.*
 
-import scala.collection.immutable as sci
-
 import dysasymptotics.{linearAccess, linearSize}
 import pyrocosm.{Block, Tone}
 
@@ -52,7 +50,15 @@ object Mirror:
     ( foreign:    Int,
       definitive: Int,
       message:    Text,
-      tone:       Tone = Tone.Failure )
+      code:       fulminate.Bolt,
+      tone:       Tone           = Tone.Failure )
+
+  // The code of a difference, `↯/f.25.5.<variant>`: a paragraph or heading which does not name
+  // the same code or places (1); a list of a different length (2); a heading of another level
+  // (3); a fence which is not the same (4); a block of another kind (5); and a block more (6),
+  // or less (7), than the text it translates has.
+  private def bolt(variant: Int): fulminate.Bolt =
+    FuelBolts(FuelBolts.core, FuelBolts.mirror, variant)
 
   private def name(node: Layout): Text = node match
     case _: Layout.BlockQuote    => t"a quotation"
@@ -64,132 +70,144 @@ object Mirror:
     case _: Layout.ThematicBreak => t"a rule"
     case _: Layout.HtmlBlock     => t"a block of HTML"
 
-  // The code a run of prose names and the places it leads to, in order of their text.
-  private def references(prose: sci.Seq[Prose]): sci.List[String] =
-    def recur(node: Prose): sci.List[String] = node match
-      case Prose.Code(code)                  => sci.List(s"`${code.s}`")
-      case Prose.Emphasis(children*)         => children.toList.flatMap(recur)
-      case Prose.Strong(children*)           => children.toList.flatMap(recur)
-      case Prose.Link(destination, _, children*)  => destination.s :: children.toList.flatMap(recur)
-      case Prose.Image(destination, _, children*) => destination.s :: children.toList.flatMap(recur)
-      case _                                 => sci.Nil
+  // A list without one occurrence of each element of another, as a multiset's difference.
+  private def without[element](left: List[element], right: List[element]): List[element] =
+    right.fold(left): (rest: List[element], element: element) =>
+      rest.where(_ == element).lay(rest): (index: Ordinal) =>
+        rest.keep(index.n0) + rest.skip(index.n0 + 1)
 
-    prose.toList.flatMap(recur).sorted
+  // The code a run of prose names and the places it leads to, in order of their text.
+  private def references(prose: List[Prose]): List[Text] =
+    import sortingAlgorithms.timsort
+    import soundness.collationComparable
+    import collations.codepointCollation
+
+    // The Markdown tree holds a node's children as varargs, a standard `Seq`, which only
+    // `List.from` reads as a Soundness list; so too in `pair`.
+    def recur(node: Prose): List[Text] = node match
+      case Prose.Code(code)                       => List(t"`$code`")
+      case Prose.Emphasis(children*)              => List.from(children).bind(recur)
+      case Prose.Strong(children*)                => List.from(children).bind(recur)
+      case Prose.Link(destination, _, children*)  => destination :: List.from(children).bind(recur)
+      case Prose.Image(destination, _, children*) => destination :: List.from(children).bind(recur)
+      case _                                      => Nil
+
+    prose.bind(recur).sort
 
   private def cited
     ( foreign:    Layout,
       definitive: Layout,
-      theirs:     sci.Seq[Prose],
-      ours:       sci.Seq[Prose] )
-  :   sci.List[Divergence] =
+      theirs:     List[Prose],
+      ours:       List[Prose] )
+  :   List[Divergence] =
 
-    val expected: sci.List[String] = references(ours)
-    val found: sci.List[String] = references(theirs)
+    val expected: List[Text] = references(ours)
+    val found: List[Text] = references(theirs)
 
-    if expected == found then sci.Nil else
-      val missing: sci.List[String] = expected.diff(found)
-      val extra: sci.List[String] = found.diff(expected)
+    if expected == found then Nil else
+      val missing: List[Text] = without(expected, found)
+      val extra: List[Text] = without(found, expected)
 
-      val lacks: String =
-        if missing.isEmpty then "" else s" It lacks ${missing.mkString(", ")}."
+      val lacks: Text = if missing.nil then t"" else t" It lacks ${missing.join(t", ")}."
 
-      val adds: String =
-        if extra.isEmpty then "" else s" It has ${extra.mkString(", ")}, which the other does not."
+      val adds: Text =
+        if extra.nil then t"" else t" It has ${extra.join(t", ")}, which the other does not."
 
       val message: Text =
-        Text(s"This does not name the code, or lead to the places, that the text it " +
-          s"translates does.$lacks$adds")
+        t"This does not name the code, or lead to the places, that the text it translates " +
+          t"does.$lacks$adds"
 
-      sci.List(Divergence(foreign.line.n1, definitive.line.n1, message, Tone.Warning))
+      List(Divergence(foreign.line.n1, definitive.line.n1, message, bolt(1), Tone.Warning))
 
   private def items
     ( foreign:    Layout,
       definitive: Layout,
-      theirs:     sci.Seq[List[Layout]],
-      ours:       sci.Seq[List[Layout]] )
-  :   sci.List[Divergence] =
+      theirs:     List[List[Layout]],
+      ours:       List[List[Layout]] )
+  :   List[Divergence] =
 
     if theirs.size != ours.size then
       val message: Text =
         t"This list has ${theirs.size.show} items, and the one it translates has ${ours.size.show}."
 
-      sci.List(Divergence(foreign.line.n1, definitive.line.n1, message))
+      List(Divergence(foreign.line.n1, definitive.line.n1, message, bolt(2)))
     else
-      theirs.toList.zip(ours.toList).flatMap: (theirs, ours) =>
-        sequence(theirs.stdlib, ours.stdlib, foreign.line.n1, definitive.line.n1)
+      theirs.zip(ours).bind: (theirs, ours) =>
+        sequence(theirs, ours, foreign.line.n1, definitive.line.n1)
 
-  private def pair(foreign: Layout, definitive: Layout): sci.List[Divergence] =
+  private def pair(foreign: Layout, definitive: Layout): List[Divergence] =
     (foreign, definitive) match
       case (Layout.Heading(_, level, theirs*), Layout.Heading(_, level2, ours*)) =>
-        if level == level2 then cited(foreign, definitive, theirs, ours) else
+        if level == level2 then cited(foreign, definitive, List.from(theirs), List.from(ours)) else
           val message: Text =
             t"This heading is of level ${level.show}, and the one it translates of level " +
               t"${level2.show}."
 
-          sci.List(Divergence(foreign.line.n1, definitive.line.n1, message))
+          List(Divergence(foreign.line.n1, definitive.line.n1, message, bolt(3)))
 
       case (Layout.Paragraph(_, theirs*), Layout.Paragraph(_, ours*)) =>
-        cited(foreign, definitive, theirs, ours)
+        cited(foreign, definitive, List.from(theirs), List.from(ours))
 
       case (Layout.BlockQuote(_, theirs*), Layout.BlockQuote(_, ours*)) =>
-        sequence(theirs.toList, ours.toList, foreign.line.n1, definitive.line.n1)
+        sequence(List.from(theirs), List.from(ours), foreign.line.n1, definitive.line.n1)
 
       case (Layout.BulletList(_, _, theirs*), Layout.BulletList(_, _, ours*)) =>
-        items(foreign, definitive, theirs, ours)
+        items(foreign, definitive, List.from(theirs), List.from(ours))
 
       case (Layout.OrderedList(_, _, _, _, theirs*), Layout.OrderedList(_, _, _, _, ours*)) =>
-        items(foreign, definitive, theirs, ours)
+        items(foreign, definitive, List.from(theirs), List.from(ours))
 
       case (Layout.CodeBlock(_, info, content), Layout.CodeBlock(_, info2, content2)) =>
         val table: Boolean = info.head == Tables.language
 
-        if info == info2 && (table || content == content2) then sci.Nil else
+        if info == info2 && (table || content == content2) then Nil else
           val message: Text =
             t"This fence is not the one it translates: a fence is the same in every language."
 
-          sci.List(Divergence(foreign.line.n1, definitive.line.n1, message))
+          List(Divergence(foreign.line.n1, definitive.line.n1, message, bolt(4)))
 
       case _ =>
-        if foreign.ordinal == definitive.ordinal then sci.Nil else
+        if foreign.ordinal == definitive.ordinal then Nil else
           val message: Text =
             t"This is ${name(foreign)}, where the text it translates has ${name(definitive)}."
 
-          sci.List(Divergence(foreign.line.n1, definitive.line.n1, message))
+          List(Divergence(foreign.line.n1, definitive.line.n1, message, bolt(5)))
 
   // The differences between two runs of blocks: those of each pair, as far as the first pair
   // of different kinds, after which nothing corresponds; and a difference in how many there
   // are, where every pair corresponds.
   private def sequence
-    ( theirs:     sci.List[Layout],
-      ours:       sci.List[Layout],
+    ( theirs:     List[Layout],
+      ours:       List[Layout],
       foreign:    Int,
       definitive: Int )
-  :   sci.List[Divergence] =
+  :   List[Divergence] =
 
-    val pairs: sci.List[(Layout, Layout)] = theirs.zip(ours)
+    val pairs: List[(Layout, Layout)] = theirs.zip(ours)
 
-    val matching: sci.List[(Layout, Layout)] =
-      pairs.takeWhile { (left, right) => left.ordinal == right.ordinal }
+    val matching: List[(Layout, Layout)] =
+      pairs.keep { (pair: (Layout, Layout)) => pair(0).ordinal == pair(1).ordinal }
 
-    val found: sci.List[Divergence] = matching.flatMap(pair(_, _))
+    val found: List[Divergence] = matching.bind(pair(_, _))
 
     if matching.size < pairs.size then
-      val (left, right) = pairs(matching.size)
-      found ++ pair(left, right)
+      found + pairs.skip(matching.size).head.lay(List[Divergence]())(pair(_, _))
     else if theirs.size == ours.size then found
     else
-      val line: Int =
-        theirs.lift(ours.size).orElse(theirs.lastOption).map(_.line.n1).getOrElse(foreign)
+      val line: Int = theirs.at(ours.size.z).or(theirs.last).lay(foreign)(_.line.n1)
+      val other: Int = ours.at(theirs.size.z).or(ours.last).lay(definitive)(_.line.n1)
 
-      val other: Int =
-        ours.lift(theirs.size).orElse(ours.lastOption).map(_.line.n1).getOrElse(definitive)
+      val divergence: Divergence =
+        if theirs.size > ours.size then
+          val extra: Text = theirs.at(ours.size.z).lay(t"")(name)
+          val message: Text = t"This has $extra which the text it translates does not."
+          Divergence(line, other, message, bolt(6))
+        else
+          val lacking: Text = ours.at(theirs.size.z).lay(t"")(name)
+          val message: Text = t"The text this translates goes on with $lacking, which this lacks."
+          Divergence(line, other, message, bolt(7))
 
-      val message: Text =
-        if theirs.size > ours.size
-        then t"This has ${name(theirs(ours.size))} which the text it translates does not."
-        else t"The text this translates goes on with ${name(ours(theirs.size))}, which this lacks."
-
-      found :+ Divergence(line, other, message)
+      found + List(divergence)
 
   // What differs in structure between a translation, as its text `source` has it, and the text
   // it says it translates: nothing, while a passage of it is pending or orphaned, since its
@@ -205,12 +223,12 @@ object Mirror:
   private def compared(translation: Translation): List[Translation.Finding] =
     val foreign: Translation.Projection = translation.foreign
     val definitive: Translation.Projection = translation.definitive
-    val theirs: sci.List[Layout] = Parser.parse(foreign.text).children.stdlib
-    val ours: sci.List[Layout] = Parser.parse(definitive.text).children.stdlib
+    val theirs: List[Layout] = Parser.parse(foreign.text).children
+    val ours: List[Layout] = Parser.parse(definitive.text).children
 
-    List.from:
-      sequence(theirs, ours, 1, 1).map: (divergence: Divergence) =>
-        Translation.Finding(divergence.tone, foreign.origin(divergence.foreign), divergence.message)
+    sequence(theirs, ours, 1, 1).map: (divergence: Divergence) =>
+      val line: Int = foreign.origin(divergence.foreign)
+      Translation.Finding(divergence.tone, line, divergence.message, divergence.code)
 
   def check(path: Text, source: Text): List[Block.Diagnostic] =
     Translation.report(path, source, findings(source))
