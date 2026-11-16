@@ -1097,8 +1097,16 @@ item []:
       def timed(transcripts: List[Optional[Text]]): List[Double] | List[Text] =
         read(slides(transcripts)).lay(List[Text]()): (presentation: Presentation, _) =>
           ForcedAlignment.schedule(presentation, aligned) match
-            case ForcedAlignment.Outcome.Timed(schedule, _) => schedule
-            case ForcedAlignment.Outcome.Failed(messages)   => messages
+            case ForcedAlignment.Outcome.Timed(schedule, _)  => schedule
+            case ForcedAlignment.Outcome.Failed(_, messages) => messages
+
+      test(m"a slide without a transcript fails the timing, labelled with its code"):
+        read(slides(List(t"hello world", Unset))).lay(t""): (presentation: Presentation, _) =>
+          ForcedAlignment.schedule(presentation, aligned) match
+            case ForcedAlignment.Outcome.Failed(code, _) => code.label
+            case _                                       => t""
+
+      . assert(_ == t"[↯/f.27.1.6]")
 
       test(m"the transcript's words are compared with the alignment's, a word the aligner did not know standing for any"):
         val comparison = ForcedAlignment.compare(List(t"one", t"two", t"three", t"four", t"five", t"six"), aligned)
@@ -5500,3 +5508,55 @@ entry .Channel
 
       . assert(_ == Nil)
 
+    suite(m"Bolt codes"):
+      // A diagnostic's code, as it is written.
+      def codes(blocks: List[Block]): List[Text] = blocks.map:
+        case Block.Diagnostic(_, _, _, _, _, code) => code.lay(t"")(_.text)
+        case _                                     => t""
+
+      test(m"a query's error is named by its reason"):
+        def code(text: Text): Text = Query.read(text) match
+          case error: Query.Error => error.bolt.text
+          case _                  => t""
+
+        (code(t"+List[Int"), code(t"+"))
+
+      . assert(_ == (t"↯/f.26.6.1", t"↯/f.26.6.2"))
+
+      test(m"an error the compiler throws while reading is the API's second"):
+        import errorDiagnostics.emptyDiagnostics
+        Inspection.ReadError(Exception("unreadable")).bolt.text
+
+      . assert(_ == t"↯/f.26.2")
+
+      test(m"a term defined twice, and one which cannot be a label, are variants of a glossary's"):
+        val glossary: Glossary = Glossary(List(Glossary.Term(t"Monad", t"x", Unset, t"a.tel", 1)))
+        val monad: Glossary.Term = Glossary.Term(t"Monad", t"y", Unset, t"other.tel", 4)
+        val unlabelled: Glossary.Term = Glossary.Term(t"a[b]", t"z", Unset, t"other.tel", 9)
+        codes(Glossary.merge(List(glossary, Glossary(List(monad, unlabelled))))(1))
+
+      . assert(_ == List(t"↯/f.25.4.4", t"↯/f.25.4.3"))
+
+      test(m"a fault the schema finds in a glossary carries the TEL error's code"):
+        val text: Text = t"define monad\n  colour red\n  definition  A monoid.\n"
+
+        Glossary.faults(t"a.tel", text).map:
+          case Block.Diagnostic(_, _, _, _, _, code: fulminate.Bolt) =>
+            (code.carrier.text, code.text.starts(t"↯/f.25.4.1/"))
+
+          case _ =>
+            (t"", false)
+
+      . assert(_ == List((t"↯/f.25.4.1", true)))
+
+      test(m"a table without a row is a variant of a table's fault"):
+        codes(Doc.parse(t"a.md", t"```tabular\ncolumn  Planet\n```\n").problems)
+
+      . assert(_ == List(t"↯/f.25.8.5"))
+
+      test(m"passages nobody has translated are one caution, with their code"):
+        val english: Text = t"First.\n\nSecond.\n"
+        val source: Text = Translation.skeleton(english).serialize
+        codes(Translation.check(t"fr/a.md", source, english))
+
+      . assert(_ == List(t"↯/f.25.9.7"))

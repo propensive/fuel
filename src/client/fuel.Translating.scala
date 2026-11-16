@@ -54,6 +54,14 @@ extends Status(11, t"a translation was not updated, since the update would have 
 // with any; with `--update`, it brings each translation up to the text it translates,
 // leaving the translator the `!` lines to work from.
 object Translating:
+  // The code of what `fuel translate` reports, `↯/f.27.2.<variant>`: a file in a directory of
+  // translations which translates nothing (1); a file named which is a translation (2), or
+  // which is nothing that is translated (3); a translation which could not be written (4); a
+  // configuration without a directory of translations (5); a file named which no section
+  // translates (6); and an update which would damage the translation, and is withheld (7).
+  private def bolt(variant: Int): fulminate.Bolt =
+    FuelBolts(FuelBolts.client, FuelBolts.translating, variant)
+
   enum Kind:
     case Document, Overlay, Glossary, Section
 
@@ -234,7 +242,7 @@ object Translating:
             t"This would translate `${shown(config, original)}` into `$tongue`, but there is " +
               t"no such file."
 
-          List(Translations.problem(Tone.Warning, file, message))
+          List(Translations.problem(Tone.Warning, file, message, bolt(1)))
 
   private def progress(source: Source, text: Text): Translation.Progress = source.kind match
     case Kind.Document => Translation.progress(Translation.parse(text), source.text)
@@ -265,21 +273,26 @@ object Translating:
 
   // The sources the files name, or every source where none is named; and the files which name
   // nothing that can be translated, each with why.
-  private def chosen(config: Workspace.Config, files: List[Text]): (List[Source], List[Text]) =
+  private def chosen(config: Workspace.Config, files: List[Text])
+  :   (List[Source], List[(Text, fulminate.Bolt)]) =
+
     val all: List[Source] = sources(config)
 
-    if files.nil then (all, List[Text]()) else
+    if files.nil then (all, List[(Text, fulminate.Bolt)]()) else
       val found: List[(Text, Optional[Source])] = files.map: (path: Text) =>
         val translation: Boolean = Translations.held(path, config.translations)
         val unlisted: Optional[Source] = kind(config, path).let(source(config, _, path).head)
         (path, all.filter(_.path == path).head.or(if translation then Unset else unlisted))
 
-      val reasons: List[Text] = found.filter(_(1).absent).map: (path: Text, _) =>
+      val reasons: List[(Text, fulminate.Bolt)] = found.filter(_(1).absent).map: (path: Text, _) =>
         if Translations.held(path, config.translations) then
-          t"${shown(config, path)} is a translation: name the file it translates"
+          (t"${shown(config, path)} is a translation: name the file it translates", bolt(2))
         else
-          t"${shown(config, path)} could not be read as a document, an overlay, a glossary or " +
-            t"a section's file"
+          val message: Text =
+            t"${shown(config, path)} could not be read as a document, an overlay, a glossary " +
+              t"or a section's file"
+
+          (message, bolt(3))
 
       (found.bind { (_, source) => source.let(List(_)).or(List[Source]()) }, reasons)
 
@@ -295,7 +308,7 @@ object Translating:
 
       content.let: (content: Text) =>
         if write(target, content) then Out.println(t"fuel: wrote ${shown(config, target)}")
-        else Out.println(t"fuel: ${shown(config, target)} could not be written")
+        else Out.println(t"fuel: ${bolt(4).label} ${shown(config, target)} could not be written")
 
   // A source as one language alone sees it.
   private def only(source: Source, tongue: Optional[Text]): Source =
@@ -313,7 +326,8 @@ object Translating:
   private def unconfigured(config: Workspace.Config, tongue: Optional[Text])(using Stdio)
   :   Boolean =
 
-    config.badTranslations.each { (reason: Text) => Out.println(t"fuel: $reason") }
+    config.badTranslations.each: (reason: Text, code: fulminate.Bolt) =>
+      Out.println(t"fuel: ${code.label} $reason")
 
     val targets: List[Translations.Target] = mirrors(config, tongue)
 
@@ -323,8 +337,9 @@ object Translating:
       val into: Text = tongue.lay(t"") { (tongue: Text) => t" into $tongue" }
 
       Out.println
-        ( t"fuel: the configuration has no directory of translations$into: it names one as " +
-            t"`translation $example $example-directory`, beneath the `section` it translates" )
+        ( t"fuel: ${bolt(5).label} the configuration has no directory of translations$into: it " +
+            t"names one as `translation $example $example-directory`, beneath the `section` it " +
+            t"translates" )
 
     targets.nil
 
@@ -340,7 +355,8 @@ object Translating:
       val (selected, unread) = chosen(config, files)
       val all: List[Source] = selected.map(only(_, tongue))
 
-      unread.each { (reason: Text) => Out.println(t"fuel: $reason") }
+      unread.each: (reason: Text, code: fulminate.Bolt) =>
+        Out.println(t"fuel: ${code.label} $reason")
 
       all.each: (source: Source) =>
         // A language with a fallback need not translate everything: its translations are
@@ -352,8 +368,8 @@ object Translating:
 
         if source.translations.nil && !files.nil then
           Out.println
-            ( t"fuel: ${shown(config, source.path)} is in no `section` the configuration " +
-                t"gives a translation" )
+            ( t"fuel: ${bolt(6).label} ${shown(config, source.path)} is in no `section` the " +
+                t"configuration gives a translation" )
 
       val rows: List[Text] = all.bind: (source: Source) =>
         source.translations.bind: (_, target: Text) =>
@@ -399,7 +415,7 @@ object Translating:
 
                 if !reasons.nil then
                   Out.println
-                    ( t"fuel: ${shown(config, target)} is not updated, since " +
+                    ( t"fuel: ${bolt(7).label} ${shown(config, target)} is not updated, since " +
                         t"${reasons.join(t"; ")}: this is a fault in fuel, so please report it" )
 
                   List(Outcome.Refused)
@@ -429,7 +445,8 @@ object Translating:
 
                     List(Outcome.Updated)
                   else
-                    Out.println(t"fuel: ${shown(config, target)} could not be written")
+                    val label: Text = bolt(4).label
+                    Out.println(t"fuel: $label ${shown(config, target)} could not be written")
                     List(Outcome.Refused)
 
       if outcomes.nil then Out.println(t"fuel: there is no translation to update")

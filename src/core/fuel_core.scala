@@ -108,13 +108,15 @@ object Embedding:
 
       if escapes then
         val message: Text = t"A `path` is a file within the document's own directory, as `data/config.json`; `$relative` is not."
-        report(Block.Location(path, line), message)
+        report(Block.Location(path, line), message, bolt(FuelBolts.sample, 1))
       else
         val written: Boolean =
           safely(t"$samples/$relative".as[Path on Linux]).lay(false)(Filing.replace(_, content))
 
         if written then sampled = true
-        else report(Block.Location(path, line), t"The file `$relative` could not be written.")
+        else
+          val message: Text = t"The file `$relative` could not be written."
+          report(Block.Location(path, line), message, bolt(FuelBolts.sample, 2))
 
     // The given a `run` fragment resolves a relative path against, once a sample has been
     // written: written in full, since a fragment's own imports are its own to say.
@@ -165,8 +167,21 @@ object Embedding:
     private def fragment(name: Text): Text =
       fragments.seek(_(0) == name).lay(t""): (entry: (Text, Text)) => entry(1)
 
-    private def report(location: Block.Location, text: Text): Unit =
-      problems0 = Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(text))) :: problems0
+    private def report(location: Block.Location, text: Text, code: fulminate.Bolt): Unit =
+      val paragraphs: List[Block] = List(Block.paragraph(text))
+      problems0 = Block.Diagnostic(Tone.Failure, location, paragraphs, code = code) :: problems0
+
+    // The code of a fence's problem, `↯/f.25.<error>.<variant>`: of the sample file it writes
+    // (`FuelBolts.sample`), of the fixture compiled before it (`fixture`), of a frame of its
+    // animation (`frame`), of its run (`run`), or of the fragment itself (`fragment`).
+    private def bolt(error: Int, variant: Int): fulminate.Bolt =
+      FuelBolts(FuelBolts.core, error, variant)
+
+    // A message of the compiler's, without the code Proscala begins it with under
+    // `-Zbolt-codes`, and the code `base`, carrying that code where it has one.
+    private def compiled(message: Text, base: fulminate.Bolt): (Text, fulminate.Bolt) =
+      val (code, length) = fulminate.Bolt.prefix(message)
+      (message.skip(length), base.carrying(code))
 
     // What is compiled around a fragment: the text before it, whose length shifts every
     // diagnostic and whose lines are dropped from the rendering; the text after it; and the
@@ -303,16 +318,18 @@ object Embedding:
           then history = List(Joined.Object(objectName(0), defined(text), imported(text)))
           else if errors.nil then
             val message: Text = t"The fixture could not be entered into the session."
-            report(Block.Location(fixturePath), message)
+            report(Block.Location(fixturePath), message, bolt(FuelBolts.fixture, 1))
           else
             errors.each: (diagnostic: harlequin.Diagnostic) =>
               val from: Int = (diagnostic.span.offset.let(_.n0).or(0) - framed.shift).max(0)
               val note: Block.Note = Notes.of(text, from, from, Block.Note.Style.Erroneous)
-              report(Block.Location(fixturePath, note.line + 1, note.start + 1), diagnostic.message)
+              val location = Block.Location(fixturePath, note.line + 1, note.start + 1)
+              val (message, code) = compiled(diagnostic.message, bolt(FuelBolts.fixture, 2))
+              report(location, message, code)
 
         case error: Throwable =>
           val message: Text = t"The fixture could not be compiled: ${error.toString.tt}"
-          report(Block.Location(fixturePath), message)
+          report(Block.Location(fixturePath), message, bolt(FuelBolts.fixture, 3))
 
         case _ =>
           ()
@@ -447,7 +464,8 @@ object Embedding:
               positioned.lay(1)(Compounds.line(_, List(t"frame", index.n0.show)))
 
             val location = Block.Location(path, fence + 1 + line)
-            report(location, t"Frame ${(index.n0 + 1).show} has no `code`.")
+            val message: Text = t"Frame ${(index.n0 + 1).show} has no `code`."
+            report(location, message, bolt(FuelBolts.frame, 1))
             Nil
 
       // An animated fence: its frames, then the code after `##` as the last if there is any.
@@ -462,13 +480,16 @@ object Embedding:
         val line: Int = header.lay(fence + 1): (text: Text) =>
           fence + 2 + text.cut(t"\n").indexed.seek(_(0).trim == t"run").let(_(1).n0).or(0)
 
-        val reason: Optional[Text] =
-          if mode == Preamble.Mode.Parse then t"A fragment which is only parsed cannot be run."
-          else if context == harlequin.Scala.Context.Type then t"A type cannot be run."
-          else if !frames.nil then t"An animated fragment cannot be run."
+        val reason: Optional[(Text, Int)] =
+          if mode == Preamble.Mode.Parse
+          then (t"A fragment which is only parsed cannot be run.", 1)
+          else if context == harlequin.Scala.Context.Type then (t"A type cannot be run.", 2)
+          else if !frames.nil then (t"An animated fragment cannot be run.", 3)
           else Unset
 
-        reason.let: (text: Text) => report(Block.Location(path, line), text)
+        reason.let: (text: Text, variant: Int) =>
+          report(Block.Location(path, line), text, bolt(FuelBolts.run, variant))
+
         reason.absent
       }
 
@@ -476,7 +497,8 @@ object Embedding:
       def withCode(frames: List[Preamble.Frame], label: Text): List[Preamble.Frame] =
         frames.indexed.bind: (frame: Preamble.Frame, index: Ordinal) =>
           if frame.code.present then List(frame) else
-            report(Block.Location(path, fence + 1), t"Frame ${(index.n0 + 1).show} of `$label` has no `code`.")
+            val message: Text = t"Frame ${(index.n0 + 1).show} of `$label` has no `code`."
+            report(Block.Location(path, fence + 1), message, bolt(FuelBolts.frame, 2))
             Nil
 
       // One version of the fragment: animated when it has frames, compiled when Scala, else
@@ -518,7 +540,7 @@ object Embedding:
               val message: Text =
                 t"With `alternative`s, every version of the code is in one; the code after `##` is not shown."
 
-              report(Block.Location(path, fence + 1), message)
+              report(Block.Location(path, fence + 1), message, bolt(FuelBolts.fragment, 1))
 
             def of(alternative: Preamble.Alternative, joining: Boolean, run: Boolean, id: Text)
             :   List[Block] =
@@ -662,14 +684,15 @@ object Embedding:
           val raw: List[Block.Line] = highlighted match
             case error: Throwable =>
               val message: Text = t"Frame $number could not be highlighted: ${error.toString.tt}"
-              report(Block.Location(path, start), message)
+              report(Block.Location(path, start), message, bolt(FuelBolts.frame, 3))
               lines(code)
 
             case source: SourceCode =>
               if checked && scala && preamble.errors == Preamble.Errors.Fail then
                 source.diagnostics.each: (diagnostic: harlequin.Diagnostic) =>
                   if diagnostic.importance == harlequin.Diagnostic.Importance.Error then
-                    report(Block.Location(path, start), t"Frame $number: ${diagnostic.message}")
+                    val (message, code) = compiled(diagnostic.message, bolt(FuelBolts.frame, 4))
+                    report(Block.Location(path, start), t"Frame $number: $message", code)
 
               framing.own(linked(source), code.cut(t"\n").size)
 
@@ -743,7 +766,7 @@ object Embedding:
       attempt match
         case error: Throwable =>
           val message: Text = t"The fragment could not be highlighted: ${error.toString.tt}"
-          report(Block.Location(path, start), message)
+          report(Block.Location(path, start), message, bolt(FuelBolts.fragment, 2))
           List(Block.Code(Language.Scala, lines(code), Nil, start, Unset, id))
 
         case source: SourceCode =>
@@ -787,7 +810,8 @@ object Embedding:
           checker.enter(t"$name.scala", unit)
 
       if !entered then
-        report(Block.Location(path, start), t"The fragment could not be compiled to be run.")
+        val message: Text = t"The fragment could not be compiled to be run."
+        report(Block.Location(path, start), message, bolt(FuelBolts.run, 4))
         Nil
       else
         val outcome: Runner.Outcome = Runner.run(checker.run(t"$name$$"))
@@ -801,14 +825,15 @@ object Embedding:
           val location: Block.Location = Block.Location(path, start)
 
           val diagnostic: Block =
-            Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(message)))
+            val code: fulminate.Bolt = bolt(FuelBolts.run, 5)
+            Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(message)), code = code)
 
           if preamble.errors == Preamble.Errors.Fail then problems0 = diagnostic :: problems0
           List(diagnostic)
 
         if preamble.errors == Preamble.Errors.Show && outcome.error.absent then
           val message: Text = t"This fragment is marked `errors show`, but it ran without error."
-          report(Block.Location(path, start), message)
+          report(Block.Location(path, start), message, bolt(FuelBolts.run, 6))
 
         output + failure
 
@@ -825,7 +850,8 @@ object Embedding:
       val location = Block.Location(path, start + note.line, note.start + 1)
       val excerpt: Block.Code = Block.Code.excerpt(Language.Scala, lines, List(note))
       val numbered: Block.Code = excerpt.copy(start = excerpt.start.let(_ + start - 1))
-      Block.Diagnostic(tone, location, List(Block.paragraph(message)), List(numbered))
+      val (text, code) = compiled(message, bolt(FuelBolts.fragment, 4))
+      Block.Diagnostic(tone, location, List(Block.paragraph(text)), List(numbered), code = code)
 
     // One line marked as not compiling, compiled in its place: it must fail, and its first
     // error is a note on it, in the block whose line is now taken from that run, so that its
@@ -859,7 +885,7 @@ object Embedding:
 
           if error.absent then
             val message: Text = t"This line is marked `// does not compile`, but it compiled."
-            report(Block.Location(path, start + index), message)
+            report(Block.Location(path, start + index), message, bolt(FuelBolts.fragment, 3))
 
           val none: List[Block] = Nil
 
@@ -942,7 +968,7 @@ object Embedding:
         case Preamble.Errors.Show =>
           if checked && errors.nil && !preamble.run then
             val message: Text = t"This fragment is marked `errors show`, but it compiled."
-            report(Block.Location(path, start), message)
+            report(Block.Location(path, start), message, bolt(FuelBolts.fragment, 5))
 
         case _ =>
           ()

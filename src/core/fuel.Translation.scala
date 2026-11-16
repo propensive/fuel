@@ -399,16 +399,25 @@ object Translation:
 
     shown.join(t" ")
 
-  // Something wrong with a translation, at a line of its text (from 1): what `findings` and
-  // `Mirror` find, before it is known which file the text is in, or where in it.
+  // Something wrong with a translation, at a line of its text (from 1), with its code: what
+  // `findings` and `Mirror` find, before it is known which file the text is in, or where in it.
   case class Finding
     ( tone:         Tone,
       line:         Int,
       message:      Text,
+      code:         fulminate.Bolt,
       detail:       Optional[Text] = Unset,
       untranslated: Boolean        = false ):
 
     def shifted(lines: Int): Finding = copy(line = line + lines)
+
+  // The code of what is wrong with a translation of a document, `↯/f.25.9.<variant>`: text it
+  // translates which has gained lines (1), lost them (2) or changed (3); `+` lines which
+  // translate nothing (4); a passage pending revision (5), or orphaned (6); a passage nobody has
+  // translated (7); and a document with no translation into a language it is translated into
+  // (8, from `Translations`).
+  private[fuel] def bolt(variant: Int): fulminate.Bolt =
+    FuelBolts(FuelBolts.core, FuelBolts.translation, variant)
 
   // Findings as diagnostics at their lines of the file at `path`, whose text is `file`: the
   // failures first, and the passages nobody has translated together, as one caution at the
@@ -427,7 +436,8 @@ object Translation:
         finding.detail.lay(List[Block]()) { text => List(Block.paragraph(text)) }
 
       val location: Block.Location = Block.Location(path, finding.line)
-      Block.Diagnostic(finding.tone, location, List(Block.paragraph(message)), excerpt, detail)
+      val paragraphs: List[Block] = List(Block.paragraph(message))
+      Block.Diagnostic(finding.tone, location, paragraphs, excerpt, detail, finding.code)
 
     val untranslated: List[Finding] = findings.filter(_.untranslated).order(_.line)
     val rest: List[Finding] = findings.filter(!_.untranslated)
@@ -472,17 +482,18 @@ object Translation:
       case Run.Changed(removed, added, position) =>
         val line: Int = projection.origin(if !removed.nil then position + 1 else position.max(1))
 
-        val message: Text =
+        val (message, variant) =
           if removed.nil then
-            t"The text this translates has gained lines after this one, which are not " +
-              t"translated."
-          else if added.nil then t"The text this translates has lost these lines."
-          else t"The text this translates has changed here."
+            ( t"The text this translates has gained lines after this one, which are not " +
+                t"translated.",
+              1 )
+          else if added.nil then (t"The text this translates has lost these lines.", 2)
+          else (t"The text this translates has changed here.", 3)
 
         val change: Text =
           reworded(removed.map(befores.readUnchecked(_)), added.map(afters.readUnchecked(_)))
 
-        List(Finding(Tone.Warning, line, message, change))
+        List(Finding(Tone.Warning, line, message, bolt(variant), change))
 
       case _ =>
         Nil
@@ -494,22 +505,22 @@ object Translation:
             val message: Text =
               t"These lines translate nothing: `+` lines follow the `-` lines they translate."
 
-            List(Finding(Tone.Failure, passage.line, message))
+            List(Finding(Tone.Failure, passage.line, message, bolt(4)))
 
           case State.Pending =>
             val message: Text =
               t"The text this translates has changed, from the `!` lines to the `-` lines: " +
                 t"revise the `+` lines, then delete the `!` lines."
 
-            List(Finding(Tone.Warning, passage.line, message))
+            List(Finding(Tone.Warning, passage.line, message, bolt(5)))
 
           case State.Orphaned =>
             val message: Text = t"The text this translates has gone: delete these lines."
-            List(Finding(Tone.Warning, passage.line, message))
+            List(Finding(Tone.Warning, passage.line, message, bolt(6)))
 
           case State.Untranslated =>
-            List:
-              Finding(Tone.Warning, passage.line, t"This is not translated.", untranslated = true)
+            val message: Text = t"This is not translated."
+            List(Finding(Tone.Warning, passage.line, message, bolt(7), untranslated = true))
 
           case State.Translated =>
             Nil

@@ -59,6 +59,15 @@ import pyrocosm.{Block, Tone}
 // it changes; `check` holds one to the other; and `foreign` is the glossary a reader of the
 // language has.
 object GlossaryTranslations:
+  // The code of what is wrong with a glossary's translation, `↯/f.26.1.<variant>`: a term it
+  // has no entry for (1); an entry for no term (2), or for one which has an entry already (3);
+  // a definition whose text has gone (4), or which is not translated (5); a term not given its
+  // name in the language (6); a `term` which cannot be one (7), which names another term (8),
+  // or which is another entry's (9); a synonym which cannot be a name (10), or which is one
+  // already (11); and a `link` in place of the page of the site which explains the term (12).
+  private def bolt(variant: Int): fulminate.Bolt =
+    FuelBolts(FuelBolts.api, FuelBolts.glossaryTranslation, variant)
+
   // An entry of a glossary or of a translation of one, as the schema reads it: the name on its
   // `define` line; its `term` (the line's second value, or a child), `keyword`s, `link` and
   // `synonym`s; its definition's text; the line (from 1) of the entry; and the line its
@@ -216,14 +225,16 @@ object GlossaryTranslations:
         val remedy: Text = t"`fuel translate --update` makes the translation again"
         val all: List[Text] = (ours.map(_.name) + names).distinct
 
-        def finding(tone: Tone, line: Int, message: Text): List[Translation.Finding] =
-          List(Translation.Finding(tone, line, message))
+        def finding(tone: Tone, line: Int, message: Text, variant: Int)
+        :   List[Translation.Finding] =
+
+          List(Translation.Finding(tone, line, message, bolt(variant)))
 
         def optional(value: Optional[Text]): List[Text] = value.lay(List[Text]())(List(_))
 
         val absent: List[Translation.Finding] = ours.bind: (entry: Entry) =>
           if theirs.exists(_.name == entry.name) then Nil
-          else finding(Tone.Warning, 1, t"This has no entry for `${entry.name}`: $remedy.")
+          else finding(Tone.Warning, 1, t"This has no entry for `${entry.name}`: $remedy.", 1)
 
         val entered: List[Translation.Finding] = theirs.indexed.bind:
           (entry: Entry, index: Ordinal) =>
@@ -232,16 +243,17 @@ object GlossaryTranslations:
             val unknown: List[Translation.Finding] =
               finding
                 ( Tone.Warning, entry.line,
-                  t"The glossary this translates has no term `${entry.name}`: $remedy." )
+                  t"The glossary this translates has no term `${entry.name}`: $remedy.", 2 )
 
             ours.seek(_.name == entry.name).lay(unknown): (original: Entry) =>
               if earlier.exists(_.name == entry.name) then
-                finding(Tone.Failure, entry.line, t"`${entry.name}` has an entry already.")
+                finding(Tone.Failure, entry.line, t"`${entry.name}` has an entry already.", 3)
               else
                 val gone: List[Translation.Finding] =
                   entry.definition.lay(List[Translation.Finding]()): _ =>
                     finding
-                      ( Tone.Warning, entry.site, t"The text this translates has gone: $remedy." )
+                      ( Tone.Warning, entry.site,
+                        t"The text this translates has gone: $remedy.", 4 )
 
                 val prose: List[Translation.Finding] = original.definition.lay(gone):
                   (defined: Text) =>
@@ -249,7 +261,8 @@ object GlossaryTranslations:
                       finding
                         ( Tone.Warning, entry.line,
                           t"This lacks the definition of `${entry.name}`, which is not " +
-                            t"translated: $remedy." )
+                            t"translated: $remedy.",
+                          5 )
 
                     entry.definition.lay(lacking): (found: Text) =>
                       (Translation.findings(found, defined) + Mirror.findings(found))
@@ -261,7 +274,9 @@ object GlossaryTranslations:
                       t"`${entry.name}` is not translated: a `term` beneath it says what it " +
                         t"is in this language."
 
-                    List(Translation.Finding(Tone.Warning, entry.line, message, untranslated = true))
+                    List:
+                      Translation.Finding
+                        ( Tone.Warning, entry.line, message, bolt(6), untranslated = true )
 
                 val named: List[Translation.Finding] = optional(entry.term).bind: (term: Text) =>
                   val slug: Text = Blocks.slug(term)
@@ -274,17 +289,20 @@ object GlossaryTranslations:
                     finding
                       ( Tone.Failure, entry.line,
                         t"`$term` cannot be a glossary term: a term is written in brackets, so " +
-                          t"it cannot hold one." )
+                          t"it cannot hold one.",
+                        7 )
                   else shared.lay(optional(friend).bind { (name: Text) =>
                     finding
                       ( Tone.Warning, entry.line,
                         t"`$term` is also the name of another term, `$name`, as the glossary " +
-                          t"defines it: in this language `[$term]` is `${entry.name}`." ) }):
+                          t"defines it: in this language `[$term]` is `${entry.name}`.",
+                        8 ) }):
                     (shared: Entry) =>
                       finding
                         ( Tone.Failure, entry.line,
                           t"`$term` is the term of `${shared.name}` already, so `[$term]` would " +
-                            t"not say which is meant." )
+                            t"not say which is meant.",
+                          9 )
 
                 // A synonym which cannot be a name, or which is a name in this language already:
                 // this term's, or another's term or synonym.
@@ -301,12 +319,14 @@ object GlossaryTranslations:
                       finding
                         ( Tone.Failure, entry.line,
                           t"`$synonym` cannot be a synonym: a name is written in brackets, so it " +
-                            t"cannot hold one." )
+                            t"cannot hold one.",
+                          10 )
                     else if (own + others).exists(Blocks.slug(_) == slug) then
                       finding
                         ( Tone.Failure, entry.line,
                           t"`$synonym` is a name in this language already, so `[$synonym]` " +
-                            t"would not say which term is meant." )
+                            t"would not say which term is meant.",
+                          11 )
                     else Nil
 
                 val linked: List[Translation.Finding] = optional(entry.link).bind: (link: Text) =>
@@ -318,7 +338,8 @@ object GlossaryTranslations:
                       ( Tone.Warning, entry.line,
                         t"`${entry.name}` is explained by a page of the site, " +
                           t"`${original.link.or(t"")}`, which is the same page in every " +
-                          t"language: this `link` is in place of it." )
+                          t"language: this `link` is in place of it.",
+                        12 )
 
                 unnamed + prose + named + synonymous + linked
 

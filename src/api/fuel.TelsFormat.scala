@@ -403,6 +403,9 @@ object TelsFormat extends Format:
     val all: List[Api.Entity] = top :: definitions + fields
     Api(all.map { (entity: Api.Entity) => (entity.key, entity) }.to[Map], this)
 
+  // The code of a schema which more than one of the configured files declares, `↯/f.26.7`.
+  val clash: fulminate.Bolt = FuelBolts(FuelBolts.api, FuelBolts.schema)
+
   // Several schemas' APIs as one, in the order they were read; a schema named as an earlier
   // one is, is left out, and named for the caller to report.
   def combine(apis: List[Api]): (Api, List[Text]) =

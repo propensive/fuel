@@ -111,6 +111,12 @@ object Presentation:
   private def keywords(pointer: Text): List[Text] =
     pointer.cut(t"/").filter { segment => segment != t"" && safely(segment.as[Int]).absent }
 
+  // The code of a presentation's problem, `↯/f.25.6.<variant>`: a fault the schema finds, which
+  // carries the TEL error's own code (1); a slide's code with nothing in it (2); and an empty
+  // slide (3).
+  private def bolt(variant: Int): fulminate.Bolt =
+    FuelBolts(FuelBolts.core, FuelBolts.presentation, variant)
+
   // What a fault the schema finds means in a presentation.
   private def explain(error: Tel.Error, pointer: Text): Text =
     import Tel.Error.Reason
@@ -167,7 +173,8 @@ object Presentation:
         else at(pointer.cut(t"/").filter(_ != t"").reverse.skip(1).reverse)
 
       val location: Block.Location = Block.Location(path, line.or(1))
-      Block.Diagnostic(Tone.Warning, location, List(Block.paragraph(message)))
+      val code: fulminate.Bolt = bolt(1).carrying(error.bolt)
+      Block.Diagnostic(Tone.Warning, location, List(Block.paragraph(message)), code = code)
 
   // A presentation read from its text, with a diagnostic for each fault the schema finds and
   // each part not understood; or the diagnostic which says the text is not TEL.
@@ -187,9 +194,10 @@ object Presentation:
     @scala.caps.unsafe.untrackedCaptures
     private var problems: List[Block] = Nil
 
-    private def report(line: Int, message: Text): Unit =
+    private def report(line: Int, message: Text, variant: Int): Unit =
       val location: Block.Location = Block.Location(path, line)
-      val diagnostic = Block.Diagnostic(Tone.Warning, location, List(Block.paragraph(message)))
+      val paragraphs: List[Block] = List(Block.paragraph(message))
+      val diagnostic = Block.Diagnostic(Tone.Warning, location, paragraphs, code = bolt(variant))
       problems = diagnostic :: problems
 
     private def words(compound: Tel.Compound): List[Text] = Compounds.inline(compound)
@@ -216,7 +224,7 @@ object Presentation:
               val body: Optional[Text] = this.child(node, t"code")
 
               if body.absent && preamble.frames.nil
-              then report(line, t"This slide's code has nothing in its `code`.")
+              then report(line, t"This slide's code has nothing in its `code`.", 2)
 
               val label: Optional[Text] = this.child(node, t"label")
               val (hold, at) = (number(node, t"hold"), number(node, t"at"))
@@ -246,7 +254,7 @@ object Presentation:
         val ordinal: Int = children.keep(position.n0).filter(_.keyword == t"syntax").size
         part(child, codes.at(Ordinal.zerary(ordinal)), line)
 
-      if children.nil then report(line, t"This slide is empty.")
+      if children.nil then report(line, t"This slide is empty.", 3)
 
       val transcript: Optional[Text] =
         children.filter(_.keyword == t"transcript").head.let: (child: Tel.Compound) =>

@@ -103,7 +103,7 @@ object Overlay:
 
         val missing: Block.Diagnostic =
           val message: Text = t"An overlay must name the package it documents with `base`."
-          Block.Diagnostic(Tone.Failure, Block.Location(path, 1), List(Block.paragraph(message)))
+          failure(path, 1, message, 1)
 
         base.lay[Overlay | Block.Diagnostic](missing): (base: Text) =>
           val problems: List[Block] = check(path, tel, Unset, roots, fileKeywords, prose)
@@ -117,8 +117,18 @@ object Overlay:
             ( path, base, doc(tel, 1, Nil, prose), entries(tel, tel, Nil, Nil, prose), problems,
               format )
 
-  private def failure(path: Text, line: Int, message: Text): Block =
-    Block.Diagnostic(Tone.Failure, Block.Location(path, line), List(Block.paragraph(message)))
+  private def failure(path: Text, line: Int, message: Text, variant: Int): Block.Diagnostic =
+    val location: Block.Location = Block.Location(path, line)
+    Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(message)), code = bolt(variant))
+
+  // The code of an overlay's problem, `↯/f.26.4.<variant>`: an overlay without a `base` (1); a
+  // keyword it does not have (2); an `entry` without a name (3); a value which holds what it
+  // cannot (4); a keyword given twice (5); an entry's info (6) or detail (7) given twice; an
+  // entry given twice (8); info too long (9); an entry marked as removed which exists (10); an
+  // entry for no member (11); a `base` the sources do not declare (12); a member nothing
+  // documents (13); and a `format` which is not one an overlay documents (14).
+  private[fuel] def bolt(variant: Int): fulminate.Bolt =
+    FuelBolts(FuelBolts.api, FuelBolts.overlay, variant)
 
   // The atoms of a compound, inline then its source, as they are written.
   private def texts(compound: Tel.Compound): List[Text] =
@@ -152,12 +162,13 @@ object Overlay:
         val message: Text =
           t"`$keyword` is not part of an overlay: $where may hold ${written(allowed)}."
 
-        List(failure(path, line(child), message))
+        List(failure(path, line(child), message, 2))
       else if keyword == t"entry" then
         val unnamed: Text = t"An `entry` must name the member it documents, as `.name` or `#Name`."
 
         val name: List[Block] =
-          if Compounds.inline(child(0)).nil then List(failure(path, line(child), unnamed)) else Nil
+          if Compounds.inline(child(0)).nil then List(failure(path, line(child), unnamed, 3))
+          else Nil
 
         name + check(path, tel, child, grandchildren, entryKeywords, prose)
       else
@@ -165,24 +176,26 @@ object Overlay:
           val message: Text =
             t"`$keyword` holds no `${first(0).keyword}`: it takes its value alone."
 
-          List(failure(path, line(first), message))
+          List(failure(path, line(first), message, 4))
 
     val repeated: List[Block] = once.bind: (keyword: Text) =>
       named(keyword).skip(1).map: (child: Placed) =>
-        failure(path, line(child), t"`$keyword` is given more than once here.")
+        failure(path, line(child), t"`$keyword` is given more than once here.", 5)
 
     // An entry's info may follow its name, and a leaf entry's detail may follow it as a source
     // atom, but not as well as a child which says the same.
     val doubled: List[Block] = entry.lay(List[Block]()): (entry: Placed) =>
       // The first child of a keyword, as a failure, where it is given as well as on the line.
-      def already(keyword: Text, twice: Boolean, message: Text): List[Block] =
+      def already(keyword: Text, twice: Boolean, message: Text, variant: Int): List[Block] =
         val found: List[Placed] = if twice then named(keyword).keep(1) else Nil
-        found.map: (child: Placed) => failure(path, line(child), message)
+        found.map: (child: Placed) => failure(path, line(child), message, variant)
 
       val onLine: Text = t"This entry's info is already given on its line."
       val beneath: Text = t"This entry's detail is already given beneath its line."
-      val info: List[Block] = already(t"info", Compounds.inline(entry(0)).size > 1, onLine)
-      val detail: List[Block] = already(t"detail", Compounds.source(entry(0)).present, beneath)
+      val info: List[Block] = already(t"info", Compounds.inline(entry(0)).size > 1, onLine, 6)
+
+      val detail: List[Block] =
+        already(t"detail", Compounds.source(entry(0)).present, beneath, 7)
       info + detail
 
     val duplicates: List[Block] =
@@ -192,7 +205,7 @@ object Overlay:
 
       entries.indexed.bind: (pair: (Text, Placed), index: Ordinal) =>
         if !entries.keep(index.n0).exists(_(0) == pair(0)) then Nil
-        else List(failure(path, line(pair(1)), t"`${pair(0)}` already has an entry here."))
+        else List(failure(path, line(pair(1)), t"`${pair(0)}` already has an entry here.", 8))
 
     // The info as it reads, which is what the limit is on, not the Markdown it is written in.
     val long: List[Block] =
@@ -214,7 +227,7 @@ object Overlay:
           t"This info is ${size.show} characters long, and may be at most ${InfoLimit.show}: " +
             t"say the rest in a `detail`."
 
-        if size <= InfoLimit then Nil else List(failure(path, at, message))
+        if size <= InfoLimit then Nil else List(failure(path, at, message, 9))
 
     each + repeated + doubled + duplicates + long
 
@@ -294,9 +307,10 @@ object Overlay:
     @scala.caps.unsafe.untrackedCaptures
     var problems: List[Block] = Nil
 
-    def report(tone: Tone, path: Text, line: Int, message: Text): Unit =
+    def report(tone: Tone, path: Text, line: Int, message: Text, variant: Int): Unit =
       val location: Block.Location = Block.Location(path, line)
-      problems = Block.Diagnostic(tone, location, List(Block.paragraph(message))) :: problems
+      val paragraphs: List[Block] = List(Block.paragraph(message))
+      problems = Block.Diagnostic(tone, location, paragraphs, code = bolt(variant)) :: problems
 
     // What an overlay says of an entity, over what the entity says of itself (a schema's
     // `description`): the overlay's `info` and `detail`, each where it has one.
@@ -315,7 +329,7 @@ object Overlay:
             val message: Text =
               t"`$written` is marked as removed in ${until.version}, but it still exists."
 
-            report(Tone.Warning, overlay.file, entry.line, message)
+            report(Tone.Warning, overlay.file, entry.line, message, 10)
 
           val doc: Api.Entry = over(entry.doc.copy(file = overlay.file), existing.doc)
           current = current.add(existing.copy(doc = doc))
@@ -340,7 +354,7 @@ object Overlay:
               val message: Text =
                 t"`$written` is documented here, but no such member of `${parent.key}` is declared."
 
-              report(Tone.Failure, overlay.file, entry.line, message)
+              report(Tone.Failure, overlay.file, entry.line, message, 11)
 
     overlays.each: (overlay: Overlay) =>
       overlay.problems.each: (problem: Block) => problems = problem :: problems
@@ -359,7 +373,7 @@ object Overlay:
           val message: Text =
             t"The $noun `${overlay.base}` this overlay documents is not declared by the sources."
 
-          report(Tone.Failure, overlay.file, 1, message)
+          report(Tone.Failure, overlay.file, 1, message, 12)
 
     // A public member of a documented package, declared by the sources, with no entry, and
     // under no hidden entity: a caution where it is declared, naming the entry to write.
@@ -398,7 +412,7 @@ object Overlay:
         val message: Text =
           t"`${entity.key}` is not documented: add `entry $written` under `$parentKey` in $file."
 
-        report(Tone.Warning, where, line, message)
+        report(Tone.Warning, where, line, message, 13)
 
     (current, problems.reverse)
 

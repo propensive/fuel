@@ -189,7 +189,15 @@ object ForcedAlignment:
 
   enum Outcome:
     case Timed(schedule: List[Double], comparison: Comparison)
-    case Failed(messages: List[Text])
+    case Failed(code: fulminate.Bolt, messages: List[Text])
+
+  // The code of why a presentation cannot be timed by an alignment, `↯/f.27.1.<variant>`: a
+  // file to align by which cannot be read (1); an aligner which could not be installed (2), or
+  // which failed (3); no cache directory to install one in (4); an alignment which cannot be
+  // read (5); a slide without a transcript (6); a transcript and an alignment which differ too
+  // much (7); and a slide none of whose words the alignment has (8).
+  private[fuel] def bolt(variant: Int): fulminate.Bolt =
+    FuelBolts(FuelBolts.client, FuelBolts.alignment, variant)
 
   // The deck's schedule from the alignment: a time for each slide after the first, at which
   // its step lands, being the time the first word of its transcript is spoken — or the first
@@ -205,7 +213,7 @@ object ForcedAlignment:
           ( t"slide ${index.n1.show} (line ${slide.line.show}) has no transcript, which timing it "
             + t"by an alignment needs" )
 
-    if !missing.nil then Outcome.Failed(missing) else
+    if !missing.nil then Outcome.Failed(bolt(6), missing) else
       val expected: List[Text] = transcripts.bind(identity(_))
       val comparison: Comparison = compare(expected, aligned)
 
@@ -213,7 +221,7 @@ object ForcedAlignment:
         val count: Text = comparison.differing.show
         val total: Text = expected.size.show
         val heading: Text = t"the transcript and the alignment differ in $count of $total words, which is too many to time the presentation by:"
-        Outcome.Failed(heading :: comparison.shown.map { hunk => t"  $hunk" })
+        Outcome.Failed(bolt(7), heading :: comparison.shown.map { hunk => t"  $hunk" })
       else
         val places: Map[Int, Int] = comparison.places
 
@@ -236,5 +244,5 @@ object ForcedAlignment:
         // Times to the millisecond: an aligner's floats carry noise beyond it.
         def rounded(time: Double): Double = (time*1000.0).round/1000.0
 
-        if !unplaced.nil then Outcome.Failed(unplaced)
+        if !unplaced.nil then Outcome.Failed(bolt(8), unplaced)
         else Outcome.Timed(times.skip(1).map(_.or(0.0)).map(rounded), comparison)

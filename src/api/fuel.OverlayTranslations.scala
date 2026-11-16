@@ -59,6 +59,13 @@ import pyrocosm.{Block, Tone}
 // made again from it when it changes, each run of prose brought up to date as
 // `Translation.update` does it; `check` holds one to the other.
 object OverlayTranslations:
+  // The code of what is wrong with an overlay's translation, `↯/f.26.5.<variant>`: prose which
+  // is not translated (1); prose whose text has gone (2); an entry it lacks (3); an entry whose
+  // `hidden`, `until`, `refer` or `import` is not its original's (4); an entry the overlay it
+  // translates lacks (5); and a translation of another package (6).
+  private def bolt(variant: Int): fulminate.Bolt =
+    FuelBolts(FuelBolts.api, FuelBolts.overlayTranslation, variant)
+
   // A run of prose of an overlay: the entry it is of, by the names which lead to it from the
   // file (none, for the file's own), each with its sigil; whether it is its `info` or its
   // `detail`; its text as written; the line of the file (from 1) its text begins on; the line
@@ -267,7 +274,7 @@ object OverlayTranslations:
               if !entry.nil && translated.at(entry).absent then Nil else
                 val line: Int = translated.at(entry).lay(1)(_.line)
                 val message: Text = t"This lacks ${run.title}, which is not translated: $remedy."
-                List(Translation.Finding(Tone.Warning, line, message))
+                List(Translation.Finding(Tone.Warning, line, message, bolt(1)))
 
         val gone: List[Translation.Finding] = theirs.bind: (run: Prose) =>
           val entry: Path = run.entry
@@ -275,7 +282,7 @@ object OverlayTranslations:
           if ours.exists(_.key == run.key) || (!entry.nil && defined.at(entry).absent) then Nil
           else
             val message: Text = t"The text this translates has gone: $remedy."
-            List(Translation.Finding(Tone.Warning, run.line, message))
+            List(Translation.Finding(Tone.Warning, run.line, message, bolt(2)))
 
         val entries: List[Translation.Finding] =
           if original.absent then Nil else
@@ -284,7 +291,7 @@ object OverlayTranslations:
                 if translated.at(path).present then Nil else
                   val line: Int = translated.at(path.skip(1, Rtl)).lay(1)(_.line)
                   val message: Text = t"This has no entry for `${written(path)}`: $remedy."
-                  List(Translation.Finding(Tone.Warning, line, message))
+                  List(Translation.Finding(Tone.Warning, line, message, bolt(3)))
 
             val extra: List[Translation.Finding] =
               inOrder(translated).bind: (path: Path, entry: Overlay.Entry) =>
@@ -300,13 +307,13 @@ object OverlayTranslations:
                           t"the entry it translates, and they are the same in every language: " +
                           t"$remedy."
 
-                      List(Translation.Finding(Tone.Failure, entry.line, message))
+                      List(Translation.Finding(Tone.Failure, entry.line, message, bolt(4)))
 
                   case _ =>
                     val message: Text =
                       t"The overlay this translates has no entry for `${written(path)}`: $remedy."
 
-                    List(Translation.Finding(Tone.Warning, entry.line, message))
+                    List(Translation.Finding(Tone.Warning, entry.line, message, bolt(5)))
 
             val heading: List[Translation.Finding] =
               original.lay(List[Translation.Finding]()): (other: Overlay) =>
@@ -315,7 +322,7 @@ object OverlayTranslations:
                     t"This is of `${overlay.base}`, and the overlay it translates of " +
                       t"`${other.base}`."
 
-                  List(Translation.Finding(Tone.Failure, 1, message))
+                  List(Translation.Finding(Tone.Failure, 1, message, bolt(6)))
 
             heading + absent + extra
 

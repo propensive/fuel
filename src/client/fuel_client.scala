@@ -61,12 +61,19 @@ object SyncFailed extends Status(7, t"the issues of an attached tracker could no
 
 // What ends an invocation which a failure escaped: an `Error`, such as the daemon running out of
 // memory, which a silent backstop would end with status 2 and no word, as though nothing were
-// wrong. It is reported on the standard error, with where it was thrown, and the invocation
+// wrong. It is reported on the standard error, with where it was thrown, after its code,
+// `↯/f.27.4`, carrying the code of the error which escaped where it has one; and the invocation
 // ends with a status of its own.
 given fuelBackstop: Backstop = new Backstop:
   def handle(error: Throwable)(using Stdio): Exit =
     safely:
-      Err.println(t"fuel: the daemon failed while carrying out the command: ${described(error)}")
+      val cause: fulminate.Bolt = error match
+        case error: fulminate.Error => error.bolt
+        case _                      => fulminate.Bolt.Uncoded
+
+      val label: Text = FuelBolts(FuelBolts.client, FuelBolts.daemon).carrying(cause).label
+      val message: Text = t"the daemon failed while carrying out the command"
+      Err.println(t"fuel: $label $message: ${described(error)}")
       frames(error).keep(8).each { (frame: Text) => Err.println(t"    at $frame") }
 
     DaemonFailed.exit
@@ -296,7 +303,9 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
                 Exit.Ok
 
           case _ =>
-            Out.println(t"fuel: usage: fuel present <file> [--autoplay] [--align <recording or alignment>]")
+            val label: Text = usage(1).label
+            val form: Text = t"fuel present <file> [--autoplay] [--align <recording or alignment>]"
+            Out.println(t"fuel: $label usage: $form")
             Tool.UsageError
 
     // `fuel transcript <file>`: a presentation's transcript, its slides' in order, set to the
@@ -385,11 +394,13 @@ private def translate
 
   if dry && !update then
     Out.println(usage)
-    Out.println(t"fuel: `--dry-run` says what `--update` would do, so it is given with it")
+    val label: Text = fuel.usage(2).label
+    Out.println(t"fuel: $label `--dry-run` says what `--update` would do, so it is given with it")
     Tool.UsageError
   else if asked && !tongue.lay(false)(Tongue.valid(_)) then
     Out.println(usage)
-    Out.println(t"fuel: a language is written as `fr`, or with a region as `pt-BR`")
+    val label: Text = fuel.usage(3).label
+    Out.println(t"fuel: $label a language is written as `fr`, or with a region as `pt-BR`")
     Tool.UsageError
   else if update then Translating.update(config, tongue, files, dry)
   else Translating.run(config, tongue, files, width)
@@ -411,10 +422,11 @@ private def sync
   val targets: List[Sync.Target] = target.let(List(_)).or(Sync.targets(config.sync, cache))
 
   if named && target.absent then
-    Out.println(t"fuel: usage: fuel sync github <owner/repo>")
+    Out.println(t"fuel: ${usage(4).label} usage: fuel sync github <owner/repo>")
     Tool.UsageError
   else if targets.nil then
-    Out.println(t"fuel: nothing is attached: fuel sync github <owner/repo> attaches a repository")
+    val message: Text = t"nothing is attached: fuel sync github <owner/repo> attaches a repository"
+    Out.println(t"fuel: ${usage(5).label} $message")
     Tool.UsageError
   else
     val token: Optional[Text] = Fuel.credential(t"github", directory)
@@ -427,7 +439,8 @@ private def sync
       val fetched: Sync.Fetched = Sync.fetch(target, cache, token)
 
       fetched.failure.let: (message: Text) =>
-        Out.println(t"fuel: the issues of ${target.text} could not be fetched: $message")
+        val label: Text = tracker(1).label
+        Out.println(t"fuel: $label the issues of ${target.text} could not be fetched: $message")
         failed = true
 
       if fetched.failure.absent then
@@ -458,8 +471,10 @@ private def compile(config: Workspace.Config, force: Boolean, tty: Boolean)
 
   if config.documents.nil then
     // What is wrong with the sections the configuration has, if that is why there is none.
-    config.badTranslations.each { (reason: Text) => Out.println(t"fuel: $reason") }
-    Out.println(t"fuel: no section of documents is configured")
+    config.badTranslations.each: (reason: Text, code: fulminate.Bolt) =>
+      Out.println(t"fuel: ${code.label} $reason")
+
+    Out.println(t"fuel: ${Workspace.bolt(11).label} no section of documents is configured")
 
     Out.println
       ( t"fuel: add `section <name> <dir>` to .pyrocosm/fuel/config.tel, with `original " +
@@ -503,7 +518,8 @@ private def attached(config: Workspace.Config)
 :   Unit =
 
   config.badSync.each: (line: Text) =>
-    Out.println(t"fuel: `sync $line` names no tracker: a target is `github <owner/repo>`")
+    val label: Text = tracker(2).label
+    Out.println(t"fuel: $label `sync $line` names no tracker: a target is `github <owner/repo>`")
 
   val cache: Text = Sync.directory(config.root)
   val targets: List[Sync.Target] = Sync.targets(config.sync, cache)
@@ -516,7 +532,8 @@ private def attached(config: Workspace.Config)
         val fetched: Sync.Fetched = Sync.fetch(target, cache, token)
 
         fetched.failure.let: (message: Text) =>
-          Out.println(t"fuel: the issues of ${target.text} could not be fetched: $message")
+          val label: Text = tracker(1).label
+          Out.println(t"fuel: $label the issues of ${target.text} could not be fetched: $message")
 
         fetched.state
 
@@ -542,14 +559,13 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
     missing.each: (entry: Text) =>
       val text: Text = t"This classpath entry does not exist, so no fragment was compiled."
       val location: Block.Location = Block.Location(entry)
-      progress.report(Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(text))))
+      progress.report(absent(location, text, 1))
 
     // What is wrong with the configuration's `translation` lines.
-    config.badTranslations.each: (reason: Text) =>
-      val text: Text = t"$reason."
-
+    config.badTranslations.each: (reason: Text, code: fulminate.Bolt) =>
+      val text: List[Block] = List(Block.paragraph(t"$reason."))
       val location: Block.Location = Block.Location(t"${config.root}/.pyrocosm/fuel/config.tel")
-      progress.report(Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(text))))
+      progress.report(Block.Diagnostic(Tone.Failure, location, text, code = code))
 
     // The work there is, counted before it starts: the documents of every root, the dependency
     // jars, the sources; the pages are guessed from the sources until the API says.
@@ -682,7 +698,7 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
 
     val outcome: Optional[Outcome] =
       if !checked then Unset else sheltered(checking()): (error: Throwable) =>
-        progress.report(failed(t"The fragments could not be compiled", error))
+        progress.report(failed(t"The fragments could not be compiled", error, 1))
         Unset
 
     val unchecked: Text = environment(t"", Apis.empty)
@@ -695,7 +711,7 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
           Compilation.corpus(config.documents, Checker.tokenized, regime(unchecked, unlinked))
 
         sheltered(entitled(highlighted, titles)): (error: Throwable) =>
-          progress.report(failed(t"The documents could not be highlighted", error))
+          progress.report(failed(t"The documents could not be highlighted", error, 2))
           Corpus(Nil)
 
     val apis: Apis = outcome.let(_(1)).or(Apis.of(Api.empty))
@@ -910,7 +926,7 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
 
     if !Filing.directory(root) then
       val text: Text = t"This source directory does not exist."
-      report(Block.Diagnostic(Tone.Failure, Block.Location(directory), List(Block.paragraph(text))))
+      report(absent(Block.Location(directory), text, 2))
       Nil
     else
       filesBeneath(root, t".scala").bind: (file: Text) =>
@@ -943,7 +959,7 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
             case api: Api => api
 
             case error: Throwable =>
-              report(failed(t"The dependency $jar could not be inspected", error))
+              report(failed(t"The dependency $jar could not be inspected", error, 3))
               Api.empty
 
     progress.step(Phase.Jars)
@@ -957,7 +973,7 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
           case api: Api => api
 
           case error: Throwable =>
-            report(failed(t"The JDK could not be inspected", error))
+            report(failed(t"The JDK could not be inspected", error, 4))
             Api.empty
 
   val built: Boolean =
@@ -985,7 +1001,7 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
       case api: Api => api
 
       case error: Throwable =>
-        report(failed(t"The project's own code could not be inspected", error))
+        report(failed(t"The project's own code could not be inspected", error, 5))
         Api.empty
 
   progress.finish(Phase.Inspect)
@@ -999,7 +1015,9 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
         t"${count.show} members could not be read into the API model; the first failed with: " +
           t"${described(error)} ($trace)"
 
-      report(Block.Diagnostic(Tone.Warning, Unset, List(Block.paragraph(text))))
+      // Each member is left out for a `ReadError`, whose code this carries.
+      val code: fulminate.Bolt = compiler(6).carrying(FuelBolts(FuelBolts.api, FuelBolts.unread))
+      report(Block.Diagnostic(Tone.Warning, Unset, List(Block.paragraph(text)), code = code))
 
     case _ =>
       ()
@@ -1010,7 +1028,7 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
 
     if !Filing.directory(root) then
       val text: Text = t"This overlay directory does not exist."
-      report(Block.Diagnostic(Tone.Failure, Block.Location(directory), List(Block.paragraph(text))))
+      report(absent(Block.Location(directory), text, 3))
       Nil
     else
       // A file in a directory of translations is not an overlay but a translation of one,
@@ -1050,7 +1068,8 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
       val known: Text = formats.map { (format: Format) => t"`${format.id}`" }.join(t", ", t" or ")
       val text: Text = t"`${overlay.format}` is not a format an overlay documents: $known."
       val location: Block.Location = Block.Location(overlay.file, 1)
-      report(Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(text))))
+      val code: fulminate.Bolt = Overlay.bolt(14)
+      report(Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(text)), code = code))
 
   def documented(api: Api): Api =
     val these: List[Overlay] = overlaysOf(api.format)
@@ -1080,7 +1099,8 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
 
   clashes.each: (name: Text) =>
     val text: Text = t"The schema `$name` is declared by more than one of the configured files."
-    report(Block.Diagnostic(Tone.Failure, Unset, List(Block.paragraph(text))))
+    val paragraphs: List[Block] = List(Block.paragraph(text))
+    report(Block.Diagnostic(Tone.Failure, Unset, paragraphs, code = TelsFormat.clash))
 
   val schemas: Api = TelsFormat.decorate(documented(combined))
   progress.finish(Phase.Overlays)
@@ -1145,9 +1165,7 @@ private def rendered
     val blocks: List[Block] = ApiPages.page(api, entity, resolver, scope, embeddings)
 
     val ambiguous: List[Block] = resolver.ambiguities.map: (reference: Text) =>
-      val text: Text = t"`$reference` names more than one entity, so it is not linked; qualify it."
-      val location: Block.Location = Block.Location(place, entity.doc.let(_.line))
-      Block.Diagnostic(Tone.Warning, location, List(Block.paragraph(text)))
+      Doc.ambiguity(reference, Block.Location(place, entity.doc.let(_.line)))
 
     (blocks, scala.problems + tables.problems + ambiguous)
 
@@ -1204,11 +1222,11 @@ private def transcript(directory: Text, operand: Optional[Text])(using Stdio, En
             Exit.Ok
 
         case _ =>
-          Out.println(t"fuel: $path could not be read")
+          Out.println(t"fuel: ${unreadable.label} $path could not be read")
           NoDocument
 
     case _ =>
-      Out.println(t"fuel: usage: fuel transcript <file>")
+      Out.println(t"fuel: ${usage(6).label} usage: fuel transcript <file>")
       Tool.UsageError
 
 private def show(config: Workspace.Config, directory: Text, operand: Optional[Text])
@@ -1232,25 +1250,25 @@ private def show(config: Workspace.Config, directory: Text, operand: Optional[Te
           if doc.problems.nil then Exit.Ok else CompileFailed
 
         case _ =>
-          Out.println(t"fuel: $path could not be read")
+          Out.println(t"fuel: ${unreadable.label} $path could not be read")
           NoDocument
 
     case _ =>
-      Out.println(t"fuel: usage: fuel show <file>")
+      Out.println(t"fuel: ${usage(7).label} usage: fuel show <file>")
       Tool.UsageError
 
 // Searches the API the daemon last compiled, printing each declaration found over its key and
 // its page.
 private def searchApi(text: Text)(using Stdio): Exit | Tool.UsageError.type =
   if text.trim == t"" then
-    Out.println(t"fuel: usage: fuel search <query>")
+    Out.println(t"fuel: ${usage(8).label} usage: fuel search <query>")
     Tool.UsageError
   else
     val apis: Apis = Server.apis
 
     Query.read(text, apis.vocabulary) match
       case error: Query.Error =>
-        Out.println(t"fuel: ${error.message.text} (at ${error.offset.show})")
+        Out.println(t"fuel: ${error.bolt.label} ${error.message.text} (at ${error.offset.show})")
         Tool.UsageError
 
       case query: Query =>
@@ -1347,7 +1365,37 @@ def frames(error: Throwable): List[Text] =
     val line: Text = frame.line.let(_.show).or(t"?")
     t"${frame.method.className}.${frame.method.method}(${frame.file}:$line)"
 
-// A failure of the compiler itself, which has no place in a document, as a diagnostic.
-private def failed(what: Text, error: Throwable): Block =
+// A failure of the compiler itself, which has no place in a document, as a diagnostic, with
+// the code of the compiler's failures, `↯/f.27.8.<variant>`: the fragments which could not be
+// compiled (1); the documents which could not be highlighted (2); a dependency (3), the JDK (4)
+// or the project's own code (5) which could not be inspected; and, a caution, the members
+// which could not be read into the API's model (6).
+private def failed(what: Text, error: Throwable, variant: Int): Block =
   val detail: List[Block] = List(Block.paragraph(described(error)))
-  Block.Diagnostic(Tone.Failure, Unset, List(Block.paragraph(what)), Nil, detail)
+  val message: List[Block] = List(Block.paragraph(what))
+  Block.Diagnostic(Tone.Failure, Unset, message, Nil, detail, compiler(variant))
+
+private def compiler(variant: Int): fulminate.Bolt =
+  FuelBolts(FuelBolts.client, FuelBolts.compiler, variant)
+
+// A configured path which does not exist, as a diagnostic at it, with its code,
+// `↯/f.27.7.<variant>`: a classpath entry (1), a source directory (2) or an overlay directory
+// (3).
+private def absent(location: Block.Location, text: Text, variant: Int): Block =
+  val code: fulminate.Bolt = FuelBolts(FuelBolts.client, FuelBolts.missing, variant)
+  Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(text)), code = code)
+
+// The code of a command line which was not understood, `↯/f.27.5.<variant>`: of `fuel present`
+// (1); of `fuel translate`, with `--dry-run` but not `--update` (2) or a language which is not
+// one (3); of `fuel sync`, without a repository (4) or with nothing attached (5); and of
+// `fuel transcript` (6), `fuel show` (7) and `fuel search` (8) without what they take.
+private def usage(variant: Int): fulminate.Bolt =
+  FuelBolts(FuelBolts.client, FuelBolts.usage, variant)
+
+// The code of a file which could not be read, as the core's diagnostic of one has it.
+private def unreadable: fulminate.Bolt = FuelBolts(FuelBolts.core, FuelBolts.unreadable)
+
+// The code of a tracker's failure, `↯/f.27.6.<variant>`: its issues could not be fetched (1),
+// or a `sync` line names none (2).
+private def tracker(variant: Int): fulminate.Bolt =
+  FuelBolts(FuelBolts.client, FuelBolts.tracker, variant)

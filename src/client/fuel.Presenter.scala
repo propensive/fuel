@@ -106,14 +106,15 @@ object Presenter:
   :   Text | Problem =
 
     if !onDisk(file) then
-      Out.println(t"fuel: $file could not be read")
+      Out.println(t"fuel: ${ForcedAlignment.bolt(1).label} $file could not be read")
       Problem.Unreadable
     else if !Aligner.isAudio(file) then readText(file).or(Problem.Unreadable)
     else Aligner.home match
       case home: Aligner.Home =>
         Aligner.ensure(home) match
           case problem: Text =>
-            Out.println(t"fuel: Montreal Forced Aligner could not be installed: $problem")
+            val label: Text = ForcedAlignment.bolt(2).label
+            Out.println(t"fuel: $label Montreal Forced Aligner could not be installed: $problem")
             Aligner.manual(home).each { (line: Text) => Out.println(t"fuel: $line") }
             Problem.Unaligned
 
@@ -129,11 +130,13 @@ object Presenter:
                 json
 
               case Aligner.Outcome.Failed(message) =>
-                Out.println(t"fuel: $message")
+                Out.println(t"fuel: ${ForcedAlignment.bolt(3).label} $message")
                 Problem.Unaligned
 
       case _ =>
-        Out.println(t"fuel: there is no cache directory to install Montreal Forced Aligner in")
+        val label: Text = ForcedAlignment.bolt(4).label
+        val message: Text = t"there is no cache directory to install Montreal Forced Aligner in"
+        Out.println(t"fuel: $label $message")
         Problem.Unaligned
 
   // The deck with its schedule, counted and said: the slides' times in the alignment, with
@@ -155,13 +158,18 @@ object Presenter:
             case problem: Problem => problem
             case content: Text => (ForcedAlignment.read(content): @unchecked) match
               case problem: Text =>
-                Out.println(t"fuel: $file is not an alignment fuel can read: $problem")
+                val label: Text = ForcedAlignment.bolt(5).label
+                Out.println(t"fuel: $label $file is not an alignment fuel can read: $problem")
                 Problem.Misaligned
 
               case words: List[ForcedAlignment.Word] @unchecked =>
                 ForcedAlignment.schedule(presentation, words) match
-                  case ForcedAlignment.Outcome.Failed(messages) =>
-                    messages.each { (message: Text) => Out.println(t"fuel: $message") }
+                  // Each failure is labelled with its code; a line of a difference shown
+                  // beneath one, which is indented, is not.
+                  case ForcedAlignment.Outcome.Failed(code, messages) =>
+                    messages.each: (message: Text) =>
+                      if message.starts(t" ") then Out.println(t"fuel: $message")
+                      else Out.println(t"fuel: ${code.label} $message")
                     Problem.Misaligned
 
                   case ForcedAlignment.Outcome.Timed(schedule, comparison) =>

@@ -116,11 +116,11 @@ object Query:
     def text: Text = if args.nil then name else t"$name[${args.map(_.text).join(t", ")}]"
 
   object Error:
-    enum Reason:
-      case Unterminated(open: Char)
-      case EmptyOperand(sigil: Char)
-      case BareSymbol(text: Text)
-      case BadType(text: Text)
+    enum Reason(val number: Int):
+      case Unterminated(open: Char)  extends Reason(1)
+      case EmptyOperand(sigil: Char) extends Reason(2)
+      case BareSymbol(text: Text)    extends Reason(3)
+      case BadType(text: Text)       extends Reason(4)
 
       def message: Message = this match
         case Unterminated(open)  => m"the ${open.show} is not closed"
@@ -129,7 +129,8 @@ object Query:
         case BadType(text)       => m"$text is not a type"
 
   case class Error(reason: Error.Reason, offset: Int)(using Diagnostics)
-  extends soundness.Error(reason.message)
+  extends soundness.Error(reason.message):
+    override def bolt: fulminate.Bolt = FuelBolts(FuelBolts.api, FuelBolts.query, reason.number)
 
   // A query, or what is wrong with it.
   def read(text: Text, vocabulary: Map[Text, Word] = Map()): Query | Error =

@@ -94,6 +94,16 @@ object Workspace:
 
     found.items
 
+  // The code of what is wrong with the configuration's sections, `↯/f.27.3.<variant>`: a fault
+  // the schema finds, which carries the TEL error's own code (1); a section's name which cannot
+  // be one (2); an original text in what is not a language (3); a translation which is not into
+  // a language (4), which falls back to a language the section is not in (5), which is into the
+  // section's own (6), or which is in the directory of what it translates (7); a `translation`
+  // or `original` beneath no `section` (8); a `document`, as a section was configured (9); two
+  // sections of one name (10); and no section at all (11).
+  private[fuel] def bolt(variant: Int): fulminate.Bolt =
+    FuelBolts(FuelBolts.client, FuelBolts.sections, variant)
+
   // What a fault the schema finds in a section means, by the path of what it concerns:
   // `section`, the section's index, and the keywords and indices beneath it.
   private def explain(tel: Tel, error: Tel.Error, path: List[Text]): Text =
@@ -168,14 +178,15 @@ object Workspace:
       badSync:    List[Text]        = Nil,
       schemas:    List[Text]        = Nil,
       // The translations of each section's original directory; what is wrong with how the
-      // sections are configured; and each such directory with the language it is written in.
-      translations:    List[Translations.Target] = Nil,
-      badTranslations: List[Text]                = Nil,
-      languages:       List[(Text, Text)]        = Nil,
+      // sections are configured, with its code; and each such directory with the language it
+      // is written in.
+      translations:    List[Translations.Target]    = Nil,
+      badTranslations: List[(Text, fulminate.Bolt)] = Nil,
+      languages:       List[(Text, Text)]           = Nil,
       // Each section, a name and the directory of its original text.
-      sections:        List[(Text, Text)]        = Nil,
+      sections:        List[(Text, Text)]           = Nil,
       // Each section's file, by the directory of its original text.
-      sectionFiles:    List[(Text, Text)]        = Nil )
+      sectionFiles:    List[(Text, Text)]           = Nil )
 
   def load(directory: Text)(using Cli, Interpreter, Configurator): Config =
     // The project the directory is in, as `Tool` finds it: its root is what every path in the
@@ -249,15 +260,20 @@ object Workspace:
 
     val form: Text = t"`section guide doc`, with `original en-US en` beneath it"
 
+    // A problem's sentence with its code.
+    type Problem = (Text, fulminate.Bolt)
+
     // The faults the schema finds in the sections, each as a sentence.
-    val unschematic: List[Text] = project.config.lay(Nil: List[Text]): (tel: Tel) =>
+    val unschematic: List[Problem] = project.config.lay(Nil: List[Problem]): (tel: Tel) =>
       faults(tel).bind: (error: Tel.Error, pointer: Text) =>
         val path: List[Text] = pointer.cut(t"/").filter(_ != t"")
-        if path.head.or(t"") != t"section" then Nil else List(explain(tel, error, path))
+
+        if path.head.or(t"") != t"section" then Nil
+        else List((explain(tel, error, path), bolt(1).carrying(error.bolt)))
 
     // A section as it is written, made the directories and files it names; and what is wrong
     // with it which the schema cannot say.
-    def group(section: Section): (Optional[Group], List[Text]) =
+    def group(section: Section): (Optional[Group], List[Problem]) =
       val written: Text = t"${section.name} ${section.path}"
       val original: Original = section.original
       val language: Text = original.language
@@ -316,26 +332,33 @@ object Workspace:
               original.overlay.map(within(directory, _)),
               original.glossary.map(within(directory, _)), kept )
 
-      (found, misnamed + unspoken + malformed + groundless + own + same)
+      val problems: List[List[Problem]] =
+        List(misnamed, unspoken, malformed, groundless, own, same).indexed.map:
+          (texts: List[Text], index: Ordinal) => texts.map((_, bolt(index.n0 + 2)))
 
-    val read: List[(Optional[Group], List[Text])] =
+      (found, problems.bind(identity(_)))
+
+    val read: List[(Optional[Group], List[Problem])] =
       if !unschematic.nil then List((Unset, unschematic)) else
-        project.config.lay(List[(Optional[Group], List[Text])]()): (tel: Tel) =>
-          safely(tel.as[Sections]).lay(List[(Optional[Group], List[Text])]()): sections =>
+        project.config.lay(List[(Optional[Group], List[Problem])]()): (tel: Tel) =>
+          safely(tel.as[Sections]).lay(List[(Optional[Group], List[Problem])]()): sections =>
             sections.section.map(group(_))
 
     val groups: List[Group] = read.bind(_(0).let(List(_)).or(Nil))
 
     // What is of a `section`, at the top level, is of nothing; and a `document` in the
     // configuration is what a `section` was.
-    val loose: List[Text] = project.config.lay(Nil: List[Text]): (tel: Tel) =>
-      val stray: List[Text] = List(t"translation", t"original").bind: keyword =>
+    val loose: List[Problem] = project.config.lay(Nil: List[Problem]): (tel: Tel) =>
+      val stray: List[Problem] = List(t"translation", t"original").bind: keyword =>
         lines(tel, keyword).map: (atoms: List[Text]) =>
-          t"`$keyword ${atoms.join(t" ")}` is not beneath the `section` it is of"
+          (t"`$keyword ${atoms.join(t" ")}` is not beneath the `section` it is of", bolt(8))
 
-      val former: List[Text] = lines(tel, t"document").map: (atoms: List[Text]) =>
-        t"`document ${atoms.join(t" ")}` is no longer how a directory of documents is " +
-          t"configured: it is a section, as $form"
+      val former: List[Problem] = lines(tel, t"document").map: (atoms: List[Text]) =>
+        val message: Text =
+          t"`document ${atoms.join(t" ")}` is no longer how a directory of documents is " +
+            t"configured: it is a section, as $form"
+
+        (message, bolt(9))
 
       stray + former
 
@@ -354,13 +377,13 @@ object Workspace:
       else groups.map(group => (group.name, group.directory))
 
     // Two sections of one name would have one address.
-    val shared: List[Text] =
+    val shared: List[Problem] =
       sections.map(_(0)).distinct.filter(name => sections.filter(_(0) == name).size > 1)
       . map: (name: Text) =>
-          t"more than one `section` is named `$name`: each has a name of its own"
+          (t"more than one `section` is named `$name`: each has a name of its own", bolt(10))
 
     val translations: List[Translations.Target] = groups.bind(_.translations)
-    val badTranslations: List[Text] = read.bind(_(1)) + loose + shared
+    val badTranslations: List[Problem] = read.bind(_(1)) + loose + shared
 
     val languages: List[(Text, Text)] = groups.map(group => (group.directory, group.language))
 
