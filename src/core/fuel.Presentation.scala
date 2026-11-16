@@ -147,8 +147,6 @@ object Presentation:
   // The diagnostics the schema raises against a presentation's TEL, each at its place in the
   // file: a fault without a place of its own (a missing member) at its parent's.
   private def checked(path: Text, tel: Tel): List[Block] =
-    import strategies.throwUnsafely
-
     def at(pointer: List[Text]): Optional[Int] =
       if pointer.nil then Unset
       else tel.locateKey(Telp(pointer)).lay(at(pointer.reverse.skip(1).reverse))(_.line)
@@ -174,7 +172,6 @@ object Presentation:
   // A presentation read from its text, with a diagnostic for each fault the schema finds and
   // each part not understood; or the diagnostic which says the text is not TEL.
   def read(path: Text, text: Text): (Presentation, List[Block]) | Block.Diagnostic =
-    import strategies.throwUnsafely
     import parsing.trackPositions
 
     recover:

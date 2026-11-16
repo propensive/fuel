@@ -32,10 +32,10 @@
                                                                                                   */
 package fuel
 
-import soundness.{Format as _, Language as _, Token as _, *}
+import soundness.{Format as _, Language as _, *}
 
 import dysasymptotics.linearSize
-import pyrocosm.{Block, Figure, Inline, Language, Token, Tone}
+import pyrocosm.{Block, Inline, Language, Token, Tone}
 
 // An entity's page, and the navigation of the whole API, as blocks: Amok's `JvmFolio` layout.
 // The page is its place (each parent a link), its name, its one-line info, then for each of

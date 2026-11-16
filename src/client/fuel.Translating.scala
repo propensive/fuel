@@ -33,9 +33,9 @@
 package fuel
 
 // Excluded from the umbrella: `Compilation`, anthology's, which would outrank fuel's own.
-import soundness.{Format as _, Compilation as _, Query as _, *}
+import soundness.{Compilation as _, *}
 
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 import pyrocosm.standardRendering.given
 import pyrocosm.{Block, Filing, TerminalRenderer, Tone, Tool}
 

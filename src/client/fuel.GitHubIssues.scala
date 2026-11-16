@@ -34,9 +34,6 @@ package fuel
 
 import soundness.*
 
-import codepages.utf8Codepage
-import dysasymptotics.{linearAccess, linearSize}
-import errorDiagnostics.emptyDiagnostics
 import httpBackends.javaNetHttp
 import internetAccess.online
 import logging.silentLogging

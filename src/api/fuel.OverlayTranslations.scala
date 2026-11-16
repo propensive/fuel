@@ -37,7 +37,7 @@ import soundness.*
 import soundness.sortingAlgorithms.timsort
 
 import codepages.utf8Codepage
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 import pyrocosm.{Block, Tone}
 
 // The translation of an overlay: an overlay of the same entries, which TEL reads as it reads
@@ -189,15 +189,15 @@ object OverlayTranslations:
     safely:
       val tel: Tel = definitive.read[Tel]
 
-      val replacements: List[Mutation.Op] =
+      val replacements: List[Tel.Mutation.Op] =
         tel.childCompounds.to[List].indexed.map: (compound: Tel.Compound, index: Ordinal) =>
           val occurrence: Int =
             tel.childCompounds.to[List].keep(index.n0).count(_.keyword == compound.keyword)
 
           val pointer: Tel.Pointer = Tel.Pointer.Empty / (compound.keyword, occurrence)
-          Mutation.Op.Replace(pointer, written(Nil)(compound))
+          Tel.Mutation.Op.Replace(pointer, written(Nil)(compound))
 
-      Mutation(tel, replacements).show
+      Tel.Mutation(tel, replacements).show
 
   // The runs of a translation which someone has translated and the definitive overlay no
   // longer has: what making the translation again leaves out.

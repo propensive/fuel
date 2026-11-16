@@ -35,8 +35,7 @@ package fuel
 import soundness.*
 
 import alphabets.hexLowerCase
-import dysasymptotics.{linearAccess, linearSize}
-import errorDiagnostics.emptyDiagnostics
+import dysasymptotics.linearSize
 import filesystemBackends.javaBaseFilesystem
 import httpBackends.javaNetHttp
 import internetAccess.online

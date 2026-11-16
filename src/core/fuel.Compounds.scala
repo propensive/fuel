@@ -34,7 +34,7 @@ package fuel
 
 import soundness.*
 
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 
 // What a compound of a parsed TEL document says, as Fuel reads it: its inline atoms, its source
 // atom, and the compounds beneath it, in the order written.

@@ -86,8 +86,6 @@ object Workspace:
 
   // Every fault the schema finds in a configuration, with the path of what it concerns.
   def faults(tel: Tel): List[(Tel.Error, Text)] =
-    import strategies.throwUnsafely
-
     val found: Faults =
       validate[Tel.Focus](Faults()):
         case error: Tel.Error => accrual + (error, prior.let(_.pointer.encode).or(t"/"))

@@ -34,9 +34,9 @@ package fuel
 
 // Excluded from the umbrella: `Language` and `Token`, which are Pyrocosm's here (the model's own,
 // which `Block.Code` carries), not cosmopolite's and harlequin's.
-import soundness.{Language as _, Token as _, *}
+import soundness.{Language as _, *}
 
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 import pyrocosm.{Block, Digests, Filing, Inline, Language, Token, Tone}
 
 object Embedding:

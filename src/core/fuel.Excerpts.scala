@@ -32,7 +32,7 @@
                                                                                                   */
 package fuel
 
-import soundness.{Language as _, Token as _, *}
+import soundness.{Language as _, *}
 
 import dysasymptotics.{linearAccess, linearSize}
 import pyrocosm.{Block, Inline, Language, Notices, Token}

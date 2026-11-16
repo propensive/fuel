@@ -33,7 +33,7 @@
 package fuel
 
 // Excluded from the umbrella: `Compilation`, anthology's, which would outrank fuel's own.
-import soundness.{Compilation as _, Format as _, Language as _, Token as _, Query as _, *}
+import soundness.{Compilation as _, Format as _, Language as _, Query as _, *}
 
 import collations.codepointCollation
 import dysasymptotics.{linearAccess, linearSize}
@@ -166,7 +166,7 @@ error oops
           t"# Title\n\n```scala fuel\ncontext term\n   three spaces\n##\nval x = 1\n```\n"
 
         Doc.parse(t"doc/bad.md", text).problems match
-          case Block.Diagnostic(Tone.Failure, location, _, _, _) :: _ =>
+          case Block.Diagnostic(Tone.Failure, location, _, _, _, _) :: _ =>
             (location.let(_.path), location.let(_.line))
 
           case _ =>
@@ -227,7 +227,7 @@ error oops
 
       test(m"an ill-typed fragment is a problem: a diagnostic at its line"):
         problems(t"```scala\nval n: Int = \"oops\"\n```\n") match
-          case Block.Diagnostic(Tone.Failure, location, _, excerpt, _) :: Nil =>
+          case Block.Diagnostic(Tone.Failure, location, _, excerpt, _, _) :: Nil =>
             (location.let(_.path), location.let(_.line), excerpt.size)
 
           case _ =>
@@ -244,7 +244,7 @@ error oops
               t"  def +(item: Int): Issues = Issues(items :+ item)\n```\n"
 
           . bind:
-              case Block.Diagnostic(_, _, content, _, _) => content.map:
+              case Block.Diagnostic(_, _, content, _, _, _) => content.map:
                 case Block.Paragraph(inlines) => Blocks.plain(inlines)
                 case _                        => t""
 
@@ -273,7 +273,7 @@ error oops
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           Doc.parse(t"doc/check.md", fence, checker).blocks match
-            case Block.Code(_, _, note :: _, _, _, _, _, _) :: Block.Diagnostic(_, _, _, _, _) :: _ =>
+            case Block.Code(_, _, note :: _, _, _, _, _, _) :: (_: Block.Diagnostic) :: _ =>
               (note.line, note.style)
 
             case _ =>
@@ -286,7 +286,7 @@ error oops
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           Doc.parse(t"doc/check.md", fence, checker).blocks match
-            case Block.Code(_, _, note :: _, _, _, _, _, _) :: Block.Diagnostic(_, _, _, _, _) :: _ =>
+            case Block.Code(_, _, note :: _, _, _, _, _, _) :: (_: Block.Diagnostic) :: _ =>
               note.caption.nil
 
             case _ =>
@@ -309,7 +309,7 @@ error oops
 
       test(m"a failing fragment's error of one line remains a problem of the document"):
         problems(t"```scala\nval n = missing\n```\n") match
-          case Block.Diagnostic(Tone.Failure, location, _, excerpt, _) :: Nil =>
+          case Block.Diagnostic(Tone.Failure, location, _, excerpt, _, _) :: Nil =>
             (location.let(_.line), excerpt.size)
 
           case _ =>
@@ -393,7 +393,7 @@ error oops
         val doc = Doc.parse(t"doc/anim.md", text)
 
         val problem = doc.problems match
-          case Block.Diagnostic(Tone.Failure, location, paragraph :: _, _, _) :: Nil =>
+          case Block.Diagnostic(Tone.Failure, location, paragraph :: _, _, _, _) :: Nil =>
             val second: Boolean = paragraph match
               case Block.Paragraph(Inline.Textual(message) :: _) => message.starts(t"Frame 2")
               case _                                             => false
@@ -501,7 +501,7 @@ error oops
 
         Checking.session(classpath, Nil): (checker: Checker) =>
           Doc.parse(t"doc/anim.md", fence, checker).problems match
-            case Block.Diagnostic(Tone.Failure, _, message, _, _) :: Nil =>
+            case Block.Diagnostic(Tone.Failure, _, message, _, _, _) :: Nil =>
               message match
                 case Block.Paragraph(Inline.Textual(text) :: _) :: _ => text.starts(t"Frame 2:")
                 case _                                               => false
@@ -610,7 +610,7 @@ error oops
           Doc.parse(t"doc/check.md", markdown, checker, true).blocks
 
       def line(problem: Block): Optional[Int] = problem match
-        case Block.Diagnostic(_, location, _, _, _) => location.let(_.line)
+        case Block.Diagnostic(_, location, _, _, _, _) => location.let(_.line)
         case _                                      => Unset
 
       test(m"a fragment sees a value an earlier one defined"):
@@ -655,7 +655,7 @@ error oops
         val fixture: (Text, Text) = (t"doc/fixtures/check.scala", t"val fixed: Int = \"x\"")
 
         problems(t"```scala\nval n: Int = 1\n```\n", fixture) match
-          case Block.Diagnostic(_, location, _, _, _) :: Nil =>
+          case Block.Diagnostic(_, location, _, _, _, _) :: Nil =>
             (location.let(_.path), location.let(_.line))
 
           case _ =>
@@ -726,7 +726,7 @@ error oops
 
       test(m"a diagnostic in a session is at its line and column in the file"):
         problems(t"```scala\nval a: Int = 1\n```\n```scala\nval b: Int = \"oops\"\n```\n") match
-          case Block.Diagnostic(_, location, _, _, _) :: Nil =>
+          case Block.Diagnostic(_, location, _, _, _, _) :: Nil =>
             (location.let(_.line), location.let(_.column))
 
           case _ =>
@@ -754,7 +754,7 @@ error oops
         case _                    => Nil
 
       def thrown(doc: Doc): List[Text] = doc.blocks.bind:
-        case Block.Diagnostic(Tone.Failure, _, Block.Paragraph(content) :: _, _, _) =>
+        case Block.Diagnostic(Tone.Failure, _, Block.Paragraph(content) :: _, _, _, _) =>
           List(Blocks.plain(content))
 
         case _ =>
@@ -953,7 +953,7 @@ slide
 
       test(m"a part a slide does not understand, and an empty slide, are reported at their line"):
         read(t"slide\n  picture cat.png\n\nslide\n").lay(Nil) { (_, problems) => problems }.map:
-          case Block.Diagnostic(_, location, _, _, _) => location.let(_.line)
+          case Block.Diagnostic(_, location, _, _, _, _) => location.let(_.line)
           case _                                      => Unset
 
       . assert(_ == List(2, 4))
@@ -975,7 +975,7 @@ slide
 
       test(m"a slide's `code` is reported as now being `syntax`, at its line"):
         read(t"slide\n  code scala\n      val x = 1\n").lay(Nil)(_(1)).map:
-          case Block.Diagnostic(_, location, content, _, _) =>
+          case Block.Diagnostic(_, location, content, _, _, _) =>
             val said: Text = content.head match
               case Block.Paragraph(inlines) => Blocks.plain(inlines)
               case _                        => t""
@@ -989,7 +989,7 @@ slide
       test(m"what a slide's syntax does not say, and a `syntax` without a language, are faults"):
         val text: Text = t"slide\n  syntax\n    highlite x\n    code\n        val x = 1\n"
         read(text).lay(Nil)(_(1)).map:
-          case Block.Diagnostic(_, location, _, _, _) => location.let(_.line)
+          case Block.Diagnostic(_, location, _, _, _, _) => location.let(_.line)
           case _                                      => Unset
 
       . assert(_ == List(3, 2))
@@ -1255,7 +1255,7 @@ item []:
         def enter(name: Text, unit: Text): Boolean = inner.enter(name, unit)
         def run(name: Text): Unit = inner.run(name)
 
-        def build(sources: Map[Text, Text], output: Text): List[Notice] =
+        def build(sources: Map[Text, Text], output: Text): List[Compiler.Notice] =
           inner.build(sources, output)
 
         def context: Optional[dotty.tools.dotc.core.Contexts.Context] = inner.context
@@ -1448,7 +1448,7 @@ object Util:
 
       val entries: List[Text] = classpath().cut(t":").filter(_ != t"")
 
-      lazy val notices: List[Notice] =
+      lazy val notices: List[Compiler.Notice] =
         Checking.session(classpath, Nil): (checker: Checker) =>
           checker.build(Map(t"Sample.scala" -> sample), output)
 
@@ -3178,7 +3178,7 @@ class Logger() uses Io.out initially, Io.out:
         val doc: Doc = parse(glossary)
 
         val problems = doc.problems.bind:
-          case Block.Diagnostic(_, location, message, excerpt, _) =>
+          case Block.Diagnostic(_, location, message, excerpt, _, _) =>
             val paragraphs: List[Inline] = message.bind:
               case Block.Paragraph(content) => content
               case _                        => Nil
@@ -3197,7 +3197,7 @@ class Logger() uses Io.out initially, Io.out:
         val corpus: Corpus = Corpus(List(Corpus.Section(t"docs", t"/docs", List(doc), Nil)))
 
         Links.check(corpus, Api.empty, Glossary.none).bind:
-          case Block.Diagnostic(_, _, _, excerpt, _) =>
+          case Block.Diagnostic(_, _, _, excerpt, _, _) =>
             codes(excerpt).bind(_.notes.map { n => (n.start, n.end) })
 
           case _ =>
@@ -3279,7 +3279,7 @@ entry .nowhere   nothing of the sort
 
       def problems(tone: Tone): List[Text] =
         merged.lay(Nil: List[Block]) { (m: (Api, List[Block])) => m(1) }.bind:
-          case Block.Diagnostic(tone0, location, message, _, _) if tone0 == tone =>
+          case Block.Diagnostic(tone0, location, message, _, _, _) if tone0 == tone =>
             val path: Text = location.let(_.path).or(t"?")
             List(t"$path:${location.let(_.line).or(0).show}: ${plain(message)}")
 
@@ -3354,7 +3354,7 @@ entry .nowhere   nothing of the sort
       def failures(text: Text): List[Text] = Overlay.read(t"x.tel", text) match
         case overlay: Overlay =>
           val lines: List[Text] = overlay.problems.bind:
-            case Block.Diagnostic(_, location, message, _, _) =>
+            case Block.Diagnostic(_, location, message, _, _, _) =>
               List(t"${location.let(_.line).or(0).show}: ${plain(message)}")
 
             case _ =>
@@ -3612,8 +3612,6 @@ entry .Doc   a document
       . assert(_ == (samplePage, true, List(t"Doc", t"Shape", t"Util")))
 
     suite(m"Issues"):
-      import codepages.utf8Codepage
-
       def issue(number: Int, title: Text, open: Boolean = true, names: List[Text] = Nil, updated: Text = t"2026-11-08T10:00:00Z"): Issue =
         Issue(number, title, t"https://github.com/o/r/issues/${number.show}", open, updated, names)
 
@@ -3877,7 +3875,7 @@ entry .Doc   a document
         case _                       => Nil
 
       def lines(problems: List[Block]): List[Optional[Int]] = problems.map:
-        case Block.Diagnostic(_, location, _, _, _) => location.let(_.line)
+        case Block.Diagnostic(_, location, _, _, _, _) => location.let(_.line)
         case _                                      => Unset
 
       val slugs: List[Text] = List(t"getting-started", t"set-up--run", t"set-up--run-1")
@@ -4008,7 +4006,7 @@ define  type class
         case _                                      => Unset
 
       def failures(problems: List[Block]): List[Optional[(Tone, Optional[Int])]] = problems.map:
-        case Block.Diagnostic(tone, location, _, _, _) => (tone, location.let(_.line))
+        case Block.Diagnostic(tone, location, _, _, _, _) => (tone, location.let(_.line))
         case _                                         => Unset
 
       val monadText: Text = t"A *monad* is a monoid in the category of endofunctors."
@@ -4237,7 +4235,7 @@ define  user interface
 
       // Each problem, as its line and column in the file and its message.
       def problems(doc: Doc): List[(Optional[Int], Optional[Int], Text)] = doc.problems.map:
-        case Block.Diagnostic(_, location, message, _, _) =>
+        case Block.Diagnostic(_, location, message, _, _, _) =>
           val said: Text = message.map { case Block.Paragraph(content) => text(content); case _ => t"" }.join
           (location.let(_.line), location.let(_.column), said)
 
@@ -4386,7 +4384,6 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
       def configuration(text: Text): Tel =
         import strategies.throwUnsafely
         import codepages.utf8Codepage
-        import codepages.utf8Codepage
         t"tel 1.0\n\n$text".read[Tel]
 
       def sectionFaults(text: Text): Int =
@@ -4405,7 +4402,6 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
 
       test(m"a section's members are the same on its line as beneath it, each by its keyword"):
         import strategies.throwUnsafely
-        import codepages.utf8Codepage
         (configuration(inline).as[Workspace.Sections], sectionFaults(beneath))
 
       . assert: (sections, faults) =>
@@ -4424,7 +4420,6 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
 
       test(m"values after an original's file are its overlays, as its members' order has it"):
         import strategies.throwUnsafely
-        import codepages.utf8Codepage
         val text: Text = t"section guide doc\n  original en en a.tel api more\n"
 
         ( sectionFaults(text),
@@ -4632,7 +4627,7 @@ document
         case _                                 => Unset
 
       def lines(blocks: List[Block]): List[Optional[Int]] = blocks.map:
-        case Block.Diagnostic(_, location, _, _, _) => location.let(_.line)
+        case Block.Diagnostic(_, location, _, _, _, _) => location.let(_.line)
         case _                                      => Unset
 
       test(m"a schema's definitions, their members and its document's fields are its entities"):
@@ -4711,7 +4706,7 @@ entry .Channel
 
       test(m"a member is cautioned only when neither an overlay nor a description documents it"):
         val cautioned: List[Text] = merging.bind:
-          case Block.Diagnostic(Tone.Warning, _, message, _, _) =>
+          case Block.Diagnostic(Tone.Warning, _, message, _, _, _) =>
             List(Blocks.plain(message.bind { case Block.Paragraph(content) => content; case _ => Nil }))
 
           case _ =>
@@ -4886,7 +4881,7 @@ entry .Channel
         t"- # Title\n+ # Titre\n\n- The first paragraph,\n- on two lines.\n+ Le premier paragraphe, sur une ligne.\n\n- - one\n+ - un\n- - two\n+ - deux\n\n```scala\nval x = 1\n```\n"
 
       def places(problems: List[Block]): List[(Text, Int, Tone)] = problems.bind:
-        case Block.Diagnostic(tone, location, _, _, _) =>
+        case Block.Diagnostic(tone, location, _, _, _, _) =>
           List((location.let(_.path).or(t""), location.let(_.line).or(0), tone))
 
         case _ =>

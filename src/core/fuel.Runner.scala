@@ -36,7 +36,7 @@ import java.io as ji
 
 import soundness.*
 
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 import pyrocosm.{Block, Diversions}
 import yossarian.*
 

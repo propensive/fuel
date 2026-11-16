@@ -51,7 +51,7 @@ object Checker:
 
     def enter(name: Text, unit: Text): Boolean = false
     def run(name: Text): Unit = ()
-    def build(sources: Map[Text, Text], output: Text): List[Notice] = Nil
+    def build(sources: Map[Text, Text], output: Text): List[Compiler.Notice] = Nil
     def context: Optional[Contexts.Context] = Unset
     def compiles: Boolean = false
 
@@ -74,7 +74,7 @@ trait Checker:
   // Compiles a project's own sources, as one compile in the session, and writes what it emits
   // — classfiles and TASTy — beneath `output`, so that they can be inspected and put on a
   // classpath; the compiler's notices say what did not compile.
-  def build(sources: Map[Text, Text], output: Text): List[Notice]
+  def build(sources: Map[Text, Text], output: Text): List[Compiler.Notice]
 
   // The session's own context, whose symbol table loads the classpath lazily — what walks a
   // dependency's API without unpickling a body — good only on the compiler's thread.
@@ -131,7 +131,7 @@ object Checking:
   private def open[result](classpath: LocalClasspath, options: List[Text])(body: Checker => result)
   :   result =
 
-    given (CompileEvent is Loggable) = Loggable.silent[CompileEvent]
+    given (Compiler.Event is Loggable) = Loggable.silent[Compiler.Event]
 
     // Macros resolve their classes from the session's classpath, not from fuel's own: fuel
     // carries its own Soundness, and a macro on the project's classpath, run against fuel's
@@ -140,7 +140,7 @@ object Checking:
     val isolated: List[Text] =
       if options.has(t"-Zisolated-macros") then options else t"-Zisolated-macros" :: options
 
-    val scalac: Scalac[3.9, Universe.Classfile] =
+    val scalac: Scalac[3.9, Toolchain.Universe.Classfile] =
       Scalac[3.9](isolated.map { (option: Text) => Scalac.Option[3.9](option) })
 
     scalac.on(classpath).session:
@@ -206,7 +206,7 @@ object Checking:
 
           def run(name: Text): Unit = loader.on(name)
 
-          def build(sources: Map[Text, Text], output: Text): List[Notice] =
+          def build(sources: Map[Text, Text], output: Text): List[Compiler.Notice] =
             val process = compilation.compile(sources)
 
             process.classfiles.each: (path, data) =>

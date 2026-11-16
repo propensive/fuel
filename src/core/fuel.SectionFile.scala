@@ -35,7 +35,7 @@ package fuel
 import soundness.*
 
 import codepages.utf8Codepage
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 import errorDiagnostics.emptyDiagnostics
 import pyrocosm.{Block, Tone}
 
@@ -95,8 +95,6 @@ object SectionFile:
 
   // The diagnostics the schema raises, each at its line of the file.
   private def checked(path: Text, tel: Tel): List[Block] =
-    import strategies.throwUnsafely
-
     val faults: Faults =
       validate[Tel.Focus](Faults()):
         case error: Tel.Error =>
@@ -170,11 +168,11 @@ object SectionFile:
 
         val atoms: Array[Tel.Atom] = Array(Tel.Atom.Source(translation.serialize))
 
-        val replacements: List[Mutation.Op] = titled(tel).lay(Nil): (compound: Tel.Compound) =>
+        val replacements: List[Tel.Mutation.Op] = titled(tel).lay(Nil): (compound: Tel.Compound) =>
           val written: Tel.Compound = compound.copy(atoms = atoms)
-          List(Mutation.Op.Replace(Tel.Pointer.Empty / (t"title", 0), written))
+          List(Tel.Mutation.Op.Replace(Tel.Pointer.Empty / (t"title", 0), written))
 
-        safely(Mutation(tel, replacements).show)
+        safely(Tel.Mutation(tel, replacements).show)
 
   // What is wrong with the translation of a section's file, read from `text` at `path`, of
   // the definitive file `definitive`: what is wrong with it as one, and where its title

@@ -32,10 +32,10 @@
                                                                                                   */
 package fuel
 
-import soundness.{Format as _, Language as _, Query as _, Token as _, *}
+import soundness.{Format as _, Language as _, Query as _, *}
 
 import codepages.utf8Codepage
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 import errorDiagnostics.emptyDiagnostics
 import pyrocosm.{Block, Inline, Language, Token}
 import stratiform.Tels
@@ -230,7 +230,7 @@ object TelsFormat extends Format:
     def typed(tpe: Tels.Type): Api.Phrase = tpe match
       case Tels.Reference(name) => Api.Phrase(name, Api.Phrase.Role.Type, keyOf(name))
       case Tels.Flag            => Api.Phrase(t"Flag", Api.Phrase.Role.Type)
-      case Tels.Scalar(_, _, _) => Api.Phrase(t"String", Api.Phrase.Role.Type)
+      case _: Tels.Scalar       => Api.Phrase(t"String", Api.Phrase.Role.Type)
       case Tels.Struct(_, _)    => Api.Phrase(t"{…}", Api.Phrase.Role.Symbol)
 
     def shape(tpe: Tels.Type): Optional[Api.Shape] = tpe match

@@ -35,7 +35,7 @@ package fuel
 import soundness.*
 
 import codepages.utf8Codepage
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 import pyrocosm.{Block, Tone}
 
 // The translation of a glossary: a glossary of the same terms, each named as the glossary it
@@ -148,12 +148,13 @@ object GlossaryTranslations:
       val tel: Tel = definitive.read[Tel]
       val defined: List[Tel.Compound] = tel.childCompounds.to[List].filter(_.keyword == t"define")
 
-      val replacements: List[Mutation.Op] =
+      val replacements: List[Tel.Mutation.Op] =
         defined.zip(entries(definitive)).indexed.map:
           case ((compound: Tel.Compound, entry: Entry), index: Ordinal) =>
-            Mutation.Op.Replace(Tel.Pointer.Empty / (t"define", index.n0), written(entry, compound))
+            val pointer: Tel.Pointer = Tel.Pointer.Empty / (t"define", index.n0)
+            Tel.Mutation.Op.Replace(pointer, written(entry, compound))
 
-      Mutation(tel, replacements).show
+      Tel.Mutation(tel, replacements).show
 
   private def translated(entry: Entry): Boolean =
     entry.term.present || entry.definition.lay(false): (text: Text) =>

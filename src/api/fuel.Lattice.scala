@@ -35,7 +35,7 @@ package fuel
 import soundness.*
 
 import soundness.collations.codepointCollation
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 import soundness.collationComparable
 import soundness.sortingAlgorithms.timsort
 

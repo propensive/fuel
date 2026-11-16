@@ -35,7 +35,7 @@ package fuel
 import soundness.*
 
 import codepages.utf8Codepage
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 import errorDiagnostics.emptyDiagnostics
 import pyrocosm.{Block, Inline, Tone}
 import soundness.collationComparable
@@ -147,7 +147,6 @@ object Glossary:
   // glossary which is not a translation, a `term`, which only a translation says — most often
   // the second word of a name written after one space, which the schema reads as the term.
   def faults(path: Text, text: Text, translation: Boolean = false): List[Block] =
-    import strategies.throwUnsafely
     import parsing.trackPositions
 
     safely(text.read[Tel]).lay(Nil): (tel: Tel) =>

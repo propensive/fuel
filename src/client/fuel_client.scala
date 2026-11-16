@@ -965,7 +965,7 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
       // A fresh output: what the sources no longer declare must not linger.
       Filing.wipe(unsafely(cache.as[Path on Linux]))
 
-      val notices: List[Notice] = checker.build(sources.to[Map], cache)
+      val notices: List[Compiler.Notice] = checker.build(sources.to[Map], cache)
 
       // The notice names its file as the compiler does, by its name alone or its path; the
       // file is named relative to the project root, as a reader knows it.

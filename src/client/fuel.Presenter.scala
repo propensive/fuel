@@ -34,7 +34,7 @@ package fuel
 
 import soundness.*
 
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 import palettes.solarizedDarkGaugePalette
 import pyrocosm.{Block, Hints, Inline, Interface, Live, Panel, TerminalRenderer}
 import tableStyles.thickTableStyle
@@ -148,10 +148,12 @@ object Presenter:
         val steps: Int = Presentation.steps(deck)
         val count: Text = steps.show
 
+        // Each `Text | …` below is matched `@unchecked`, since the exhaustivity check does not see
+        // that a `Text` case covers `Text`.
         align match
-          case file: Text => alignment(config, presentation, file) match
+          case file: Text => (alignment(config, presentation, file): @unchecked) match
             case problem: Problem => problem
-            case content: Text => ForcedAlignment.read(content) match
+            case content: Text => (ForcedAlignment.read(content): @unchecked) match
               case problem: Text =>
                 Out.println(t"fuel: $file is not an alignment fuel can read: $problem")
                 Problem.Misaligned

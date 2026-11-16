@@ -190,12 +190,12 @@ object Translation:
   // The edits which turn one sequence of lines into another, as runs.
   private[fuel] def hunks(left: List[Text], right: List[Text]): List[Run] =
     // dissonance's `Diff` holds its edits as varargs, a standard `Seq`, read by `List.from`.
-    val edits: List[Edit[Text]] = List.from(diff(left.to[Sequence], right.to[Sequence]).edits)
+    val edits: List[Diff.Edit[Text]] = List.from(diff(left.to[Sequence], right.to[Sequence]).edits)
 
     // `removed` and `added` are the change being gathered, and `done` the runs before it, each
     // latest first; `consumed` is how many lines of the first sequence the edits have passed.
     def recur
-      ( edits:    List[Edit[Text]],
+      ( edits:    List[Diff.Edit[Text]],
         removed:  List[Int],
         added:    List[Int],
         consumed: Int,
@@ -207,19 +207,26 @@ object Translation:
         else Run.Changed(removed.reverse, added.reverse, consumed - removed.size) :: done
 
       edits match
-        case Par(left, right, _) :: rest =>
+        case Diff.Par(left, right, _) :: rest =>
           recur(rest, Nil, Nil, consumed + 1, Run.Kept(left, right) :: flushed)
 
-        case Del(left, _) :: rest =>
+        case Diff.Del(left, _) :: rest =>
           recur(rest, left :: removed, added, consumed + 1, done)
 
-        case Ins(right, _) :: rest =>
+        case Diff.Ins(right, _) :: rest =>
           recur(rest, removed, right :: added, consumed, done)
 
         case _ =>
           flushed.reverse
 
     recur(edits, Nil, Nil, 0, Nil)
+
+  // A passage, and the lines of the new text `update` gives it, latest first.
+  private final class Draft(val passage: Passage):
+    @scala.caps.unsafe.untrackedCaptures
+    var lines: List[Text] = Nil
+
+    def give(more: List[Text]): Unit = lines = more.reverse + lines
 
   // A translation brought up to a definitive text which has changed. Each passage a change
   // touches keeps its `+` lines, takes the new text as its `-` lines, and keeps the text its
@@ -237,13 +244,6 @@ object Translation:
     // the diff keeps them in.
     val target: Array[Text] = lines.to[Array]
     val fixed: Array[Boolean] = verbatim(lines).to[Array]
-
-    // A passage, and the lines of the new text it is given, latest first.
-    final class Draft(val passage: Passage):
-      @scala.caps.unsafe.untrackedCaptures
-      var lines: List[Text] = Nil
-
-      def give(more: List[Text]): Unit = lines = more.reverse + lines
 
     val drafts: Map[Int, Draft] =
       items.indexed.bind: (item: Item, index: Ordinal) =>
