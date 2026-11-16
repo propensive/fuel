@@ -32,7 +32,7 @@
                                                                                                   */
 package fuel
 
-import soundness.{Token as _, *}
+import soundness.*
 
 import pyrocosm.{Inline, Token, model}
 import stenography.Syntax
@@ -66,15 +66,15 @@ object Linker:
     def ambiguities: List[Text] = Nil
 
   // A highlighted token as the model's, with the link its type gives it.
-  def token(linker: Linker, token: harlequin.Token): Token =
+  def token(linker: Linker, token: harlequin.SourceCode.Token): Token =
     val plain: Token = token.model
 
-    token.meta.lay(plain): (meta: harlequin.Token.Meta) =>
+    token.meta.lay(plain): (meta: harlequin.SourceCode.Token.Meta) =>
       plain.copy(link = linker.link(token.text, meta.tpe))
 
   def lines(linker: Linker, source: SourceCode): List[pyrocosm.Block.Line] =
     Comments.mark:
-      source.lines.to[List].map: (line: List[harlequin.Token]) =>
+      source.lines.to[List].map: (line: List[harlequin.SourceCode.Token]) =>
         pyrocosm.Block.Line(chain(line.map(token(linker, _))))
 
   // A line of code with each qualified name chained: a linked token, a `.` or `#`, and a linked

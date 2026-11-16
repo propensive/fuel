@@ -36,7 +36,7 @@ import soundness.*
 
 import codepages.utf8Codepage
 import collations.codepointCollation
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 import filesystemBackends.javaBaseFilesystem
 import probates.cancelProbate
 import pyrocosm.Filing
@@ -82,8 +82,6 @@ object Sync:
       issues: List[Issue]    = Nil )
 
   object State:
-    import Output.derivation.throwing
-
     def encode(state: State): Text = state.tel.show
     def decode(text: Text): Optional[State] = safely(text.read[Tel].as[State])
 

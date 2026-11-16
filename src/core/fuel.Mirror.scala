@@ -50,7 +50,15 @@ object Mirror:
     ( foreign:    Int,
       definitive: Int,
       message:    Text,
-      tone:       Tone = Tone.Failure )
+      code:       fulminate.Bolt,
+      tone:       Tone           = Tone.Failure )
+
+  // The code of a difference, `↯/f.25.5.<variant>`: a paragraph or heading which does not name
+  // the same code or places (1); a list of a different length (2); a heading of another level
+  // (3); a fence which is not the same (4); a block of another kind (5); and a block more (6),
+  // or less (7), than the text it translates has.
+  private def bolt(variant: Int): fulminate.Bolt =
+    FuelBolts(FuelBolts.core, FuelBolts.mirror, variant)
 
   private def name(node: Layout): Text = node match
     case _: Layout.BlockQuote    => t"a quotation"
@@ -109,7 +117,7 @@ object Mirror:
         t"This does not name the code, or lead to the places, that the text it translates " +
           t"does.$lacks$adds"
 
-      List(Divergence(foreign.line.n1, definitive.line.n1, message, Tone.Warning))
+      List(Divergence(foreign.line.n1, definitive.line.n1, message, bolt(1), Tone.Warning))
 
   private def items
     ( foreign:    Layout,
@@ -122,7 +130,7 @@ object Mirror:
       val message: Text =
         t"This list has ${theirs.size.show} items, and the one it translates has ${ours.size.show}."
 
-      List(Divergence(foreign.line.n1, definitive.line.n1, message))
+      List(Divergence(foreign.line.n1, definitive.line.n1, message, bolt(2)))
     else
       theirs.zip(ours).bind: (theirs, ours) =>
         sequence(theirs, ours, foreign.line.n1, definitive.line.n1)
@@ -135,7 +143,7 @@ object Mirror:
             t"This heading is of level ${level.show}, and the one it translates of level " +
               t"${level2.show}."
 
-          List(Divergence(foreign.line.n1, definitive.line.n1, message))
+          List(Divergence(foreign.line.n1, definitive.line.n1, message, bolt(3)))
 
       case (Layout.Paragraph(_, theirs*), Layout.Paragraph(_, ours*)) =>
         cited(foreign, definitive, List.from(theirs), List.from(ours))
@@ -156,14 +164,14 @@ object Mirror:
           val message: Text =
             t"This fence is not the one it translates: a fence is the same in every language."
 
-          List(Divergence(foreign.line.n1, definitive.line.n1, message))
+          List(Divergence(foreign.line.n1, definitive.line.n1, message, bolt(4)))
 
       case _ =>
         if foreign.ordinal == definitive.ordinal then Nil else
           val message: Text =
             t"This is ${name(foreign)}, where the text it translates has ${name(definitive)}."
 
-          List(Divergence(foreign.line.n1, definitive.line.n1, message))
+          List(Divergence(foreign.line.n1, definitive.line.n1, message, bolt(5)))
 
   // The differences between two runs of blocks: those of each pair, as far as the first pair
   // of different kinds, after which nothing corresponds; and a difference in how many there
@@ -189,15 +197,17 @@ object Mirror:
       val line: Int = theirs.at(ours.size.z).or(theirs.last).lay(foreign)(_.line.n1)
       val other: Int = ours.at(theirs.size.z).or(ours.last).lay(definitive)(_.line.n1)
 
-      val message: Text =
+      val divergence: Divergence =
         if theirs.size > ours.size then
           val extra: Text = theirs.at(ours.size.z).lay(t"")(name)
-          t"This has $extra which the text it translates does not."
+          val message: Text = t"This has $extra which the text it translates does not."
+          Divergence(line, other, message, bolt(6))
         else
           val lacking: Text = ours.at(theirs.size.z).lay(t"")(name)
-          t"The text this translates goes on with $lacking, which this lacks."
+          val message: Text = t"The text this translates goes on with $lacking, which this lacks."
+          Divergence(line, other, message, bolt(7))
 
-      found + List(Divergence(line, other, message))
+      found + List(divergence)
 
   // What differs in structure between a translation, as its text `source` has it, and the text
   // it says it translates: nothing, while a passage of it is pending or orphaned, since its
@@ -217,7 +227,8 @@ object Mirror:
     val ours: List[Layout] = Parser.parse(definitive.text).children
 
     sequence(theirs, ours, 1, 1).map: (divergence: Divergence) =>
-      Translation.Finding(divergence.tone, foreign.origin(divergence.foreign), divergence.message)
+      val line: Int = foreign.origin(divergence.foreign)
+      Translation.Finding(divergence.tone, line, divergence.message, divergence.code)
 
   def check(path: Text, source: Text): List[Block.Diagnostic] =
     Translation.report(path, source, findings(source))

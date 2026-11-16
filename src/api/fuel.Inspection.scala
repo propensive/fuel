@@ -50,7 +50,8 @@ object Inspection:
   // What the compiler threw while it read something: as often an `AssertionError`, or another
   // `java.lang.Error`, as an `Exception`.
   case class ReadError(cause: Throwable)(using Diagnostics)
-  extends Error(m"the compiler could not read what it was given: ${cause.toString.tt}")
+  extends Error(m"the compiler could not read what it was given: ${cause.toString.tt}"):
+    override def bolt: fulminate.Bolt = FuelBolts(FuelBolts.api, FuelBolts.unread)
 
   // Every call into the compiler which may fail is made through this. Contingency recovers
   // only from an `Exception`, and the compiler signals what it cannot read as often with an

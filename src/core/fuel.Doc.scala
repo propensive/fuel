@@ -86,7 +86,9 @@ object Doc:
     val open: List[Block] = unclosed.let: (line: Int) =>
       val message: Block = Block.paragraph(t"This fence is not closed.")
       val excerpt: List[Block] = Excerpts.plain(text, line, Block.Note.Style.Erroneous)
-      List(Block.Diagnostic(Tone.Failure, Block.Location(path, line), List(message), excerpt))
+      val location: Block.Location = Block.Location(path, line)
+      val code: fulminate.Bolt = FuelBolts(FuelBolts.core, FuelBolts.unclosed)
+      List(Block.Diagnostic(Tone.Failure, location, List(message), excerpt, code = code))
 
     . or(Nil)
 
@@ -109,8 +111,14 @@ object Doc:
   // A reference which named several entities is a caution: it is shown unlinked.
   private def ambiguous(path: Text, linker: Linker): List[Block] =
     linker.ambiguities.map: (reference: Text) =>
-      val text: Text = t"`$reference` names more than one entity, so it is not linked; qualify it."
-      Block.Diagnostic(Tone.Warning, Block.Location(path), List(Block.paragraph(text)))
+      ambiguity(reference, Block.Location(path))
+
+  // The caution that a reference names several entities, at its place in a document or on an
+  // API's page, `↯/f.25.3`.
+  def ambiguity(reference: Text, location: Block.Location): Block.Diagnostic =
+    val text: Text = t"`$reference` names more than one entity, so it is not linked; qualify it."
+    val code: fulminate.Bolt = FuelBolts(FuelBolts.core, FuelBolts.ambiguous)
+    Block.Diagnostic(Tone.Warning, location, List(Block.paragraph(text)), code = code)
 
   // A document compiled in two parts, each kept by the key of its own inputs: its prose, with a
   // sentinel where each fence is — keyed by that prose, unlinked, its place on the site, the

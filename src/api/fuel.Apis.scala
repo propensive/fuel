@@ -32,9 +32,9 @@
                                                                                                   */
 package fuel
 
-import soundness.{Format as _, Query as _, *}
+import soundness.{Query as _, *}
 
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 
 // The APIs of a project, one for each format it documents, Scala's first: each keeps its own
 // entities by their own keys, and its own search, and an entity is named among them all by its

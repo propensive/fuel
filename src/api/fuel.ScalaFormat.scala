@@ -32,10 +32,10 @@
                                                                                                   */
 package fuel
 
-import soundness.{Format as _, Language as _, Token as _, *}
+import soundness.{Format as _, Language as _, *}
 
 import dysasymptotics.linearSize
-import pyrocosm.{Block, Figure, Inline, Language, Token, Tone}
+import pyrocosm.{Block, Figure, Inline, Language, Token}
 
 // Scala, and Java as Scala sees it: the format of what `Inspection` reads from compiled code.
 // Its glyphs are `Icons`' and its signatures `Signatures`'; a type's section has its place in

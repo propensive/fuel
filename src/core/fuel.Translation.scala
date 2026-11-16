@@ -190,12 +190,12 @@ object Translation:
   // The edits which turn one sequence of lines into another, as runs.
   private[fuel] def hunks(left: List[Text], right: List[Text]): List[Run] =
     // dissonance's `Diff` holds its edits as varargs, a standard `Seq`, read by `List.from`.
-    val edits: List[Edit[Text]] = List.from(diff(left.to[Sequence], right.to[Sequence]).edits)
+    val edits: List[Diff.Edit[Text]] = List.from(diff(left.to[Sequence], right.to[Sequence]).edits)
 
     // `removed` and `added` are the change being gathered, and `done` the runs before it, each
     // latest first; `consumed` is how many lines of the first sequence the edits have passed.
     def recur
-      ( edits:    List[Edit[Text]],
+      ( edits:    List[Diff.Edit[Text]],
         removed:  List[Int],
         added:    List[Int],
         consumed: Int,
@@ -207,19 +207,26 @@ object Translation:
         else Run.Changed(removed.reverse, added.reverse, consumed - removed.size) :: done
 
       edits match
-        case Par(left, right, _) :: rest =>
+        case Diff.Par(left, right, _) :: rest =>
           recur(rest, Nil, Nil, consumed + 1, Run.Kept(left, right) :: flushed)
 
-        case Del(left, _) :: rest =>
+        case Diff.Del(left, _) :: rest =>
           recur(rest, left :: removed, added, consumed + 1, done)
 
-        case Ins(right, _) :: rest =>
+        case Diff.Ins(right, _) :: rest =>
           recur(rest, removed, right :: added, consumed, done)
 
         case _ =>
           flushed.reverse
 
     recur(edits, Nil, Nil, 0, Nil)
+
+  // A passage, and the lines of the new text `update` gives it, latest first.
+  private final class Draft(val passage: Passage):
+    @scala.caps.unsafe.untrackedCaptures
+    var lines: List[Text] = Nil
+
+    def give(more: List[Text]): Unit = lines = more.reverse + lines
 
   // A translation brought up to a definitive text which has changed. Each passage a change
   // touches keeps its `+` lines, takes the new text as its `-` lines, and keeps the text its
@@ -237,13 +244,6 @@ object Translation:
     // the diff keeps them in.
     val target: Array[Text] = lines.to[Array]
     val fixed: Array[Boolean] = verbatim(lines).to[Array]
-
-    // A passage, and the lines of the new text it is given, latest first.
-    final class Draft(val passage: Passage):
-      @scala.caps.unsafe.untrackedCaptures
-      var lines: List[Text] = Nil
-
-      def give(more: List[Text]): Unit = lines = more.reverse + lines
 
     val drafts: Map[Int, Draft] =
       items.indexed.bind: (item: Item, index: Ordinal) =>
@@ -399,16 +399,25 @@ object Translation:
 
     shown.join(t" ")
 
-  // Something wrong with a translation, at a line of its text (from 1): what `findings` and
-  // `Mirror` find, before it is known which file the text is in, or where in it.
+  // Something wrong with a translation, at a line of its text (from 1), with its code: what
+  // `findings` and `Mirror` find, before it is known which file the text is in, or where in it.
   case class Finding
     ( tone:         Tone,
       line:         Int,
       message:      Text,
+      code:         fulminate.Bolt,
       detail:       Optional[Text] = Unset,
       untranslated: Boolean        = false ):
 
     def shifted(lines: Int): Finding = copy(line = line + lines)
+
+  // The code of what is wrong with a translation of a document, `↯/f.25.9.<variant>`: text it
+  // translates which has gained lines (1), lost them (2) or changed (3); `+` lines which
+  // translate nothing (4); a passage pending revision (5), or orphaned (6); a passage nobody has
+  // translated (7); and a document with no translation into a language it is translated into
+  // (8, from `Translations`).
+  private[fuel] def bolt(variant: Int): fulminate.Bolt =
+    FuelBolts(FuelBolts.core, FuelBolts.translation, variant)
 
   // Findings as diagnostics at their lines of the file at `path`, whose text is `file`: the
   // failures first, and the passages nobody has translated together, as one caution at the
@@ -427,7 +436,8 @@ object Translation:
         finding.detail.lay(List[Block]()) { text => List(Block.paragraph(text)) }
 
       val location: Block.Location = Block.Location(path, finding.line)
-      Block.Diagnostic(finding.tone, location, List(Block.paragraph(message)), excerpt, detail)
+      val paragraphs: List[Block] = List(Block.paragraph(message))
+      Block.Diagnostic(finding.tone, location, paragraphs, excerpt, detail, finding.code)
 
     val untranslated: List[Finding] = findings.filter(_.untranslated).order(_.line)
     val rest: List[Finding] = findings.filter(!_.untranslated)
@@ -472,17 +482,18 @@ object Translation:
       case Run.Changed(removed, added, position) =>
         val line: Int = projection.origin(if !removed.nil then position + 1 else position.max(1))
 
-        val message: Text =
+        val (message, variant) =
           if removed.nil then
-            t"The text this translates has gained lines after this one, which are not " +
-              t"translated."
-          else if added.nil then t"The text this translates has lost these lines."
-          else t"The text this translates has changed here."
+            ( t"The text this translates has gained lines after this one, which are not " +
+                t"translated.",
+              1 )
+          else if added.nil then (t"The text this translates has lost these lines.", 2)
+          else (t"The text this translates has changed here.", 3)
 
         val change: Text =
           reworded(removed.map(befores.readUnchecked(_)), added.map(afters.readUnchecked(_)))
 
-        List(Finding(Tone.Warning, line, message, change))
+        List(Finding(Tone.Warning, line, message, bolt(variant), change))
 
       case _ =>
         Nil
@@ -494,22 +505,22 @@ object Translation:
             val message: Text =
               t"These lines translate nothing: `+` lines follow the `-` lines they translate."
 
-            List(Finding(Tone.Failure, passage.line, message))
+            List(Finding(Tone.Failure, passage.line, message, bolt(4)))
 
           case State.Pending =>
             val message: Text =
               t"The text this translates has changed, from the `!` lines to the `-` lines: " +
                 t"revise the `+` lines, then delete the `!` lines."
 
-            List(Finding(Tone.Warning, passage.line, message))
+            List(Finding(Tone.Warning, passage.line, message, bolt(5)))
 
           case State.Orphaned =>
             val message: Text = t"The text this translates has gone: delete these lines."
-            List(Finding(Tone.Warning, passage.line, message))
+            List(Finding(Tone.Warning, passage.line, message, bolt(6)))
 
           case State.Untranslated =>
-            List:
-              Finding(Tone.Warning, passage.line, t"This is not translated.", untranslated = true)
+            val message: Text = t"This is not translated."
+            List(Finding(Tone.Warning, passage.line, message, bolt(7), untranslated = true))
 
           case State.Translated =>
             Nil

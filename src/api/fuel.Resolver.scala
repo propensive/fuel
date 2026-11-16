@@ -32,7 +32,7 @@
                                                                                                   */
 package fuel
 
-import soundness.{Token as _, *}
+import soundness.*
 
 import dysasymptotics.linearSize
 import pyrocosm.{Inline, Purview, Token}

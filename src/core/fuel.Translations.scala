@@ -109,8 +109,9 @@ object Translations:
 
   def held(path: Text, targets: List[Target]): Boolean = original(path, targets).present
 
-  def problem(tone: Tone, at: Text, message: Text): Block =
-    Block.Diagnostic(tone, Block.Location(at, Unset), List(Block.paragraph(message)), Nil)
+  def problem(tone: Tone, at: Text, message: Text, code: fulminate.Bolt): Block =
+    val location: Block.Location = Block.Location(at, Unset)
+    Block.Diagnostic(tone, location, List(Block.paragraph(message)), code = code)
 
   // That a file has no translation into a language.
   def absent(path: Text, tongue: Text, target: Text): Block =
@@ -118,7 +119,7 @@ object Translations:
       t"This has no translation into `$tongue`, which would be `$target`: `fuel translate` " +
         t"writes it."
 
-    problem(Tone.Warning, path, message)
+    problem(Tone.Warning, path, message, Translation.bolt(8))
 
   // What is wrong with a document's translations, each a language and a path: `path` is the
   // document as it is reported. A language among `partial` may have no translation of it.

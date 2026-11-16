@@ -35,7 +35,7 @@ package fuel
 import soundness.*
 
 import codepages.utf8Codepage
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 import errorDiagnostics.emptyDiagnostics
 import pyrocosm.{Block, Tone}
 
@@ -75,6 +75,12 @@ object SectionFile:
     def +(error: Tel.Error, pointer: Text, span: Span): Faults =
       Faults(items :+ (error, pointer, span))
 
+  // The code of a section's file's problem, `↯/f.25.7.<variant>`: a fault the schema finds,
+  // which carries the TEL error's own code (1); and a translation which lacks the title (2), or
+  // has one the file it translates does not (3).
+  private def bolt(variant: Int): fulminate.Bolt =
+    FuelBolts(FuelBolts.core, FuelBolts.sectionFile, variant)
+
   // What a fault the schema finds means in a section's file.
   private def explain(error: Tel.Error, pointer: Text): Text =
     import Tel.Error.Reason
@@ -95,8 +101,6 @@ object SectionFile:
 
   // The diagnostics the schema raises, each at its line of the file.
   private def checked(path: Text, tel: Tel): List[Block] =
-    import strategies.throwUnsafely
-
     val faults: Faults =
       validate[Tel.Focus](Faults()):
         case error: Tel.Error =>
@@ -108,7 +112,8 @@ object SectionFile:
     faults.items.map: (error, pointer, span) =>
       val line: Int = if span.exists then span.startLine.lay(1)(_.n1) else 1
       val location: Block.Location = Block.Location(path, line.max(1))
-      Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(explain(error, pointer))))
+      val message: List[Block] = List(Block.paragraph(explain(error, pointer)))
+      Block.Diagnostic(Tone.Failure, location, message, code = bolt(1).carrying(error.bolt))
 
   // The file as TEL, with the positions of its compounds; `Unset` if it is not TEL.
   private def parsed(text: Text): Optional[Tel] =
@@ -170,11 +175,11 @@ object SectionFile:
 
         val atoms: Array[Tel.Atom] = Array(Tel.Atom.Source(translation.serialize))
 
-        val replacements: List[Mutation.Op] = titled(tel).lay(Nil): (compound: Tel.Compound) =>
+        val replacements: List[Tel.Mutation.Op] = titled(tel).lay(Nil): (compound: Tel.Compound) =>
           val written: Tel.Compound = compound.copy(atoms = atoms)
-          List(Mutation.Op.Replace(Tel.Pointer.Empty / (t"title", 0), written))
+          List(Tel.Mutation.Op.Replace(Tel.Pointer.Empty / (t"title", 0), written))
 
-        safely(Mutation(tel, replacements).show)
+        safely(Tel.Mutation(tel, replacements).show)
 
   // What is wrong with the translation of a section's file, read from `text` at `path`, of
   // the definitive file `definitive`: what is wrong with it as one, and where its title
@@ -197,13 +202,13 @@ object SectionFile:
                 val message: Text =
                   t"This lacks the section's title, which is not translated: $remedy."
 
-                List(Translation.Finding(Tone.Warning, 1, message))
+                List(Translation.Finding(Tone.Warning, 1, message, bolt(2)))
 
         val orphaned: List[Translation.Finding] =
           if title(definitive).present then Nil
           else title(text).lay(List[Translation.Finding]()): (theirs: Prose) =>
             val message: Text = t"The text this translates has gone: $remedy."
-            List(Translation.Finding(Tone.Warning, theirs.line, message))
+            List(Translation.Finding(Tone.Warning, theirs.line, message, bolt(3)))
 
         val diagnostics: List[Block.Diagnostic] =
           Translation.report(path, text, findings + orphaned)

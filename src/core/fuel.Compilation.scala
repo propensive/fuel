@@ -255,7 +255,8 @@ object Compilation:
   // A file that could not be read or parsed, as a diagnostic.
   def unreadable(path: Text): Block =
     val message: Block = Block.paragraph(t"The file could not be read.")
-    Block.Diagnostic(Tone.Failure, Block.Location(path), List(message))
+    val code: fulminate.Bolt = FuelBolts(FuelBolts.core, FuelBolts.unreadable)
+    Block.Diagnostic(Tone.Failure, Block.Location(path), List(message), code = code)
 
   def corpus(roots: List[Text], checker: Checker = Checker.tokenized, regime: Regime = Regime())
   :   Corpus =

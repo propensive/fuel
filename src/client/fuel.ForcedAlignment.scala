@@ -35,9 +35,7 @@ package fuel
 import soundness.*
 
 import codepages.utf8Codepage
-import dynamicAccess.dynamicJson
 import dysasymptotics.{linearAccess, linearSize}
-import errorDiagnostics.emptyDiagnostics
 
 // A forced alignment of a reading of a presentation's transcript, as Montreal Forced Aligner
 // writes it: each word spoken, with the time it starts and ends. The output is read in any of
@@ -110,7 +108,7 @@ object ForcedAlignment:
   private def json(text: Text): List[Word] | Text =
     val found: Optional[List[Word]] = safely:
       val document: Json = text.read[Json]
-      val entries: List[Json] = document.tiers.words.entries.as[List[Json]]
+      val entries: List[Json] = dynamically[Json](document.tiers.words.entries.as[List[Json]])
 
       entries.map: (entry: Json) =>
         Word(entry(2).as[Text], entry(0).as[Double], entry(1).as[Double])
@@ -141,15 +139,15 @@ object ForcedAlignment:
   // other, a word the aligner did not know pairing with whichever word it stands in for. The
   // two correspond closely enough to time a presentation by when no more than one word in
   // ten, and never fewer than one word, differs — is in the one and not the other.
-  case class Comparison(expected: List[Text], actual: List[Text], edits: List[Edit[Text]]):
-    def differing: Int = edits.filter { edit => !edit.isInstanceOf[Par[?]] }.size
+  case class Comparison(expected: List[Text], actual: List[Text], edits: List[Diff.Edit[Text]]):
+    def differing: Int = edits.filter { edit => !edit.isInstanceOf[Diff.Par[?]] }.size
     def close: Boolean = differing <= (expected.size/10).max(1)
 
     // The place in the alignment of each word of the transcript, by its index, where it is.
     def places: Map[Int, Int] =
       edits.bind:
-        case Par(left, right, _) => List(left -> right)
-        case _                   => Nil
+        case Diff.Par(left, right, _) => List(left -> right)
+        case _                        => Nil
 
       . to[Map]
 
@@ -157,9 +155,9 @@ object ForcedAlignment:
     // transcript not spoken as `-word`, one spoken which the transcript lacks as `+word`.
     def shown: List[Text] =
       val marked: List[(Text, Boolean)] = edits.map:
-        case Par(left, _, _) => (expected.at(Ordinal.zerary(left)).or(t""), false)
-        case Del(left, _)    => (t"-${expected.at(Ordinal.zerary(left)).or(t"")}", true)
-        case Ins(right, _)   => (t"+${actual.at(Ordinal.zerary(right)).or(t"")}", true)
+        case Diff.Par(left, _, _) => (expected.at(Ordinal.zerary(left)).or(t""), false)
+        case Diff.Del(left, _)    => (t"-${expected.at(Ordinal.zerary(left)).or(t"")}", true)
+        case Diff.Ins(right, _)   => (t"+${actual.at(Ordinal.zerary(right)).or(t"")}", true)
 
       val changed: List[Int] = marked.indexed.filter(_(0)(1)).map(_(1).n0)
 
@@ -171,7 +169,7 @@ object ForcedAlignment:
             case Nil                           => runs(tail, List(head))
             case _                             => current.reverse :: runs(tail, List(head))
 
-        case Nil =>
+        case _ =>
           if current.nil then Nil else List(current.reverse)
 
       runs(changed, Nil).map: (run: List[Int]) =>
@@ -185,12 +183,21 @@ object ForcedAlignment:
   def compare(expected: List[Text], aligned: List[Word]): Comparison =
     val actual: List[Text] = aligned.map(_.label)
     val same: (Text, Text) => Boolean = (left, right) => left == right || right == unknown
-    val edits: List[Edit[Text]] = diff(expected.to[Sequence], actual.to[Sequence], same).edits.to(List)
+    val edits: List[Diff.Edit[Text]] =
+      diff(expected.to[Sequence], actual.to[Sequence], same).edits.to(List)
     Comparison(expected, actual, edits)
 
   enum Outcome:
     case Timed(schedule: List[Double], comparison: Comparison)
-    case Failed(messages: List[Text])
+    case Failed(code: fulminate.Bolt, messages: List[Text])
+
+  // The code of why a presentation cannot be timed by an alignment, `↯/f.27.1.<variant>`: a
+  // file to align by which cannot be read (1); an aligner which could not be installed (2), or
+  // which failed (3); no cache directory to install one in (4); an alignment which cannot be
+  // read (5); a slide without a transcript (6); a transcript and an alignment which differ too
+  // much (7); and a slide none of whose words the alignment has (8).
+  private[fuel] def bolt(variant: Int): fulminate.Bolt =
+    FuelBolts(FuelBolts.client, FuelBolts.alignment, variant)
 
   // The deck's schedule from the alignment: a time for each slide after the first, at which
   // its step lands, being the time the first word of its transcript is spoken — or the first
@@ -206,7 +213,7 @@ object ForcedAlignment:
           ( t"slide ${index.n1.show} (line ${slide.line.show}) has no transcript, which timing it "
             + t"by an alignment needs" )
 
-    if !missing.nil then Outcome.Failed(missing) else
+    if !missing.nil then Outcome.Failed(bolt(6), missing) else
       val expected: List[Text] = transcripts.bind(identity(_))
       val comparison: Comparison = compare(expected, aligned)
 
@@ -214,7 +221,7 @@ object ForcedAlignment:
         val count: Text = comparison.differing.show
         val total: Text = expected.size.show
         val heading: Text = t"the transcript and the alignment differ in $count of $total words, which is too many to time the presentation by:"
-        Outcome.Failed(heading :: comparison.shown.map { hunk => t"  $hunk" })
+        Outcome.Failed(bolt(7), heading :: comparison.shown.map { hunk => t"  $hunk" })
       else
         val places: Map[Int, Int] = comparison.places
 
@@ -237,5 +244,5 @@ object ForcedAlignment:
         // Times to the millisecond: an aligner's floats carry noise beyond it.
         def rounded(time: Double): Double = (time*1000.0).round/1000.0
 
-        if !unplaced.nil then Outcome.Failed(unplaced)
+        if !unplaced.nil then Outcome.Failed(bolt(8), unplaced)
         else Outcome.Timed(times.skip(1).map(_.or(0.0)).map(rounded), comparison)

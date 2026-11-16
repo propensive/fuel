@@ -32,7 +32,7 @@
                                                                                                   */
 package fuel
 
-import soundness.{Format as _, Language as _, Query as _, Token as _, *}
+import soundness.{Language as _, Query as _, *}
 
 import pyrocosm.{Block, Inline, Language, Token}
 

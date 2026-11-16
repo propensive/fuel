@@ -38,7 +38,7 @@ import soundness.collationComparable
 import soundness.collations.codepointCollation
 import soundness.sortingAlgorithms.timsort
 
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 import stenography.Designator
 
 // What applies to a type beyond its own members, found in one pass over the whole model once

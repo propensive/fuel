@@ -34,8 +34,8 @@ package fuel
 
 import soundness.*
 
-import dysasymptotics.{linearAccess, linearSize}
-import pyrocosm.{Block, Inline}
+import dysasymptotics.linearSize
+import pyrocosm.Inline
 import soundness.sortingAlgorithms.timsort
 
 // An issue of a tracker, as the API's pages need it: its number, title and address, whether it
@@ -69,8 +69,6 @@ object Issue:
 
     def recur(lines: List[Text], fence: Optional[Text], kept: List[Text]): List[Text] =
       lines match
-        case Nil => kept.reverse
-
         case line :: rest =>
           val trimmed: Text = line.trim
 
@@ -82,6 +80,9 @@ object Issue:
               if trimmed.starts(t"```") then recur(rest, t"```", kept)
               else if trimmed.starts(t"~~~") then recur(rest, t"~~~", kept)
               else recur(rest, Unset, line :: kept)
+
+        case _ =>
+          kept.reverse
 
     recur(uncommented(body).cut(t"\n"), Unset, Nil).join(t"\n")
 

@@ -37,7 +37,7 @@ import soundness.{Query as _, *}
 import caseSensitivity.caseInsensitive
 import proximities.levenshteinProximity
 import pyrocosm.Control
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 import soundness.collationComparable
 import soundness.collations.codepointCollation
 import soundness.sortingAlgorithms.timsort

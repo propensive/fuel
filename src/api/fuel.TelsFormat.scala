@@ -32,10 +32,10 @@
                                                                                                   */
 package fuel
 
-import soundness.{Format as _, Language as _, Query as _, Token as _, *}
+import soundness.{Format as _, Language as _, Query as _, *}
 
 import codepages.utf8Codepage
-import dysasymptotics.{linearAccess, linearSize}
+import dysasymptotics.linearSize
 import errorDiagnostics.emptyDiagnostics
 import pyrocosm.{Block, Inline, Language, Token}
 import stratiform.Tels
@@ -230,7 +230,7 @@ object TelsFormat extends Format:
     def typed(tpe: Tels.Type): Api.Phrase = tpe match
       case Tels.Reference(name) => Api.Phrase(name, Api.Phrase.Role.Type, keyOf(name))
       case Tels.Flag            => Api.Phrase(t"Flag", Api.Phrase.Role.Type)
-      case Tels.Scalar(_, _, _) => Api.Phrase(t"String", Api.Phrase.Role.Type)
+      case _: Tels.Scalar       => Api.Phrase(t"String", Api.Phrase.Role.Type)
       case Tels.Struct(_, _)    => Api.Phrase(t"{…}", Api.Phrase.Role.Symbol)
 
     def shape(tpe: Tels.Type): Optional[Api.Shape] = tpe match
@@ -402,6 +402,9 @@ object TelsFormat extends Format:
 
     val all: List[Api.Entity] = top :: definitions + fields
     Api(all.map { (entity: Api.Entity) => (entity.key, entity) }.to[Map], this)
+
+  // The code of a schema which more than one of the configured files declares, `↯/f.26.7`.
+  val clash: fulminate.Bolt = FuelBolts(FuelBolts.api, FuelBolts.schema)
 
   // Several schemas' APIs as one, in the order they were read; a schema named as an earlier
   // one is, is left out, and named for the caller to report.
