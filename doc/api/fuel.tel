@@ -198,3 +198,20 @@ entry .Selection   a range of a fragment, named by its first and last characters
   entry #findIn      the range's offsets in a text, or nothing
   entry .parse       a selection from its text
   entry .read        a selection from a mark's atoms
+
+entry .Library   where a file of the documentation is read from: the filesystem, or an Orthant store
+  entry #text        the text of the file at a path, if there is one
+  entry #files       the files beneath a directory whose names end with a suffix, in order
+  entry #directory   whether a path is a directory
+  entry .Disk        the filesystem, as it is
+
+entry .Depot   an Orthant store as Fuel reads it: one point for each of its languages
+  entry .open        the store in a directory, read at the values the terms name
+  entry .tongue      the language a value of an axis of languages names
+  entry #root        the directory of the working tree, which every document's path is within
+  entry #languages   each language, and the value of the axis which names it, the original first
+  entry #tongues     the languages the documents are translated into
+  entry #library     the files as a language reads them
+  entry #text        a document's text as a language reads it
+  entry #failures    each document which cannot be derived as a language reads it
+  entry #work        how much of a language's translation is done, as Orthant counts it

@@ -80,15 +80,8 @@ object Overlay:
   // A compound of the file, with its path, by which its line is found (`Compounds`).
   private type Placed = (Tel.Compound, List[Text])
 
-  // An overlay read from its text, or the diagnostic which says why it could not be; `prose`
-  // is how its prose — each `info`, `detail` and `keyword` — reads, which for an overlay's
-  // translation is one of the two readings of what is written (`OverlayTranslations`).
-  def read
-    ( path:  Text,
-      text:  Text,
-      prose: Text -> Text = (text: Text) => text )
-  :   Overlay | Block.Diagnostic =
-
+  // An overlay read from its text, or the diagnostic which says why it could not be.
+  def read(path: Text, text: Text): Overlay | Block.Diagnostic =
     import parsing.trackPositions
 
     recover:
@@ -106,7 +99,7 @@ object Overlay:
           failure(path, 1, message, 1)
 
         base.lay[Overlay | Block.Diagnostic](missing): (base: Text) =>
-          val problems: List[Block] = check(path, tel, Unset, roots, fileKeywords, prose)
+          val problems: List[Block] = check(path, tel, Unset, roots, fileKeywords)
 
           // The format of what it documents, by its `id`: Scala's, unless it says.
           val format: Text =
@@ -114,7 +107,7 @@ object Overlay:
             . or(t"scala")
 
           Overlay
-            ( path, base, doc(tel, 1, Nil, prose), entries(tel, tel, Nil, Nil, prose), problems,
+            ( path, base, doc(tel, 1, Nil), entries(tel, tel, Nil, Nil), problems,
               format )
 
   private def failure(path: Text, line: Int, message: Text, variant: Int): Block.Diagnostic =
@@ -144,8 +137,7 @@ object Overlay:
       tel:      Tel,
       entry:    Optional[Placed],
       children: List[Placed],
-      allowed:  List[Text],
-      prose:    Text -> Text )
+      allowed:  List[Text] )
   :   List[Block] =
 
     def line(placed: Placed): Int = Compounds.line(tel, placed(1))
@@ -170,7 +162,7 @@ object Overlay:
           if Compounds.inline(child(0)).nil then List(failure(path, line(child), unnamed, 3))
           else Nil
 
-        name + check(path, tel, child, grandchildren, entryKeywords, prose)
+        name + check(path, tel, child, grandchildren, entryKeywords)
       else
         grandchildren.head.lay(List[Block]()): (first: Placed) =>
           val message: Text =
@@ -221,7 +213,7 @@ object Overlay:
       val at: Int = infoChild.let(line(_)).or(entry.let(line(_)).or(1))
 
       info.lay(List[Block]()): (info: Text) =>
-        val size: Int = Blocks.plain(Blocks.inline(prose(info))).length
+        val size: Int = Blocks.plain(Blocks.inline(info)).length
 
         val message: Text =
           t"This info is ${size.show} characters long, and may be at most ${InfoLimit.show}: " +
@@ -248,25 +240,25 @@ object Overlay:
     . filter(_ != t"")
 
   // What a node says of its entity, with the imports of those enclosing it.
-  private def doc(node: Tel, line: Int, inherited: List[Text], prose: Text -> Text): Api.Entry =
+  private def doc(node: Tel, line: Int, inherited: List[Text]): Api.Entry =
     val until: Optional[Api.Until] =
       node.fields(t"until").to[List].head.let: (until: Tel) =>
         val texts: List[Text] = until.atomTexts.to[List].filter(_ != t"")
         texts.head.let: (version: Text) => Api.Until(version, texts.at(Sec))
 
     Api.Entry
-      ( info    = child(node, t"info").let(prose),
-        detail  = child(node, t"detail").let(prose),
+      ( info    = child(node, t"info"),
+        detail  = child(node, t"detail"),
         hidden  = flag(node, t"hidden"),
         until   = until,
         refer   = atoms(node, t"refer"),
         imports = inherited + atoms(node, t"import"),
         line    = line,
-        keywords = phrases(node, t"keyword").map(prose) )
+        keywords = phrases(node, t"keyword") )
 
   // The entries beneath `node`, which is at `at` in `file`, the file read with its positions.
   private def entries
-    ( file: Tel, node: Tel, at: List[Text], inherited: List[Text], prose: Text -> Text )
+    ( file: Tel, node: Tel, at: List[Text], inherited: List[Text] )
   :   List[Entry] =
 
     val scope: List[Text] = inherited + atoms(node, t"import")
@@ -288,15 +280,15 @@ object Overlay:
         val isType: Boolean = name.starts(t"#")
         val plain: Text = if name.starts(t".") || name.starts(t"#") then name.skip(1) else name
         val joined: Text = inline.skip(1).join(t" ")
-        val info: Optional[Text] = if joined == t"" then Unset else prose(joined)
-        val base: Api.Entry = doc(tel, line, scope, prose)
+        val info: Optional[Text] = if joined == t"" then Unset else joined
+        val base: Api.Entry = doc(tel, line, scope)
 
         val entry: Api.Entry =
           val imports: List[Text] = scope + atoms(tel, t"import")
-          val detail: Optional[Text] = base.detail.or(source.let(prose))
+          val detail: Optional[Text] = base.detail.or(source)
           base.copy(info = base.info.or(info), detail = detail, imports = imports)
 
-        val nested: List[Entry] = entries(file, tel, placed(1), entry.imports, prose)
+        val nested: List[Entry] = entries(file, tel, placed(1), entry.imports)
         List(Entry(plain, isType, entry, nested, line))
 
   // Every overlay merged onto the model, with the diagnostics the merging raises.

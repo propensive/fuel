@@ -172,6 +172,9 @@ object settings:
     mvn"dev.propensive:pyrocosm-web:$pyrocosm",         // the dashboard `fuel serve` serves
     mvn"dev.propensive:pyrocosm-cli:$pyrocosm")         // the standard command line (Tool)
 
+  // The reader of an Orthant store, from which the documents are read in each language.
+  def orthantDeps(orthant: String) = Seq(mvn"dev.propensive:orthant-reader:$orthant")
+
   // Harlequin tokenises with dotc's own scanner, so the JVM that runs fuel must carry the fork
   // compiler, at the version this build uses, resolved from the `toolchain` repository below.
   def compilerDeps = Seq(mvn"org.scala-lang:scala3-compiler_3:${settings.scalaVersion}")
@@ -196,6 +199,7 @@ object deps extends CruxModule:
 
   def soundness: T[String] = Task(version("soundness")())
   def pyrocosm: T[String] = Task(version("pyrocosm")())
+  def orthant: T[String] = Task(version("orthant")())
 
 // A module compiled with the pinned fork, against the pinned libraries.
 trait Fork extends CruxScalaModule:
@@ -274,6 +278,7 @@ object fuel extends Project:
     def mvnDeps = Task:
       settings.coreDeps(deps.soundness())
         ++ settings.pyrocosmDeps(deps.pyrocosm())
+        ++ settings.orthantDeps(deps.orthant())
         ++ settings.compilerDeps
 
   // Released as `dev.propensive:fuel-api`: the API model (`Api`), read from TASTy by
@@ -283,6 +288,7 @@ object fuel extends Project:
     def mvnDeps = Task:
       settings.coreDeps(deps.soundness())
         ++ settings.pyrocosmDeps(deps.pyrocosm())
+        ++ settings.orthantDeps(deps.orthant())
         ++ settings.compilerDeps
         ++ settings.inspectorDeps
 
@@ -293,6 +299,7 @@ object fuel extends Project:
       settings.coreDeps(deps.soundness())
         ++ settings.clientDeps(deps.soundness())
         ++ settings.pyrocosmDeps(deps.pyrocosm())
+        ++ settings.orthantDeps(deps.orthant())
         ++ settings.compilerDeps
         ++ settings.inspectorDeps
 
@@ -316,6 +323,7 @@ object fuel extends Project:
         +: (settings.coreDeps(deps.soundness())
             ++ settings.clientDeps(deps.soundness())
             ++ settings.pyrocosmDeps(deps.pyrocosm())
+            ++ settings.orthantDeps(deps.orthant())
             ++ settings.compilerDeps
             ++ settings.inspectorDeps)
 
