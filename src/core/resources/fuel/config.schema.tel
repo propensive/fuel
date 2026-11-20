@@ -3,44 +3,36 @@ tel 1.0
 name fuel
 
 # The format of Fuel's configuration, `.pyrocosm/fuel/config.tel`: `Workspace.schema` reads
-# this file, and holds each `section` of a configuration to it. A member which may be written
-# as an atom on its keyword's line, or as a child beneath it, is listed before those which may
-# not, since atoms are assigned to members in order: `section guide doc` is a section whose
-# `name` is `guide` and whose `path` is `doc`.
+# this file, and holds the `store` and each `section` of a configuration to it. A member which
+# may be written as an atom on its keyword's line, or as a child beneath it, is listed before
+# those which may not, since atoms are assigned to members in order: `section guide doc` is a
+# section whose `name` is `guide` and whose `path` is `doc`.
 
-record Translation
+record Store
   description
-      A translation of a section into one language: the language, as `fr` or `pt-BR`, and
-      the directory, within the section's, which mirrors the directory of its original text,
-      a file's translation being the file of the same path there. `fallback` is the language
-      which is read where this one has no file: another the section is translated into, or
-      the one it is written in.
-  field language String
+      The Orthant store which holds the documents: the directory it is in, which has
+      `.orthant` in it. Whatever the configuration names within the store's working tree is
+      read from the store, in each language its axis of languages has, and not from the
+      files checked out there. Each `at` is a value of another of its axes, as
+      `release=1.2.0`, or a value alone where one axis has it, which the documents are read
+      at; an axis nothing names is read at its last value, where its values are one line.
   field path String
-  field fallback String optional
-
-record Original
-  description
-      The text a section is written in, which its translations translate: its language, and
-      its directory within the section's. `metadata` is the file, within that directory,
-      which says what a reader is told of the section, to the schema `section`; each
-      `overlay` is a directory of the API's documentation, and each `glossary` a file of
-      terms, within it too.
-  field language String
-  field path String
-  field metadata String optional
-  field overlay String optional repeatable
-  field glossary String optional repeatable
+  field at String optional repeatable
 
 record Section
   description
       A section of documents: its name, which the address of each of its documents begins
-      with, and its directory within the project's. It holds its original text, and a
-      translation for each other language it is read in.
+      with, and its directory within the project's. `language` is the language it is written
+      in, which a section held in an Orthant store need not say, the store's first language
+      being that; `metadata` is the file, within the directory, which says what a reader is
+      told of the section, to the schema `section`; each `overlay` is a directory of the
+      API's documentation, and each `glossary` a file of terms, within it too.
   field name String
   field path String
-  field original Original
-  field translation Translation optional repeatable
+  field language String optional
+  field metadata String optional
+  field overlay String optional repeatable
+  field glossary String optional repeatable
 
 record Sync
   description
@@ -50,6 +42,7 @@ record Sync
   field repository String
 
 document
+  field store Store optional
   field section Section optional repeatable
   field classpath String optional repeatable
   field scalac-option String optional repeatable

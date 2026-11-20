@@ -48,41 +48,40 @@ object FuelBolts:
 
   // The core's errors, each a kind of problem a document or a file beside it has: a file which
   // cannot be read; a fence which is not closed; a reference which names several entities; a
-  // glossary; a translation of a document whose structure is not the definitive text's; a
-  // presentation; a section's file; a table; a translation; and of a fence of Scala, the sample
-  // file it writes, the fixture compiled before it, a frame of its animation, its run, and the
-  // fragment itself.
+  // glossary; a presentation; a section's file; a table; of a fence of Scala, the sample file
+  // it writes, the fixture compiled before it, a frame of its animation, its run, and the
+  // fragment itself; and an Orthant store. The fifth and the ninth were of the translations
+  // Fuel once kept itself, and are no longer raised.
   final val unreadable   = 1
   final val unclosed     = 2
   final val ambiguous    = 3
   final val glossary     = 4
-  final val mirror       = 5
   final val presentation = 6
   final val sectionFile  = 7
   final val table        = 8
-  final val translation  = 9
   final val sample       = 10
   final val fixture      = 11
   final val frame        = 12
   final val run          = 13
   final val fragment     = 14
+  final val depot        = 15
 
-  // The API's: a translation of a glossary; what the compiler could not read; a link; an
-  // overlay; a translation of an overlay; a search's query; and a schema declared twice.
+  // The API's: a glossary as another language reads it; what the compiler could not read; a
+  // link; an overlay; a search's query; and a schema declared twice. The fifth was of an
+  // overlay's translation, as Fuel once kept one, and is no longer raised.
   final val glossaryTranslation = 1
   final val unread              = 2
   final val link                = 3
   final val overlay             = 4
-  final val overlayTranslation  = 5
   final val query               = 6
   final val schema              = 7
 
   // The client's, each printed after its code's label or a diagnostic of it: a presentation's
-  // alignment; `fuel translate`'s; the configuration's sections; a failure of the daemon
-  // itself; a command line which was not understood; a tracker; a configured path which does
-  // not exist; and the compiler, which failed rather than reporting.
+  // alignment; the configuration's sections; a failure of the daemon itself; a command line
+  // which was not understood; a tracker; a configured path which does not exist; and the
+  // compiler, which failed rather than reporting. The second was `fuel translate`'s, and is
+  // no longer raised.
   final val alignment   = 1
-  final val translating = 2
   final val sections    = 3
   final val daemon      = 4
   final val usage       = 5

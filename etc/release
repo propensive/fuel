@@ -11,4 +11,4 @@ launcher   fuel.launcher
 
 # The publication homes Burdock matches the classpath against by SHA-256, so that a library on
 # it becomes an on-demand `Burdock-Require` URL rather than being inlined into the executable.
-hints      propensive/fuel,propensive/pyrocosm,propensive/soundness,propensive/proscala
+hints      propensive/fuel,propensive/pyrocosm,propensive/orthant,propensive/soundness,propensive/proscala

@@ -39,22 +39,19 @@ import dysasymptotics.linearSize
 import errorDiagnostics.emptyDiagnostics
 import pyrocosm.{Block, Tone}
 
-// A section's file: a TEL file in the directory of the section's definitive text, named on the
-// `original` line of the configuration after the directory, as its `metadata`, which says what a reader is
-// told of the section — so far its `title`, which the navigation shows in place of the
-// section's name:
+// A section's file: a TEL file in the section's directory, named beneath the `section` of
+// the configuration as its `metadata`, which says what a reader is told of the section — so
+// far its `title`, which the navigation shows in place of the section's name:
 //
 //     title  User guide
 //
-// Being in the tree, it is translated as the tree is: its translation is the file of the same
-// path in a translation's directory, whose prose is a `Translation` of the definitive file's,
+// Being among the documents, it is in each language they are: an Orthant store which holds
+// the section holds its file, and a language reads the title its own text of the file says,
 //
-//     title
-//         - User guide
-//         + Guide de l'utilisateur
+//     title  Guide de l'utilisateur
 //
-// made from the definitive file (`generate`) and held to it (`check`). The format is the
-// schema `section` (`fuel/section.schema.tel`).
+// The format is the schema `section` (`fuel/section.schema.tel`), which the file is held to
+// in every language.
 object SectionFile:
   val none: SectionFile = SectionFile(Unset)
 
@@ -76,8 +73,8 @@ object SectionFile:
       Faults(items :+ (error, pointer, span))
 
   // The code of a section's file's problem, `↯/f.25.7.<variant>`: a fault the schema finds,
-  // which carries the TEL error's own code (1); and a translation which lacks the title (2), or
-  // has one the file it translates does not (3).
+  // which carries the TEL error's own code (1). The second and the third were of a
+  // translation Fuel kept itself, and are no longer raised.
   private def bolt(variant: Int): fulminate.Bolt =
     FuelBolts(FuelBolts.core, FuelBolts.sectionFile, variant)
 
@@ -115,11 +112,6 @@ object SectionFile:
       val message: List[Block] = List(Block.paragraph(explain(error, pointer)))
       Block.Diagnostic(Tone.Failure, location, message, code = bolt(1).carrying(error.bolt))
 
-  // The file as TEL, with the positions of its compounds; `Unset` if it is not TEL.
-  private def parsed(text: Text): Optional[Tel] =
-    import parsing.trackPositions
-    safely(text.read[Tel])
-
   // A run of prose as the file writes it: its text, the line (from 1) of its keyword, and
   // whether it is on the keyword's line rather than beneath it.
   case class Prose(text: Text, line: Int, inline: Boolean):
@@ -140,9 +132,6 @@ object SectionFile:
       if written == t"" then Unset
       else Prose(written, Compounds.line(tel, List(t"title")), !words.nil)
 
-  // The title as it is written, if there is one.
-  def title(text: Text): Optional[Prose] = parsed(text).let(prose(_))
-
   // A section's file read from its text, with what the schema finds wrong with it;
   // or the diagnostic which says the text is not TEL.
   def read(path: Text, text: Text): (SectionFile, List[Block]) | Block.Diagnostic =
@@ -154,90 +143,6 @@ object SectionFile:
     . protect[(SectionFile, List[Block]) | Block.Diagnostic]:
         val tel: Tel = text.read[Tel]
         (SectionFile(prose(tel).let(_.text)), checked(path, tel))
-
-  // What a reader of a translation's language is told: what the translation reads as, and
-  // what the definitive file says where it says nothing.
-  def foreign(text: Text, definitive: SectionFile): SectionFile =
-    val read: Optional[Text] = title(text).let: (prose: Prose) =>
-      Translation.parse(prose.text).foreign.text.trim
-
-    SectionFile(read.let { (text: Text) => if text == t"" then Unset else text }.or(definitive.title))
-
-  // The translation of a section's file: the definitive file as TEL reads it, its title a
-  // `Translation` — that of the translation `old`, brought up to date, or one nobody has
-  // translated — written as the title's source atom. `Unset` if the file is not TEL.
-  def generate(definitive: Text, old: Optional[Text] = Unset): Optional[Text] =
-    parsed(definitive).let: (tel: Tel) =>
-      prose(tel).lay(definitive: Optional[Text]): (prose: Prose) =>
-        val translation: Translation = old.let(title(_)).let(_.text) match
-          case before: Text => Translation.update(Translation.parse(before), prose.text)
-          case _            => Translation.skeleton(prose.text)
-
-        val atoms: Array[Tel.Atom] = Array(Tel.Atom.Source(translation.serialize))
-
-        val replacements: List[Tel.Mutation.Op] = titled(tel).lay(Nil): (compound: Tel.Compound) =>
-          val written: Tel.Compound = compound.copy(atoms = atoms)
-          List(Tel.Mutation.Op.Replace(Tel.Pointer.Empty / (t"title", 0), written))
-
-        safely(Tel.Mutation(tel, replacements).show)
-
-  // What is wrong with the translation of a section's file, read from `text` at `path`, of
-  // the definitive file `definitive`: what is wrong with it as one, and where its title
-  // is not a translation of the definitive title, as `Translation` finds.
-  def check(path: Text, text: Text, definitive: Text): List[Block] =
-    read(path, text) match
-      case diagnostic: Block.Diagnostic =>
-        List(diagnostic)
-
-      case (_, faults) =>
-        val remedy: Text = t"`fuel translate --update` makes the translation again"
-
-        val findings: List[Translation.Finding] =
-          title(definitive).lay(List[Translation.Finding]()): (ours: Prose) =>
-            title(text) match
-              case theirs: Prose =>
-                Translation.findings(theirs.text, ours.text).map(_.shifted(theirs.site - 1))
-
-              case _ =>
-                val message: Text =
-                  t"This lacks the section's title, which is not translated: $remedy."
-
-                List(Translation.Finding(Tone.Warning, 1, message, bolt(2)))
-
-        val orphaned: List[Translation.Finding] =
-          if title(definitive).present then Nil
-          else title(text).lay(List[Translation.Finding]()): (theirs: Prose) =>
-            val message: Text = t"The text this translates has gone: $remedy."
-            List(Translation.Finding(Tone.Warning, theirs.line, message, bolt(3)))
-
-        val diagnostics: List[Block.Diagnostic] =
-          Translation.report(path, text, findings + orphaned)
-
-        faults + diagnostics.map { (diagnostic: Block.Diagnostic) => diagnostic: Block }
-
-  // How much of the translation is done.
-  def progress(text: Text, definitive: Text): Translation.Progress =
-    title(definitive).lay(Translation.Progress(0, 0, 0, 0, 0)): (ours: Prose) =>
-      title(text) match
-        case theirs: Prose => Translation.progress(Translation.parse(theirs.text), ours.text)
-        case _             => Translation.Progress(0, 0, 0, 0, 1)
-
-  // A section's file at `path` held to its translations, each a language and a path, as
-  // `Translations.check` holds a document.
-  def verify
-    ( path:         Text,
-      text:         Text,
-      translations: List[(Text, Text)],
-      read:         Text => Optional[Text],
-      partial:      List[Text] = Nil )
-  :   List[Block] =
-
-    translations.bind: (tongue: Text, target: Text) =>
-      val missing: List[Block] =
-        if partial.has(tongue) then Nil else List(Translations.absent(path, tongue, target))
-
-      read(target).lay(missing): (source: Text) =>
-        check(target, source, text)
 
 // What a section's file says: its title, if it has one.
 case class SectionFile(title: Optional[Text])

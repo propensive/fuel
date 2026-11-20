@@ -93,10 +93,6 @@ object ui:
     Subcommand("transcript", "print a presentation's transcript, its slides' in order")
   val Github = Subcommand("github", "a GitHub repository, as owner/repo")
 
-  val Translate =
-    Subcommand
-      ( "translate", "write the translations nobody has begun, check them all, or update them" )
-
   // Each is read from the cascade every Pyrocosm tool shares: the flag, the `fuel.*` property,
   // the `FUEL_*` variable, the repository's `.pyrocosm/fuel/config.tel` and the user's. A
   // repeated keyword's atoms arrive joined by `:`.
@@ -149,39 +145,17 @@ object ui:
         List('f'),
         "compile everything again, ignoring what the output directory keeps" )
 
-  val Update =
-    Flag[Unit]
-      ( "update",
-        false,
-        Nil,
-        "bring each translation up to the text it translates, keeping what it was written for" )
-
-  val DryRun =
-    Flag[Unit]
-      ( "dry-run",
-        false,
-        Nil,
-        "with --update, say what each translation would become, and write nothing" )
-
-  val Language =
-    Flag[Text]
-      ( "language",
-        false,
-        List('l'),
-        "translate into this language alone, as `fr` or `pt-BR`, whatever the configuration names" )
-
   val Section =
     Setting[Text]
       ( t"section",
-        t"a section of documents, its name and its directory, as `guide doc`; beneath it, a " +
-          t"`original` and each `translation`, a language and a directory within it each" )
+        t"a section of documents, its name and its directory, as `guide doc`; beneath it, its " +
+          t"`metadata`, each `overlay` and each `glossary`, within that directory" )
 
-  val Translation =
+  val Store =
     Setting[Text]
-      ( t"translation",
-        t"beneath a `section`, a language and the directory, within the section's, which " +
-          t"holds its translation of the definitive text, as `fr fr`; it may hold a `fallback` " +
-          t"language" )
+      ( t"store",
+        t"the directory an Orthant store is in, whose documents are read in each of its " +
+          t"languages; beneath it, an `at` for each other axis's value, as `at release=1.2.0`" )
 
   val Autoplay =
     Flag[Unit]
@@ -343,66 +317,11 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
       val config: Workspace.Config = Workspace.load(directory)
       ambient(sync(config, directory, Unset, named = false))
 
-    // `fuel translate [--language <language>] [<file>...]`: the translations nobody has begun
-    // written, and all of them checked; with `--update`, each brought up to the text it
-    // translates.
-    case ui.Translate() :: rest =>
-      val config: Workspace.Config = Workspace.load(directory)
-      val update: Boolean = ui.Update().present
-      val dry: Boolean = ui.DryRun().present
-
-      // Registered here, so that it is offered and documented; its value is the word after it.
-      ui.Language()
-
-      val words: List[Text] = rest.map(_())
-      val flags: List[Text] = List(t"--language", t"-l")
-
-      def valued(index: Ordinal): Boolean =
-        before(words, index).lay(false)(flags.has(_))
-
-      val tongue: Optional[Text] =
-        words.indexed.filter { (_, index) => valued(index) }.head.let(_(0))
-
-      val files: List[Text] = words.indexed.filter: (word: Text, index: Ordinal) =>
-        !word.starts(t"-") && !valued(index)
-
-      . map { (word: Text, _) => absolute(directory, word) }
-
-      ambient(translate(config, update, dry, tongue, flags.exists(words.has(_)), files))
-
     case _ =>
       ambient
         ( Fuel.usage
             ( List
-                ( ui.Compile, ui.Show, ui.Search, ui.Present, ui.Transcript, ui.Sync,
-                  ui.Translate ) ) )
-
-// The translations: those nobody has begun written, and all checked; or each updated.
-private def translate
-  ( config: Workspace.Config,
-    update: Boolean,
-    dry:    Boolean,
-    tongue: Optional[Text],
-    asked:  Boolean,
-    files:  List[Text] )
-  ( using Stdio, Environment )
-:   Exit | Tool.UsageError.type | NoDocument.type | Mistranslated.type | Withheld.type =
-
-  val usage: Text =
-    t"fuel: usage: fuel translate [--update [--dry-run]] [--language <language>] [<file>...]"
-
-  if dry && !update then
-    Out.println(usage)
-    val label: Text = fuel.usage(2).label
-    Out.println(t"fuel: $label `--dry-run` says what `--update` would do, so it is given with it")
-    Tool.UsageError
-  else if asked && !tongue.lay(false)(Tongue.valid(_)) then
-    Out.println(usage)
-    val label: Text = fuel.usage(3).label
-    Out.println(t"fuel: $label a language is written as `fr`, or with a region as `pt-BR`")
-    Tool.UsageError
-  else if update then Translating.update(config, tongue, files, dry)
-  else Translating.run(config, tongue, files, width)
+                ( ui.Compile, ui.Show, ui.Search, ui.Present, ui.Transcript, ui.Sync ) ) )
 
 // Compiles every configured directory into the daemon's corpus, which the dashboard shows, and
 // reports a line per section and a line per file that could not be read.
@@ -470,14 +389,14 @@ private def compile(config: Workspace.Config, force: Boolean, tty: Boolean)
 
   if config.documents.nil then
     // What is wrong with the sections the configuration has, if that is why there is none.
-    config.badTranslations.each: (reason: Text, code: fulminate.Bolt) =>
+    config.badSections.each: (reason: Text, code: fulminate.Bolt) =>
       Out.println(t"fuel: ${code.label} $reason")
 
     Out.println(t"fuel: ${Workspace.bolt(11).label} no section of documents is configured")
 
     Out.println
-      ( t"fuel: add `section <name> <dir>` to .pyrocosm/fuel/config.tel, with `original " +
-          t"<language> <dir>` beneath it" )
+      ( t"fuel: add `section <name> <dir>` to .pyrocosm/fuel/config.tel, and a `store <dir>` " +
+          t"where an Orthant store holds the documents" )
 
     NoDocuments
   else
@@ -560,8 +479,8 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
       val location: Block.Location = Block.Location(entry)
       progress.report(absent(location, text, 1))
 
-    // What is wrong with the configuration's `translation` lines.
-    config.badTranslations.each: (reason: Text, code: fulminate.Bolt) =>
+    // What is wrong with the configuration's sections, or with its store.
+    config.badSections.each: (reason: Text, code: fulminate.Bolt) =>
       val text: List[Block] = List(Block.paragraph(t"$reason."))
       val location: Block.Location = Block.Location(t"${config.root}/.pyrocosm/fuel/config.tel")
       progress.report(Block.Diagnostic(Tone.Failure, location, text, code = code))
@@ -569,7 +488,7 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
     // The work there is, counted before it starts: the documents of every root, the dependency
     // jars, the sources; the pages are guessed from the sources until the API says.
     val documents: Int = config.documents.fold(0): (count, root) =>
-      count + Compilation.files(root, config.translations).size
+      count + Compilation.files(root, config.library).size
 
     val jars: Int = config.classpath.filter(_.ends(t".jar")).size
     progress.plan(Phase.Documents, documents)
@@ -595,6 +514,13 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
 
     // The hash of the classpath: of its bytes, until the hash of its API is available.
     val classpath: Text = Digests.of(config.classpath.map(Server.hash)*)
+
+    // What an Orthant store cannot give, of the documents as each language reads them.
+    config.depot.let: (depot: Depot) =>
+      progress.reports(depot.failures())
+
+      depot.tongues.each: (tongue: Text) =>
+        progress.reports(depot.failures(tongue).map(depot.attributed(_, tongue)))
 
     // The glossary first, since every document's prose may name its terms.
     val (glossary, glossaryProblems, glossed) = glossaries(config)
@@ -636,7 +562,7 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
     // The languages the documents are translated into; and what a compile keeps of what it
     // compiles: the output's, or for one which writes none and has translations, its own, so
     // that a fence every language shares is compiled once.
-    val tongues: List[Text] = config.translations.map(_.tongue).distinct
+    val tongues: List[Text] = config.tongues
     val transient: Optional[Cache] = if tongues.nil then Unset else Cache.Transient()
     val kept: Optional[Cache] = store.lay(transient) { (store: Store) => store }
 
@@ -654,7 +580,25 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
           (path: Text) => Digests.of(environment, path),
           glossary,
           sections = config.sections,
-          translations = config.translations )
+          library = config.library )
+
+    // The documents as a language reads them, each compiled from the language's own text of
+    // it, with what is wrong with that text and not with the text it was written in.
+    def readIn(written: Corpus, tongue: Text, checker: Checker, regime: Compilation.Regime)
+    :   Corpus =
+
+      val read: Corpus =
+        Compilation.translated
+          ( written, checker,
+            regime.copy(glossary = terms(tongue), library = config.library(tongue)) )
+
+      val theirs: List[Doc] = read.sections.bind(_.docs)
+      val ours: List[Doc] = written.sections.bind(_.docs)
+
+      theirs.filter { (doc: Doc) => !ours.exists(_ eq doc) }.each: (doc: Doc) =>
+        progress.reports(doc.problems.map(config.attributed(_, tongue)))
+
+      read
 
     // The API first, since the documents link to it: the sources compiled and saved, their
     // output and the dependencies walked, the overlays merged, and the pages of the project's
@@ -684,11 +628,7 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
         // The corpus and the API as each language reads them.
         val readings: Readings =
           spoken.map: (tongue: Text, apis: Apis) =>
-            val read: Corpus =
-              Compilation.translated
-                ( written, tongue, checker,
-                  regime(key, linker).copy(glossary = terms(tongue)) )
-
+            val read: Corpus = readIn(written, tongue, checker, regime(key, linker))
             tongue -> Server.Reading(retitled(read, tongue), apis)
 
           . to[Map]
@@ -719,9 +659,7 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
     val readings: Readings = outcome.let(_(4)).or:
       tongues.map: (tongue: Text) =>
         def translated: Corpus =
-          Compilation.translated
-            ( corpus, tongue, Checker.tokenized,
-              regime(unchecked, unlinked).copy(glossary = terms(tongue)) )
+          readIn(corpus, tongue, Checker.tokenized, regime(unchecked, unlinked))
 
         val read: Corpus = sheltered(translated)(_ => corpus)
 
@@ -732,8 +670,8 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
     // The languages there are to read in: the one the documents are written in, then each
     // they are translated into.
     val languages: List[Text] =
-      if tongues.nil then Nil
-      else (config.languages.map(_(1)).keep(1) + tongues).distinct
+      if tongues.nil then Nil else config.depot.lay(Nil)(_.languages.map(_(0)))
+
     val api: Api = apis.primary
 
     // Every link, now that every target is known.
@@ -793,6 +731,24 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
       val shown: Text = t"${unrendered.show} of ${rendered.show} types"
       if unrendered > 0 then Out.println(t"api: $shown could not be rendered, and are shown as `?`")
 
+    // How much of each language's translation is done, as Orthant counts it: said, and no
+    // problem, since a language reads what nobody has translated as it was written.
+    config.depot.let: (depot: Depot) =>
+      Out.println(t"fuel: the documents of the Orthant store in ${depot.home}, at ${depot.place}")
+
+      depot.tongues.each: (tongue: Text) =>
+        depot.work(tongue).let: (work: orthant.Survey.Sum) =>
+          val parts: List[Text] =
+            List
+              ( (work.pending, t"lines to translate"),
+                (work.stale, t"passages written for text which has changed"),
+                (work.faults, t"changes which conflict") )
+            . filter(_(0) > 0)
+            . map { (count: Int, what: Text) => t"${count.show} $what" }
+
+          val left: Text = if parts.nil then t"" else t": ${parts.join(t", ")} (`orthant todo`)"
+          Out.println(t"$tongue: ${work.percent.show}% translated$left")
+
     if config.classpath.nil
     then Out.println(t"fuel: no classpath is configured, so no fragment was compiled")
 
@@ -800,68 +756,79 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
     result
 
 // What each section's file says, as the title its directory's section has; the problems — a
-// file which cannot be read or is not what the schema allows, and what is wrong with a
-// translation of one; and the titles each language the documents are translated into reads:
-// a section's file as its translation says — the language's own or a fallback's.
+// file which cannot be read or is not what the schema allows, in the language it was written
+// in or in another; and the titles each other language reads: a section's file as that
+// language's text of it says, and as it was written where that says no title.
 private def sectionFiles(config: Workspace.Config)
 :   (List[(Text, Text)], List[Block], List[(Text, List[(Text, Text)])]) =
 
   @scala.caps.unsafe.untrackedCaptures
   var problems: List[Block] = Nil
 
-  val read: List[(Text, Text, Text, SectionFile)] = config.sectionFiles.bind: (root: Text, file: Text) =>
-    def unreadable: List[(Text, Text, Text, SectionFile)] =
-      problems = Compilation.unreadable(file) :: problems
-      Nil
+  val library: Library = config.library
 
-    readText(file).lay(unreadable): (text: Text) =>
-      SectionFile.read(file, text) match
-        case diagnostic: Block.Diagnostic =>
-          problems = diagnostic :: problems
-          Nil
+  val read: List[(Text, Text, Text, SectionFile, List[Block])] =
+    config.sectionFiles.bind: (root: Text, file: Text) =>
+      def unreadable: List[(Text, Text, Text, SectionFile, List[Block])] =
+        problems = Compilation.unreadable(file) :: problems
+        Nil
 
-        case (said, faults) =>
-          faults.each { (fault: Block) => problems = fault :: problems }
-          List((root, file, text, said))
+      library.text(file).lay(unreadable): (text: Text) =>
+        SectionFile.read(file, text) match
+          case diagnostic: Block.Diagnostic =>
+            problems = diagnostic :: problems
+            Nil
+
+          case (said, faults) =>
+            faults.each { (fault: Block) => problems = fault :: problems }
+            List((root, file, text, said, faults))
 
   def titles(all: List[(Text, SectionFile)]): List[(Text, Text)] =
     all.bind { (root, said) => said.title.let { title => List((root, title)) }.or(Nil) }
 
-  val translating: List[Block] = read.bind: (_, file: Text, text: Text, _) =>
-    SectionFile.verify
-      ( file, text, Translations.of(file, config.translations), readText(_),
-        Translations.partial(Translations.within(file, config.translations)) )
-
   val spoken: List[(Text, List[(Text, Text)])] =
-    config.translations.map(_.tongue).distinct.map: (tongue: Text) =>
-      val each: List[(Text, SectionFile)] = read.map: (root: Text, file: Text, _, defined: SectionFile) =>
-        val served: Optional[Text] =
-          Translations.serving
-            ( file, tongue, config.translations, (file: Text) => readText(file).present )
+    config.tongues.map: (tongue: Text) =>
+      val theirs: Library = config.library(tongue)
 
-        (root, served.let(readText(_)).lay(defined)(SectionFile.foreign(_, defined)))
+      val each: List[(Text, SectionFile)] = read.map:
+        (root: Text, file: Text, text: Text, defined: SectionFile, faults: List[Block]) =>
+          val said: SectionFile = theirs.text(file).lay(defined): (foreign: Text) =>
+            if foreign == text then defined else SectionFile.read(file, foreign) match
+              case diagnostic: Block.Diagnostic =>
+                problems = config.attributed(diagnostic, tongue) :: problems
+                defined
+
+              case (said, found) =>
+                Compilation.novel(found, faults).each: (fault: Block) =>
+                  problems = config.attributed(fault, tongue) :: problems
+
+                SectionFile(said.title.or(defined.title))
+
+          (root, said)
 
       (tongue, titles(each))
 
-  val defined: List[(Text, SectionFile)] = read.map { (root, _, _, said) => (root, said) }
-  (titles(defined), problems.reverse + translating, spoken)
+  val defined: List[(Text, SectionFile)] = read.map { (root, _, _, said, _) => (root, said) }
+  (titles(defined), problems.reverse, spoken)
 
 // The glossaries the configuration names, read and combined, with the problems: a file which
-// cannot be read or is not TEL, what its schema or `Glossary.merge` finds, and what is wrong
-// with a translation of one. With them, the glossary each language the documents are
-// translated into reads: every glossary which has a translation — the language's own or a
-// fallback's — as that says, combined as the glossaries were, each translated term saying the
-// name it translates, in the language its glossary is written in.
+// cannot be read or is not TEL, and what its schema or `Glossary.merge` finds, in the
+// language it was written in or in another. With them, the glossary each other language
+// reads: every glossary as that language's text of it says, combined as the glossaries were,
+// each translated term saying the name it translates, in the language its glossary was
+// written in.
 private def glossaries(config: Workspace.Config): (Glossary, List[Block], List[(Text, Glossary)]) =
   @scala.caps.unsafe.untrackedCaptures
   var problems: List[Block] = Nil
+
+  val library: Library = config.library
 
   val read: List[(Text, Text, Glossary)] = config.glossaries.bind: (file: Text) =>
     def unreadable: List[(Text, Text, Glossary)] =
       problems = Compilation.unreadable(file) :: problems
       Nil
 
-    readText(file).lay(unreadable): (text: Text) =>
+    library.text(file).lay(unreadable): (text: Text) =>
       Glossary.read(file, text) match
         case glossary: Glossary =>
           problems = Glossary.faults(file, text).reverse + problems
@@ -873,34 +840,31 @@ private def glossaries(config: Workspace.Config): (Glossary, List[Block], List[(
 
   val (glossary, merging) = Glossary.merge(read.map(_(2)))
   val names: List[Text] = glossary.terms.map(_.name)
-  val reader: Text -> Optional[Text] = (path: Text) => readText(path)
 
-  val translating: List[Block] = read.bind: (file: Text, text: Text, _) =>
-    GlossaryTranslations.verify
-      ( file, text, Translations.of(file, config.translations), reader,
-        Translations.partial(Translations.within(file, config.translations)), names )
-
-  // The language a glossary is written in: that of the directory of the original text it is in.
+  // The language a glossary is written in: that of the section whose directory it is in.
   def language(file: Text): Optional[Text] =
     config.languages.filter { (directory, _) => file.starts(t"$directory/") }.head.let(_(1))
 
   val spoken: List[(Text, Glossary)] =
-    config.translations.map(_.tongue).distinct.map: (tongue: Text) =>
+    config.tongues.map: (tongue: Text) =>
       given Locale[Phrases.Spoken] = Phrases.locale(tongue)
+      val theirs: Library = config.library(tongue)
 
-      val each: List[Glossary] = read.map: (file: Text, _, defined: Glossary) =>
-        val served: Optional[Text] =
-          Translations.serving
-            ( file, tongue, config.translations, (file: Text) => readText(file).present )
-
+      val each: List[Glossary] = read.map: (file: Text, text: Text, defined: Glossary) =>
         val original: Text => Text = (name: Text) => Phrases.original(language(file), name)()
 
-        served.lay(defined): (path: Text) =>
-          readText(path).lay(defined)(GlossaryTranslations.foreign(path, _, defined, original))
+        theirs.text(file).lay(defined): (foreign: Text) =>
+          if foreign == text then defined else
+            val found: List[Block] = GlossaryTranslations.check(file, foreign, text, names)
+
+            Compilation.novel(found, Glossary.faults(file, text)).each: (fault: Block) =>
+              problems = config.attributed(fault, tongue) :: problems
+
+            GlossaryTranslations.foreign(file, foreign, defined, original)
 
       (tongue, Glossary.merge(each)(0))
 
-  (glossary, problems.reverse + merging + translating, spoken)
+  (glossary, problems.reverse + merging, spoken)
 
 // The API model of a project, in the session: its sources compiled and saved beneath the
 // cache (`$XDG_CACHE_HOME/fuel/<project>/classes`, or `~/.cache/fuel/…`), the output and each
@@ -1022,19 +986,17 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
       ()
 
   // The overlays, read and merged.
-  val overlays: List[Overlay] = config.overlays.bind: (directory: Text) =>
-    val root: Path on Linux = unsafely(directory.as[Path on Linux])
+  val library: Library = config.library
 
-    if !Filing.directory(root) then
+  val overlays: List[Overlay] = config.overlays.bind: (directory: Text) =>
+    if !library.directory(directory) then
       val text: Text = t"This overlay directory does not exist."
       report(absent(Block.Location(directory), text, 3))
       Nil
     else
-      // A file in a directory of translations is not an overlay but a translation of one,
-      // which the overlay it translates is held to.
+      // A glossary or a section's file in the directory is not an overlay.
       val files: List[Text] =
-        filesBeneath(root, t".tel").filter(!Translations.held(_, config.translations))
-        . filter(!config.glossaries.has(_))
+        library.files(directory, t".tel").filter(!config.glossaries.has(_))
         . filter { (file: Text) => !config.sectionFiles.exists(_(1) == file) }
 
       files.bind: (file: Text) =>
@@ -1042,16 +1004,9 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
           report(Compilation.unreadable(file))
           Nil
 
-        readText(file).lay(unreadable): (text: Text) =>
+        library.text(file).lay(unreadable): (text: Text) =>
           Overlay.read(file, text) match
             case overlay: Overlay =>
-              val reader: Text -> Optional[Text] = (path: Text) => readText(path)
-
-              OverlayTranslations.verify
-                ( file, text, Translations.of(file, config.translations), reader,
-                  Translations.partial(Translations.within(file, config.translations)) )
-              . each(report)
-
               List(overlay)
 
             case diagnostic: Block.Diagnostic =>
@@ -1070,16 +1025,18 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
       val code: fulminate.Bolt = Overlay.bolt(14)
       report(Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(text)), code = code))
 
-  def documented(api: Api): Api =
+  // An API with its overlays merged into it, and what merging them found.
+  def documented(api: Api): (Api, List[Block]) =
     val these: List[Overlay] = overlaysOf(api.format)
 
-    if these.nil then api else
+    if these.nil then (api, List[Block]()) else
       val (merged, merging) = Overlay.merge(api, these)
       merging.each(report)
-      merged
+      (merged, merging)
 
   // What applies to each type beyond its members, over the whole model.
-  val api: Api = ScalaFormat.decorate(documented(inspected))
+  val (inspectedDocs, inspectedFaults) = documented(inspected)
+  val api: Api = ScalaFormat.decorate(inspectedDocs)
 
   // The schemas: each read from its file, those which are sound together one API.
   val schemaTexts: List[(Text, Text)] = config.schemas.bind: (file: Text) =>
@@ -1101,7 +1058,8 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
     val paragraphs: List[Block] = List(Block.paragraph(text))
     report(Block.Diagnostic(Tone.Failure, Unset, paragraphs, code = TelsFormat.clash))
 
-  val schemas: Api = TelsFormat.decorate(documented(combined))
+  val (combinedDocs, combinedFaults) = documented(combined)
+  val schemas: Api = TelsFormat.decorate(combinedDocs)
   progress.finish(Phase.Overlays)
 
   if !overlays.nil then Out.println(t"fuel: ${overlays.size.show} overlays")
@@ -1113,27 +1071,38 @@ private def model(config: Workspace.Config, checker: Checker, progress: Progress
 
   val others: List[Api] = if schemas.entities.nil then Nil else List(schemas)
 
-  // The API as each language reads it: every overlay which has a translation — the language's
-  // own or a fallback's — read as that says, and merged as the overlays were. What is wrong
-  // with a translation was said above, so nothing is reported here.
+  // The API as each other language reads it: every overlay read from that language's text of
+  // it, and merged as the overlays were. An overlay is held, in each language, to what an
+  // overlay must be; what is wrong with one as it was written was said above, and is not
+  // said again of a language which has the same text.
   val spoken: List[(Text, Apis)] =
-    config.translations.map(_.tongue).distinct.map: (tongue: Text) =>
+    config.tongues.map: (tongue: Text) =>
+      val theirs: Library = config.library(tongue)
+
       val read: List[Overlay] = overlays.map: (overlay: Overlay) =>
-        val served: Optional[Text] =
-          Translations.serving
-            ( overlay.file, tongue, config.translations, (file: Text) => readText(file).present )
+        theirs.text(overlay.file).lay(overlay): (text: Text) =>
+          if library.text(overlay.file) == text then overlay
+          else Overlay.read(overlay.file, text) match
+            case translated: Overlay =>
+              translated
 
-        served.let(readText(_)).lay(overlay): (text: Text) =>
-          Overlay.read(overlay.file, text, OverlayTranslations.foreign(_)) match
-            case translated: Overlay => translated
-            case _                   => overlay
+            case diagnostic: Block.Diagnostic =>
+              report(config.attributed(diagnostic, tongue))
+              overlay
 
-      def documentedIn(api: Api): Api =
+      def documentedIn(api: Api, known: List[Block]): Api =
         val these: List[Overlay] = read.filter(_.format == api.format.id)
-        if these.nil then api else Overlay.merge(api, these)(0)
 
-      val scala: Api = ScalaFormat.decorate(documentedIn(inspected))
-      val tels: Api = TelsFormat.decorate(documentedIn(combined))
+        if these.nil then api else
+          val (merged, merging) = Overlay.merge(api, these)
+
+          Compilation.novel(merging, known).each: (fault: Block) =>
+            report(config.attributed(fault, tongue))
+
+          merged
+
+      val scala: Api = ScalaFormat.decorate(documentedIn(inspected, inspectedFaults))
+      val tels: Api = TelsFormat.decorate(documentedIn(combined, combinedFaults))
       val schemas: List[Api] = if tels.entities.nil then Nil else List(tels)
       (tongue, Apis(scala :: schemas))
 
@@ -1318,8 +1287,7 @@ private def compiled(config: Workspace.Config, path: Text): Optional[Doc] =
 
   val regime: Compilation.Regime =
     Compilation.Regime
-      ( config.session, config.fixtures, glossary = glossary, sections = sections,
-        translations = config.translations )
+      ( config.session, config.fixtures, glossary = glossary, sections = sections )
 
   def compiled: Optional[Doc] =
     Checking.session(config.classpath, config.options): (checker: Checker) =>
@@ -1385,9 +1353,9 @@ private def absent(location: Block.Location, text: Text, variant: Int): Block =
   Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(text)), code = code)
 
 // The code of a command line which was not understood, `↯/f.27.5.<variant>`: of `fuel present`
-// (1); of `fuel translate`, with `--dry-run` but not `--update` (2) or a language which is not
-// one (3); of `fuel sync`, without a repository (4) or with nothing attached (5); and of
-// `fuel transcript` (6), `fuel show` (7) and `fuel search` (8) without what they take.
+// (1); of `fuel sync`, without a repository (4) or with nothing attached (5); and of
+// `fuel transcript` (6), `fuel show` (7) and `fuel search` (8) without what they take. The
+// second and the third were of `fuel translate`, and are no longer raised.
 private def usage(variant: Int): fulminate.Bolt =
   FuelBolts(FuelBolts.client, FuelBolts.usage, variant)
 

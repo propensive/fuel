@@ -47,8 +47,8 @@ object Compilation:
   // when the key of its inputs is not kept, `base` giving the key of everything a document
   // depends on beyond its own text, by its path; `glossary` has the terms its prose may name;
   // `sections` is every section's name and directory, which a relative link leaving its own
-  // section resolves through (a corpus gives its own when the regime gives none);
-  // `translations` are the directories which hold the translations of others.
+  // section resolves through (a corpus gives its own when the regime gives none); `library`
+  // is where the documents are read from, the filesystem unless an Orthant store holds them.
   case class Regime
     ( session:  Boolean                  = false,
       fixtures: Optional[Text]           = Unset,
@@ -58,7 +58,7 @@ object Compilation:
       base:     Text => Text             = (_: Text) => t"",
       glossary: Glossary                 = Glossary.none,
       sections: List[(Text, Text)]       = Nil,
-      translations: List[Translations.Target] = Nil )
+      library:  Library                  = Library.Disk )
 
   // A section's name where nothing says it: its directory's last segment.
   def name(root: Text): Text = root.cut(t"/").filter(_ != t"").reverse.head.or(root)
@@ -68,38 +68,15 @@ object Compilation:
     regime.sections.filter(_(1) == root).head.let(_(0)).or(name(root))
 
   // The Markdown documents beneath a root, in order: what a section compiles, and so what there
-  // is to do, which a compile may count before it starts. A file in a directory of translations
-  // is not a document.
-  def files(root: Text, translations: List[Translations.Target] = Nil): List[Text] =
-    sources(root).filter(!Translations.held(_, translations))
-
-  // Every Markdown file beneath a root, in order.
-  def sources(root: Text): List[Text] =
-    import filesystemBackends.javaBaseFilesystem
-    import filesystemOptions.dereferenceSymlinks
-    import sortingAlgorithms.timsort
-    import soundness.collationComparable
-    import collations.codepointCollation
-    import galilei.glob
-
-    safely:
-      val base: Path on Linux = root.as[Path on Linux]
-      base.glob(Glob.parse(t"**/*.md")).map(_.encode).sort
-
-    . or(Nil)
+  // is to do, which a compile may count before it starts.
+  def files(root: Text, library: Library = Library.Disk): List[Text] = library.files(root, t".md")
 
   def section(root: Text, checker: Checker = Checker.tokenized, regime: Regime = Regime())
   :   Corpus.Section =
 
-    import charsets.utf8Charset
-    import textSanitizers.skipSanitizer
-
-    val files: List[Text] = this.files(root, regime.translations)
+    val files: List[Text] = this.files(root, regime.library)
 
     def relative(path: Text): Text = path.skip(root.length + 1)
-
-    def read(path: Text): Optional[Text] =
-      safely(path.as[Path on Linux]).let: (file: Path on Linux) => safely(file.read[Text])
 
     val named: Text = name(root, regime)
 
@@ -108,10 +85,7 @@ object Compilation:
 
     def recur(rest: List[Text], docs: List[Doc], skipped: List[Text]): Corpus.Section = rest match
       case path :: tail =>
-        val text: Optional[Text] =
-          safely(path.as[Path on Linux]).let: (file: Path on Linux) => safely(file.read[Text])
-
-        text match
+        regime.library.text(path) match
           case text: Text =>
             val within: Text = relative(path)
             val linker: Linker = regime.linker(named, within)
@@ -122,15 +96,8 @@ object Compilation:
                   regime.base(t"$named/$within"), named, regime.glossary, root,
                   regime.sections )
 
-            val problems: List[Block] =
-              Translations.check
-                ( within, text, Translations.of(path, regime.translations), read,
-                  Translations.partial(Translations.within(path, regime.translations)) )
-
-            val doc: Doc = parsed.copy(problems = parsed.problems + problems)
-
-            regime.progress(within, doc)
-            recur(tail, docs + List(doc), skipped)
+            regime.progress(within, parsed)
+            recur(tail, docs + List(parsed), skipped)
 
           case _ =>
             recur(tail, docs, skipped + List(path))
@@ -187,20 +154,15 @@ object Compilation:
 
       found.head
 
-  // A corpus as a language reads it: each document compiled from its translation — the one
-  // `Translations.serving` finds, the language's own or a fallback's — as its definitive text
-  // was, so that a fence, being the same, is compiled once where the regime keeps what it
-  // compiles; and the definitive document itself where nothing translates it. A translated
-  // heading keeps the anchor of the heading it translates, so a link to a place in a document
-  // means the same in every language. Nothing is reported: what is wrong with a translation
-  // is said when the definitive text is compiled.
-  def translated(corpus: Corpus, tongue: Text, checker: Checker, regime: Regime): Corpus =
-    import charsets.utf8Charset
-    import textSanitizers.skipSanitizer
-
-    def read(path: Text): Optional[Text] =
-      safely(path.as[Path on Linux]).let: (file: Path on Linux) => safely(file.read[Text])
-
+  // A corpus as a language reads it: each document compiled from its text in that language,
+  // which `library` reads — the regime's is the language's — as the text it was written in
+  // was, so that a fence every language shares is compiled once where the regime keeps what
+  // it compiles; and the document as it was written, where the language has none or its text
+  // is the same. A translated heading keeps the anchor of the heading it translates, so a
+  // link to a place in a document means the same in every language. Each document's problems
+  // are its own: those the text it was written in has too — in the passages nobody has
+  // translated, which are that text's — are not said again.
+  def translated(corpus: Corpus, checker: Checker, regime: Regime): Corpus =
     def anchored(doc: Doc, definitive: Doc): Doc =
       def anchors(blocks: List[Block]): List[Optional[Text]] =
         blocks.bind:
@@ -231,26 +193,32 @@ object Compilation:
     val sections: List[Corpus.Section] = corpus.sections.map: (section: Corpus.Section) =>
       val docs: List[Doc] = section.docs.map: (doc: Doc) =>
         val path: Text = t"${section.root}/${doc.path}"
+        complete.library.text(path).lay(doc): (text: Text) =>
+          if doc.text == text then doc else
+            val parsed: Doc =
+              Doc.parse
+                ( doc.path, text, checker, complete.session,
+                  fixture(complete, section.name, doc.path),
+                  complete.linker(section.name, doc.path), complete.cache,
+                  complete.base(t"${section.name}/${doc.path}"), section.name, complete.glossary,
+                  section.root, complete.sections )
 
-        val served: Optional[Text] =
-          Translations.serving(path, tongue, complete.translations, read(_).present)
-
-        served.let(read(_)).lay(doc): (source: Text) =>
-          val text: Text = Translation.parse(source).foreign.text
-
-          val parsed: Doc =
-            Doc.parse
-              ( doc.path, text, checker, complete.session,
-                fixture(complete, section.name, doc.path),
-                complete.linker(section.name, doc.path), complete.cache,
-                complete.base(t"${section.name}/${doc.path}"), section.name, complete.glossary,
-                section.root, complete.sections )
-
-          anchored(parsed, doc)
+            val read: Doc = anchored(parsed, doc)
+            read.copy(problems = novel(read.problems, doc.problems))
 
       section.copy(docs = docs, skipped = Nil)
 
     Corpus(sections)
+
+  // The problems which are not also among others, wherever each is: a problem is the same
+  // as another which says the same of the same kind of thing, whichever line it is on.
+  def novel(problems: List[Block], others: List[Block]): List[Block] =
+    def gist(block: Block): Block = block match
+      case diagnostic: Block.Diagnostic => diagnostic.copy(location = Unset, excerpt = Nil)
+      case other                        => other
+
+    val known: List[Block] = others.map(gist)
+    problems.filter { (problem: Block) => !known.has(gist(problem)) }
 
   // A file that could not be read or parsed, as a diagnostic.
   def unreadable(path: Text): Block =

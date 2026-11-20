@@ -156,35 +156,33 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   the daemon polls every ten minutes while serving, with `since` and `If-None-Match`, so a poll
   with nothing new is a free 304. Other targets may follow `github`. Left for later: detaching
   by command, backoff on a rate limit, a timeout on the fetch.
-- **Translations** (done, first cut: the model and its maintenance). A translation is a file
-  of the definitive one's relative path, in the directory the configuration gives its language
-  beneath the `section` it translates (`translation fr fr`, perhaps with a `fallback`
-  language for the files it lacks), which holds the text it translates in `- `
-  lines and its translation in `+ ` lines, so that it is consistent by itself and a line diff
-  against the definitive text says where it is out of date. `fuel
-  compile` and `fuel translate` check each one (stale text, untranslated passages, structure
-  which is not the definitive text's), `fuel translate` writes those nobody has begun, and
-  `fuel translate --update` rewrites one for a changed text, keeping what its translation was
-  written for in `! ` lines for the translator to work from; it writes nothing which would add a
-  failure, lose a `+` line whose text remains, or change again on a second update
-  (`Translating.hazards`), and `--dry-run` says what it would write. The dashboard
-  serves each language (Pyrocosm's `Audience`): a document as its translation reads, an
-  entity's page as its overlay's does, Fuel's own words as a `Polyglot` each (`Phrases`) in
-  English, French and German. A glossary named beneath a `original` is translated too
-  (`GlossaryTranslations`): an entry is keyed by the definitive term, a `term` beneath it is
-  the language's own, and `Glossary.Term.origin` ties one to the other, so that the anchor is
-  the definitive term's in every language, a translated document may name a term in either
-  language, and the page is sorted by the language's collation (cosmopolite's `Collatable`).
-  A section is configured whole (`Workspace`): `section guide doc`, with `original en-US en`
-  and each `translation fr fr` beneath it, every path within its parent's, and the overlays and
-  glossaries beneath the `original`, whose directory they are in. The name is
-  the address's; what a reader is told of the section — its title — is in the tree, in the
-  section's file, which the `original` line names (`SectionFile`, to the schema `section`),
-  so that it is translated as the tree is
-  (`Corpus.Section.title`).
-  Left for later: a translation's pages in the output directory and compiled rather than
-  rendered when asked for, hyphenation by language, holding a passage to the terms the text
-  it translates names, and translating presentations and schema descriptions.
+- **Languages and releases** (done: read from an Orthant store). Fuel first kept translations
+  itself, each a file which held the text it translated in `- ` lines and its translation in
+  `+ ` lines, inside the prose of a TEL file too, with a command to write and update them.
+  That is now [Orthant](https://github.com/propensive/orthant)'s, which does it for any
+  line-based document, along a release as well as a language, and Fuel only reads a store
+  (`Depot`, over `orthant-reader`): a `store` in the configuration, the documents within its
+  working tree read at one point for each value of its axis of languages, every file plain
+  text in every language. The store is read as if it were its working tree (`Library`), so
+  the code which reads a file by its path does not know which holds it. Each language's text
+  is held to what a file of its kind must be, and a problem it shares with the text it was
+  written in is said once (`Compilation.novel`); how far a translation is done is Orthant's
+  count. The dashboard serves each language (Pyrocosm's `Audience`): a document as the
+  language reads it, an entity's page as its overlay does, Fuel's own words as a `Polyglot`
+  each (`Phrases`) in English, French and German. A glossary in another language keys each
+  entry by the original term, a `term` beneath it being the language's own
+  (`GlossaryTranslations`), and `Glossary.Term.origin` ties one to the other, so that the
+  anchor is the original term's in every language, a translated document may name a term in
+  either language, and the page is sorted by the language's collation (cosmopolite's
+  `Collatable`). A section is configured whole (`Workspace`): `section guide docs`, with its
+  `metadata`, each `overlay` and each `glossary` beneath it, every path within its parent's.
+  The name is the address's; what a reader is told of the section — its title — is among its
+  documents, in the section's file (`SectionFile`, to the schema `section`), so that it is
+  translated as they are (`Corpus.Section.title`).
+  Left for later: reading more than one release at once, and a choice of release in the
+  dashboard; the store read from a git commit rather than the filesystem; another language's
+  pages in the output directory and compiled rather than rendered when asked for; hyphenation
+  by language; and translating presentations and schema descriptions.
 - **M1 Markdown with embedded code, compiled and viewed** (done, first cut). This document's
   second half. Found while building it:
   - A chain of `Optional#let` calls with `_` lambdas (`file.parent.let(_.parent).let(_.parent)`

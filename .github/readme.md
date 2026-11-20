@@ -26,12 +26,6 @@ fuel present doc/slides.tel --align talk.wav  # the same, timed to a recording o
 fuel transcript doc/slides.tel  # the presentation's transcript, set to the terminal's width
 fuel sync github propensive/fuel  # attach a repository's issues to the API pages, and fetch them
 fuel sync          # fetch every attached tracker's issues again
-fuel translate     # write the translations nobody has begun, into each configured language,
-                   # and say how far each is done, and what is wrong with any
-fuel translate doc/x.md doc/y.md  # the same, for these documents (or overlays) alone
-fuel translate --language fr  # the same, into French alone
-fuel translate --update  # bring each translation up to the text it translates
-fuel translate --update --dry-run  # say what that would change, and write nothing
 fuel install       # install tab-completions and the manpage
 fuel about         # fuel's version, and the daemon serving it
 fuel --version     # the version alone
@@ -42,9 +36,8 @@ A failure of the daemon itself while it carries out a command (running out of me
 reported on the standard error, where it was thrown, and the command exits with status 6, apart
 from a compile's own failures (status 4), from a tracker whose issues could not be fetched
 (status 7), from a presentation whose transcript and alignment do not correspond (status 8),
-from an aligner that could not be installed or run (status 9), from a translation which is not
-consistent with the text it translates (status 10, from `fuel translate`) and from a command
-line it did not understand (status 2).
+from an aligner that could not be installed or run (status 9) and from a command line it did
+not understand (status 2).
 
 Every error, diagnostic and failure fuel reports is named by a bolt code, the scheme of all of
 Propensive's projects: `↯/f.25` to `↯/f.28` are fuel's (its core, API, client and launcher), as
@@ -61,58 +54,65 @@ a bare `serve` in the configuration) shows it: every section's documents, by tit
 chosen document. A document's title is its first level-one heading, else its filename.
 
 The documents are configured as *sections*. A `section` is a name and a directory, and holds
-its `original` — the text it is written in: its language, where it is, and perhaps the file
-there which says what a reader is told of the section — with what else is found there
-beneath it:
+what else is found in that directory beneath it: perhaps the file there which says what a
+reader is told of the section, each directory of the API's documentation, and each glossary:
 
 ```
-section guide doc
-  original en-US en section.tel     # `doc/en`, written in American English, and the
-                                    # section's file, `doc/en/section.tel`
-    overlay api                     # `doc/en/api`
-    glossary glossary.tel           # `doc/en/glossary.tel`
-  translation fr fr                 # `doc/fr`: see Translations
+section guide docs                  # the documents beneath `docs`
+  metadata section.tel              # the section's file, `docs/section.tel`
+  overlay api                       # `docs/api`
+  glossary glossary.tel             # `docs/glossary.tel`
 ```
 
 Each value on these lines is a member with a keyword of its own, which the configuration's
 schema (`fuel/config.schema.tel`, among Fuel's resources) declares in the order they are
-written: a section's `name` and `path`; an original's `language`, `path` and `metadata`; a
-translation's `language`, `path` and `fallback`. So a member may be written beneath its
-parent instead, and this is the same section:
+written: a section's `name`, `path`, `language` and `metadata`. So a member may be written
+beneath its parent instead, and `section guide docs en section.tel` is this section, written
+in English:
 
 ```
 section
   name guide
-  path doc
-  original
-    language en-US
-    path en
-    metadata section.tel
-    overlay api
-    glossary glossary.tel
-  translation
-    language fr
-    path fr
+  path docs
+  language en
+  metadata section.tel
+  overlay api
+  glossary glossary.tel
 ```
 
-Every path is within its parent's: the section's directory is in the project's, a
-`original`'s and a `translation`'s in the section's, and the section's file, an `overlay`
-and a `glossary` in the original's. A section whose documents are in its own directory writes
-`original en .`. A path which begins with `/` is where it says.
+Every path is within its parent's: the section's directory is in the project's, and the
+section's file, an `overlay` and a `glossary` in the section's. A path which begins with `/`
+is where it says.
+
+The documents may be held in an [Orthant](https://github.com/propensive/orthant) store,
+which keeps each in every language it is translated into, and at every release. A `store`
+says the directory the store is in — the one which has `.orthant` in it — and beneath it an
+`at` for the value of each of its axes, other than its languages, which the documents are
+read at:
+
+```
+store .
+  at release=1.2.0
+section guide docs
+```
+
+Whatever the configuration names within the store's working tree — a section, its file, an
+overlay, a glossary — is then read from the store, in each of its languages, and not from
+the files checked out there: see [Languages](#languages). Anything else is read from the
+filesystem, in the one language its section says, if it says one.
 
 The name is the first part of the address of each of the section's documents,
 `/doc/guide/intro.md`, whatever its directories are called and whichever language is read. It
 is one segment of an address, so it holds no `/` or `#`, and no two sections share one. A
-`section` which is not what the schema allows — not a name and a directory, or without
-exactly one `original`, a language and a directory — is a failure, and so is a `document`
-line, which a section once was. A directory given by `--document` or in the environment has
-nowhere to say more, and is the section named by its last segment, read in place of the
-configuration's.
+`section` which is not what the schema allows — not a name and a directory — is a failure,
+and so are an `original` and a `translation`, which said a section's languages before a store
+did, and a `document` line, which a section once was. A directory given by `--document` or in
+the environment has nowhere to say more, and is the section named by its last segment, read
+in place of the configuration's.
 
-What a reader is told of a section is not in the configuration but in the tree, in the
-section's file, the `metadata` of its `original`, so that it is
-translated as everything else there is. It is a TEL file, to the schema `section`, which says
-the section's `title`:
+What a reader is told of a section is not in the configuration but among its documents, in
+the section's file, its `metadata`, so that it is translated as everything else there is. It
+is a TEL file, to the schema `section`, which says the section's `title`:
 
 ```
 title  User guide
@@ -314,7 +314,7 @@ dist/doc/
 
 The manifest (`Output.Manifest`) records Fuel's version, the hash of the classpath (of its
 bytes, until a hash of its API is available), the hash of every input the whole output depends
-on, each document by its section (its original's directory relative to the project root) and its
+on, each document by its section (its directory relative to the project root) and its
 path, each API page by its entity, and the cache: from the key of each input to the record which
 holds its output. Naming records by their content means names never collide, whatever a
 document or an entity is called, and a record already written is not written again; the manifest
@@ -524,7 +524,7 @@ define padding
 
 As TEL reads a line, one space separates one value from the next, so a value with spaces in it —
 a term's name, a keyword, a synonym — follows two: `define type class` is a term `type` whose
-`term` (which only a translation says) is `class`, and a failure. What the schema finds wrong
+`term` (which only a glossary in another language says) is `class`, and a failure. What the schema finds wrong
 with a glossary is a failure at its line.
 
 A term in brackets in prose — `[interface]`, in any case, or `[interfaces][interface]` for an
@@ -538,207 +538,89 @@ lists its terms in the order of the dictionary of the language it is read in.
 A `synonym` is another name for a term: a search finds the term by it, `[UI]` in prose is the
 term, and the glossary page lists the synonym in its own place, leading to the term. A name — a
 term's or a synonym's — which another term has already is a failure. An `unlisted` term is
-defined for prose to use, and for its translations to say alike, without being listed: it is
+defined for prose to use, and for every language to say alike, without being listed: it is
 not on the glossary page, nor found by a search, and `[padding]` shows its definition but leads
 only to its own `link`, where it has one.
 
-A glossary named beneath a section's `original`, by its path within that directory, is
-translated as the section's documents are: see [Translations](#translations).
+A glossary named beneath a section which an Orthant store holds is translated as the
+section's documents are: see [Languages](#languages).
 
-## Translations
+## Languages
 
-A document or an overlay is written in one language, its *definitive* text, and may be
-translated into others. A translation is a file of its own which holds the text it translates
-beside the translation of it, so that it is consistent by itself, and can be held to the
-definitive text as that changes. A line of it is one of four kinds, by how it begins:
-
-```
-- The definitive text, a line of it.
-+ Its translation.
-! The definitive text as it was when the translation was written.
-A line both languages share.
-```
-
-A *passage* is a run of `!` lines, then `-` lines, then `+` lines: its `+` lines translate its
-`-` lines together, so a paragraph may be reflowed. A sigil alone is an empty line of its kind.
-A line both languages share never begins with a sigil and a space, so one which would — an item
-of a Markdown list which is the same in both languages — is a passage whose `+` line repeats
-its `-` line. Taking the `-` lines with the shared lines gives the definitive text back, and
-taking the `+` lines with them gives the translation.
-
-````
-- # Tutorial
-+ # Tutoriel
-
-- Fuel compiles every Markdown file,
-- and serves it on the web.
-+ Fuel compile chaque fichier Markdown, et le sert sur le web.
-
-- - first, write a document
-+ - d'abord, écrivez un document
-
-```scala
-val x = 1
-```
-````
-
-A language is written as its ISO 639 code, perhaps with a region: `fr`, `pt-BR`. Where
-translations are is said by the configuration alone, and by no document or overlay. A
-`section` says the language its `original` is written in, and holds a `translation`
-for each language it is translated into, written as the `original` is: the language, and
-its directory within the section's, which mirrors the original's. The translation of a file
-is the file of the same relative path there, so whatever is beneath the `original` — the
-section's file, an `overlay`, a `glossary` — is translated with the documents.
+Documentation is written in one language and translated into others, and changes from one
+release to the next. Fuel keeps none of that itself: it reads an
+[Orthant](https://github.com/propensive/orthant) store, which holds every document at each
+*point* of its axes — a language, a release — as the lines which differ from the point above
+it, and derives the plain text of a document at any point. The `orthant` tool writes a store:
+it checks a point out into a working tree, shows a translation beside the text it translates,
+checks edits back in, and says which passages nobody has translated and which were written
+for text which has since changed. None of that is Fuel's, which only reads
+(`orthant-reader`), and so has no command which writes a translation.
 
 ```
-section guide doc
-  original en-US en section.tel     # translated by `doc/fr/section.tel`
-    overlay api                     # `doc/en/api/gossamer.tel` by
-                                    # `doc/fr/api/gossamer.tel`
-  translation fr fr                 # `doc/en/prose/intro.md` by `doc/fr/prose/intro.md`
-  translation fr-CA fr-CA
-    fallback fr                     # where `fr-CA` has no file, the French one stands
-                                    # for it
+store .                             # the store in `.orthant`, whose working tree is `docs`
+  at release=1.2.0                  # the release to read; the latest, if nothing says
+section guide docs
+  metadata section.tel
+  overlay api
+  glossary glossary.tel
 ```
 
-A `translation` always names its directory, which nothing is assumed about: `fr` here is a
-directory which happens to be called after its language. A language with a `fallback` need not
-translate everything: a file it has no translation of is read in its fallback (and that
-language's own fallback, in turn), and as it is written where none of them has one. So such a
-language's missing translations are no caution, and `fuel translate` writes them only when it
-is asked for the language by name, with `--language`. A fallback is another language the
-section is translated into, or the language it is written in. There may be several
-`section`s, each with its own languages, overlays and translations.
+The languages are the values of the store's axis of the kind `language`: its root is the
+language the documents are written in, and every other value a language they are read in,
+`fr/CA` being `fr-CA`. A language reads what nobody has translated as the language above it
+has it, and at last as it was written, which is how Orthant derives it; so there is no
+fallback to configure, and an unfinished translation is no failure. `fuel compile` says how
+far each language is done, as Orthant counts it, and `orthant todo` says where the work is.
 
-A file in a directory of translations is not a document or an overlay of its own. These are
-failures of the configuration: a `translation` or a `original` which is not
-beneath a `section`; a `translation` which is not a language and a directory, or is into the
-section's own language or in its original's directory; an `overlay` or a
-`glossary` beneath the `section` and not its `original`; and a fallback which is neither
-the original's language nor another translation of the section.
+Each other axis is read at one value: the one an `at` names, as `at release=1.2.0` or the
+value alone where one axis has it (a tag, on an axis which follows a git repository); or
+else its last value, where its values are one line, each beneath the one before — the
+latest release, or what is not yet released on the branch the axis follows. An axis which
+branches has no last value, and wants an `at`.
 
-The translation of a section's file is the same file, its `title` a source atom of
-passages, and a reader of the language sees the section under that title:
+Fuel reads the store as if it were its working tree with a language checked out: a document
+`api/gossamer.tel` is the file of that path in the tree's directory, in every language, and
+that is where a problem with it is reported, with the language which reads it so. Nothing is
+read from the working tree itself, so **an edit is compiled once it is checked in**, with
+`orthant checkin`. A store which cannot be opened, an `at` which names no value, and a
+document which cannot be derived at a point are failures, each carrying Orthant's own code.
 
-```
-title
-    - User guide
-    + Guide de l'utilisateur
-```
+Every file is plain text in every language: a Markdown document is Markdown, and an overlay,
+a glossary or a section's file is TEL, with no mark in it of what it translates. Each is held
+in every language to what a file of its kind must be — a document's fences compiled, an
+overlay or a glossary valid TEL and what its schema allows — and a problem a language's text
+has is reported unless the text it was written in has the same one, in a passage nobody has
+translated. That a translation says all the text it translates says, and of the text as it
+now is, is Orthant's to show.
 
-An overlay's translation is an overlay with the same entries, which TEL reads as any other,
-whose prose alone is paired: each `info` and `detail` is written beneath its keyword, as a
-source atom of passages. An `info` the definitive overlay gives on an entry's line is an `info`
-beneath the entry in its translation. An entry's `hidden`, `until`, `refer` and `import` are
-the same in every language.
-
-```
-base gossamer
-
-entry .Text
-  info
-      - a one-line summary
-      + un résumé d'une ligne
-  detail
-      - Markdown about `Text`.
-      + Du Markdown sur `Text`.
-```
-
-A glossary's translation is a glossary of the same terms, each named on its `define` line as
-the glossary it translates names it, so the file itself says which term is which. Beneath the
-name, a `term` says what the term is in its own language, and the `definition` is a source
-atom of passages:
+A glossary in another language is a glossary of the same terms, each named on its `define`
+line as the glossary was written names it, so the file itself says which term is which.
+Beneath the name, a `term` says what the term is in its own language:
 
 ```
 define library
   term bibliothèque
   keyword bib
   definition
-      - A collection of code that other programs use.
-      + Un ensemble de code que d'autres programmes utilisent.
+      Un ensemble de code que d'autres programmes utilisent.
 ```
 
-An entry with no `term` is one nobody has translated, and reads as the definitive term. Its
-`keyword`s and `synonym`s are its own language's, in place of the definitive term's; whether it
-is `unlisted` is the definitive term's, the same in every language. A term whose name is not
-the one it translates ends its definition with that name, in the language the glossary is
-written in where Fuel knows its name (*En anglais : classloader.*), so that a reader knows the
-word the original text uses. Its `link` is the
-definitive term's, since a page of the site is the same page in every language; a `link` is
-written only for a page elsewhere which another explains in this language.
+An entry with no `term` is called what the original calls it. Its `keyword`s and `synonym`s
+are its own language's, in place of the original term's; whether it is `unlisted` is the
+original term's, the same in every language. A term whose name is not the one it translates
+ends its definition with that name, in the language the glossary was written in where Fuel
+knows its name (*En anglais : classloader.*), so that a reader knows the word the original
+text uses. Its `link` is the original term's, since a page of the site is the same page in
+every language; a `link` is written only for a page elsewhere which another explains in this
+language.
 
 A translated document names a term as its own language does, `[bibliothèque]`, and may name
 it as the glossary defines it too, `[library]`, as a passage nobody has translated does;
 where one name is two terms, it is this language's. The term's anchor on the glossary page is
-the definitive term's in every language, `/glossary#library`.
-
-`fuel compile` holds every translation to its definitive text, and `fuel translate`
-does so alone, without compiling anything, with a line for each translation saying how far it
-is done. Each of these is reported at its line of the translation's file:
-
-- the `-` lines are not the definitive text: a caution, with the change as it reads
-  (`every Markdown {+and TEL+} file`, `[-gone-]`);
-- a passage nobody has translated (it reads as the definitive text until someone does): one
-  caution for the file, listing their lines;
-- a passage which still has `!` lines, or has no `-` lines: a caution;
-- `+` lines which translate nothing: a failure;
-- a translation whose structure is not the definitive text's — a block of another kind, a
-  heading of another level, a list of more or fewer items, a block more or fewer: a failure. A
-  fence must be the same in every language, apart from a `tabular` fence, whose content is
-  prose. A paragraph which names different inline code, or links to different places, is a
-  caution. Structure is checked once no passage is waiting to be revised;
-- for an overlay, an entry or a run of prose which one of the two has and the other lacks: a
-  caution; an entry which differs in more than its prose: a failure;
-- for a glossary, a term which one of the two has and the other lacks: a caution; an entry
-  with no `term`: counted with the passages nobody has translated; a `term` which holds a
-  bracket, or which two entries share: a failure; a `term` which is the name of another term
-  as the glossary defines it: a caution, since `[term]` then means this one in this language;
-  a `link` in place of one to a page of the site: a caution.
-
-A document, an overlay, a glossary or a section's file with no file where its translation
-should be is a caution, unless
-the language has a fallback, and
-`fuel translate` reports a file in a directory of translations which translates nothing.
-
-`fuel translate` writes each translation nobody has begun — every line of prose a `-` line,
-fences and blank lines shared — in its place, making the directories it needs; it never
-overwrites one. It does so for every document, overlay, glossary and section's file, or for
-the files it is
-given, and
-into every language the configuration has a directory for, or into the one given with
-`--language` (`-l`); then it checks them, as above. When the definitive text
-changes, `fuel translate --update` (which takes files, translations among them, and
-`--language`, in the same way)
-rewrites each translation so that it is of the text as it stands, and shows the translator
-what to do: a passage whose text changed keeps its `+` lines, takes the new text as its `-`
-lines, and keeps the text its translation was written for as `!` lines.
-
-```
-! Fuel compiles every Markdown file,
-! and serves it on the web.
-- Fuel compiles every Markdown and TEL file,
-- and serves it on the web.
-+ Fuel compile chaque fichier Markdown, et le sert sur le web.
-```
-
-An update is written only where it is safe. Before it replaces a translation, `fuel translate
---update` checks the new file against the old: it must have no failure the old one did not
-have, it must keep every `+` line whose text is still there (a passage whose `+` lines are its
-`-` lines is shared text, not a translation), and updating it again must change nothing.
-Where an update fails any of these, the file is left as it was, the command says why, and it
-exits with status 11; it is a fault in fuel, and worth reporting. With `--dry-run`, nothing is
-written: each translation which would change is named, with how many passages it would newly
-give the translator to revise, to translate and to delete.
-
-The translator revises the `+` lines and deletes the `!` lines. New text arrives as a passage
-with no `+` lines, and text which has gone leaves its `!` and `+` lines, to be deleted. A
-second update before the first is dealt with keeps the first `!` lines, which are what the
-`+` lines still say. An overlay's translation is made again from the overlay, each run of its
-prose updated in this way; the translation of an entry the overlay no longer has is left out,
-and `fuel translate --update` says so. A glossary's translation is made again from the
-glossary in the same way: each entry keeps its `term`, its `keyword`s and its `link`, a new
-term takes the definitive term's keywords, and the translation of a term the glossary no
-longer has — one which was renamed, too — is left out, and said to be.
+the original term's in every language, `/glossary#library`. An entry for a term the glossary
+does not have, a `term` or a synonym which is a name in its language already, and a `link`
+in place of one to a page of the site are reported at their lines.
 
 The dashboard is read in a language. Where the documents are translated, its menu bar offers
 the languages they are in, each by its two letters (in full, as `fr-CA`, where two share them),
@@ -746,18 +628,17 @@ and a reader's choice is kept for every tool of the hub. Without one, a reader h
 `language` of `~/.config/pyrocosm/config.tel`, then the first their browser asks for which the
 documents are in, then the language they are written in.
 
-- A document is shown as its translation reads: the language's own, or the first there is
-  along its fallbacks. One which nothing translates is shown as it is written, under a note
-  which says so. A translated heading keeps the anchor of the heading it translates, so a
-  link to a place in a document means the same in every language.
-- An entity's page says what the overlay's translation says of it, and a search's results
-  with it. The pages of a translation are rendered when they are asked
-  for, their examples highlighted and not compiled again: an example is the same in every
-  language, and was compiled for the language it is written in.
+- A document is shown as the language reads it. One of which nothing is translated is shown
+  as it is written, under a note which says so. A translated heading keeps the anchor of the
+  heading it translates, so a link to a place in a document means the same in every language.
+- An entity's page says what the overlay says of it in the language, and a search's results
+  with it. The pages of another language are rendered when they are asked for, their
+  examples highlighted and not compiled again: an example is compiled for the language it
+  was written in.
 - The glossary is the language's own: its page in the order of that language's dictionary,
   each term under its own name, and a search finds a term by its name in either language and
-  by its own keywords. A language with no translation of a glossary, along its fallbacks,
-  reads it as it is defined.
+  by its own keywords. A language which has translated none of a glossary reads it as it is
+  defined.
 - Fuel's own words — the navigation's headings, a table's columns, a search's summary — are
   in English, French and German, and follow the language read: a regional variant reads as
   its language, and a language Fuel has no words for as English. Diagnostics are in English.
@@ -813,13 +694,10 @@ classpath out/core/assembly.dest/out.jar
 scalac-option -deprecation
 
 # The sections of Markdown documents: each a name, which its documents' addresses begin
-# with (`/doc/guide/…`), and its directory; and the language it is written in, with where in
-# that directory (`.` is the directory itself).
+# with (`/doc/guide/…`), and its directory.
 section guide doc
-  original en .
 
 section modules doc/modules
-  original en .
 
 # Compile each document's fences as one session, each following the ones before it (as a
 # REPL would), with `doc/fixtures/<section>/<document>.scala` (else
@@ -847,18 +725,18 @@ check-links
 # Write the compiled documents and API pages here, as BinTEL, compiling only what changed.
 output dist/doc
 
-# A section may say more: its own file (which says its title), the overlays and the glossaries
-# in its original's directory, and its translations, each a language and the directory, in
-# the section's, which mirrors the original's. A file without its translation there is a
-# caution, and `fuel translate` writes it; a language with a fallback need not translate
-# everything.
-section handbook doc/handbook
-  original en-US en section.tel
-    overlay api
-    glossary glossary.tel
-  translation fr     fr
-  translation fr-CA  fr-CA
-    fallback fr
+# An Orthant store, whose working tree is `docs`: what is configured within that tree is read
+# from the store, in each of its languages, at the release named (the latest, if none is).
+store .
+  at release=1.2.0
+
+# A section may say more: its own file (which says its title), and the overlays and the
+# glossaries in its directory. This one is in the store's tree, so it is read in the store's
+# languages; one which is not says the language it is written in, if it says one.
+section handbook docs/handbook
+  metadata section.tel
+  overlay api
+  glossary glossary.tel
 
 # Serve the documents from the daemon's start, behind the machine's Pyrocosm hub at
 # http://localhost:8090/fuel/; `port` would serve them on a port of their own as well.
@@ -872,12 +750,11 @@ and a `FUEL_`-prefixed environment variable, in that order of priority ahead of 
 
 - `fuel-core` (`src/core`): `Doc`, `Corpus`, the `Blocks` conversion of Markdown to Pyrocosm
   blocks (recording every `Linkage` it makes), the `Glossary`, the `Embedding` of fenced
-  code, for another tool to embed, and a `Translation` with the `Mirror` of its structure and
-  the `Translations` which say where each is.
+  code, for another tool to embed, and the `Library` a file is read from: the filesystem, or
+  the `Depot` which reads an Orthant store.
 - `fuel-api` (`src/api`): the `Api` model of each `Format` (`Apis`), Scala's read from
   compiled code by `Inspection` and a TEL schema's by `TelsFormat`, documented by `Overlay`s,
-  with the `Resolver` of references, `Signatures` as tokens, `ApiPages`, the `Links` check, and
-  `OverlayTranslations`.
+  with the `Resolver` of references, `Signatures` as tokens, `ApiPages` and the `Links` check.
 - `fuel-client` (`src/client`): the `Tool`, its subcommands and settings, the daemon's corpus
   and model, and the dashboard.
 - `launcher` (`src/launcher`): the entry point alone, built into the executable.
