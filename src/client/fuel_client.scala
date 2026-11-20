@@ -216,8 +216,7 @@ val Fuel: Tool =
       prose = t"Fuel compiles a project's Markdown documentation, with its embedded code " +
         t"highlighted, and serves it on the web; in time it will check that code against " +
         t"the project's classpath, animate it, and document the project's API.",
-      web      = fuel.Dashboard.web,
-      services = List(fuel.Help.service) )
+      web      = fuel.Dashboard.web )
 
 // The client's command dispatch. The `@main` entry point and burdock's `externalize` wrapper
 // live alone in the `launcher` module, which depends on this module as a PUBLISHED artifact.
@@ -763,7 +762,7 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
         glossaryPage(glossary, languages.head, apis), Scope.standardOf(config.options), glossary,
         apis.others, languages, glossaried )
 
-    fuel.Help.announce()
+    fuel.Help.publish(config.root)
 
     corpus.sections.each: (section: Corpus.Section) =>
       Out.println(t"${section.name}: ${section.docs.size.show} documents from ${section.root}")

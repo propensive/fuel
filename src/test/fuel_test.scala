@@ -38,7 +38,7 @@ import soundness.{Compilation as _, Format as _, Language as _, Query as _, *}
 import collations.codepointCollation
 import dysasymptotics.{linearAccess, linearSize}
 import filesystemBackends.javaBaseFilesystem
-import pyrocosm.{Block, Filing, Inline, Language, Purview, TerminalRenderer, Token, Tone}
+import pyrocosm.{Block, Filing, Inline, Language, Purview, Shares, TerminalRenderer, Token, Tone}
 import soundness.collationComparable
 import sortingAlgorithms.timsort
 import systems.javaBaseSystem
@@ -4591,7 +4591,7 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
 
       test(m"the help index names each entity by its address"):
         Server.publish(Corpus(Nil), scala, formats = List(commands))
-        fuel.Help.index().entries.map { entry => (entry.key, entry.info) }
+        fuel.Help.index().entry.map { entry => (entry.address, entry.info) }
 
       . assert: result =>
           val info: Text = t"compiles the documents, as fuel.compile.force insists"
@@ -4858,28 +4858,51 @@ entry .Channel
       val api: Api =
         Api(Map(documented.key -> documented, member.key -> member, silent.key -> silent))
 
-      test(m"the index has every documented entity's key and info, as plain text"):
+      // What a reader in another tool is given for an address: the entry's `info`, found by
+      // its key in the mapped image, with none of this module's types.
+      def info(file: Path on Linux, address: Text): Optional[Text] =
+        val reader: Shares.Reader = Shares.Reader(file, 0L)
+
+        try reader.read((ratel.root / t"entry").find(address).let(_.text(t"info")))
+        finally reader.close()
+
+      test(m"the index has every documented entity's address and info, as plain text"):
         Server.publish(Corpus(Nil), api)
-        fuel.Help.index().entries.order(_.key).map { entry => (entry.key, entry.info) }
+        fuel.Help.index().entry.order(_.address).map { entry => (entry.address, entry.info) }
 
       . assert(_ == List
           ( (t"sample.Doc", t"one Markdown document, as Doc keeps it"),
             (t"sample.Doc#title", t"the first heading") ))
 
-      test(m"the index is made again for a new edition"):
-        Server.publish(Corpus(Nil), api)
-        val before: Long = fuel.Help.index().edition
-        Server.publish(Corpus(Nil), Api(Map(documented.key -> documented)))
-        val after: fuel.Help.Message.Index = fuel.Help.index()
-        (after.edition > before, after.entries.map(_.key))
+      test(m"a published index answers an address with its info, and nothing for another"):
+        Filing.temporary: directory =>
+          val file: Path on Linux = unsafely(directory / "share" / "help.ratel")
+          Server.publish(Corpus(Nil), api)
+          val published: Boolean = Shares.publish(file, fuel.Help.index())
+          (published, info(file, t"sample.Doc#title"), info(file, t"sample.Quiet"))
 
-      . assert(_ == (true, List(t"sample.Doc")))
+      . assert(_ == (true, t"the first heading", Unset))
 
-      test(m"the index survives its codec"):
-        val index = fuel.Help.Message.Index(3L, List(fuel.Help.Entry(t"a.B#c", t"a member")))
-        fuel.Help.codec.decode(fuel.Help.codec.encode(index))
+      test(m"a later model replaces the published index"):
+        Filing.temporary: directory =>
+          val file: Path on Linux = unsafely(directory / "share" / "help.ratel")
+          Server.publish(Corpus(Nil), api)
+          Shares.publish(file, fuel.Help.index())
+          val before: Optional[Text] = info(file, t"sample.Doc#title")
+          Server.publish(Corpus(Nil), Api(Map(documented.key -> documented)))
+          Shares.publish(file, fuel.Help.index())
+          (before, info(file, t"sample.Doc#title"), info(file, t"sample.Doc").present)
 
-      . assert(_ == fuel.Help.Message.Index(3L, List(fuel.Help.Entry(t"a.B#c", t"a member"))))
+      . assert(_ == (t"the first heading", Unset, true))
+
+      test(m"each project's index is a file of its own, under its cache"):
+        val one: Optional[Text] = fuel.Help.file(t"/work/one").let(_.encode)
+        val two: Optional[Text] = fuel.Help.file(t"/work/two").let(_.encode)
+
+        ( one.present, one != two, one.let(_.ends(t"/share/help.ratel")),
+          one.let(_.contains(t"/fuel/")) )
+
+      . assert(_ == (true, true, true, true))
 
     suite(m"Translations"):
       val english: Text =

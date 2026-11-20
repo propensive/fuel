@@ -118,15 +118,15 @@ object Hierarchy:
   private def parentIds(lattice: Lattice, id: Int): List[Int] = lattice.parents(id)
   private def childIds(lattice: Lattice, id: Int): List[Int] = lattice.children(id)
 
-  // acyclicity's `Layering` gives its layers, the links between them and each node's layer as
-  // standard collections, which are read here, once each, as Soundness's.
+  // acyclicity's `Layering` gives its layers and the links between them as sequences, which
+  // are read here, once each, as lists.
   private def layersOf(layering: Layering[Text]): List[List[Layering.Vertex[Text]]] =
-    List.from(layering.layers.map(List.from(_)))
+    layering.layers.to[List].map(_.to[List])
 
   private def linksOf(layering: Layering[Text]): List[List[(Int, Int)]] =
-    List.from(layering.links.map(List.from(_)))
+    layering.links.to[List]
 
-  private def ranksOf(layering: Layering[Text]): Map[Text, Int] = Map.from(layering.rank)
+  private def ranksOf(layering: Layering[Text]): Map[Text, Int] = layering.rank
 
   // The greatest of some numbers, unless there are none.
   private def greatest(values: List[Int]): Optional[Int] =

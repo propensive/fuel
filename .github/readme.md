@@ -441,6 +441,14 @@ a signature, in inline code, or in a fence — is a link for each segment, and p
 underlines the name up to it, as on Amok's pages: `com`, then `com.example`, then
 `com.example.Foo`.
 
+Every `fuel compile` also publishes the API's one-line descriptions for the other tools on the
+machine — Flame shows an entity's `info` beside its completion — as a RaTEL image in the
+project's cache, `$XDG_CACHE_HOME/fuel/<project>/share/help.ratel`: each documented entity's
+address (`gossamer.Text#length`, or `presentation/…` for another format's) with its `info` as
+plain text. The file is replaced whole, and a tool maps it into memory and finds one entry by
+its address, so it needs neither Fuel's daemon nor any configuration, and sees a newer index
+the next time it looks.
+
 ### Other formats
 
 An API need not be Scala's. A `schema` setting names a [TEL](https://soundness.dev/tel/) schema
@@ -855,10 +863,6 @@ section handbook doc/handbook
 # Serve the documents from the daemon's start, behind the machine's Pyrocosm hub at
 # http://localhost:8090/fuel/; `port` would serve them on a port of their own as well.
 serve
-
-# Offer the API's documentation to other tools on this machine — Flame shows an entity's
-# `info` beside its completion — on `help-port` (8094 by default).
-help
 ```
 
 Each setting is also reachable as a flag (`--document doc`), a `fuel.`-prefixed system property
