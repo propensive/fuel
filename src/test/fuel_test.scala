@@ -862,6 +862,21 @@ error oops
 
       . assert(_ == (1, true))
 
+      test(m"Scala in the terminal has the colours it has on the web, on the web's ground"):
+        import hyphenations.englishHyphenation
+        import textMetrics.uniformMetric
+        import tableStyles.thickTableStyle
+        import palettes.solarizedDarkGaugePalette
+        import termcapDefinitions.xtermTrueColorTermcap
+
+        val source: Text = t"# Code\n\n```scala\nval x = 1\n```\n"
+        val blocks: List[Block] = Doc.parse(t"doc/code.md", source).blocks
+        val rows: List[Teletype] = TerminalRenderer().blocks(blocks, 40)
+        val row: Text = rows.map(_.render(xtermTrueColorTermcap)).join
+        (row.contains(t"38;2;255;102;51"), row.contains(t"48;2;27;1;33"))
+
+      . assert(_ == (true, true))
+
     suite(m"Presentations"):
       val talk: Text = t"""title  Effects, gently
 
