@@ -5332,3 +5332,225 @@ entry .Channel
 
       . assert(_ == List(t"↯/f.25.8.5"))
 
+
+    // A tab's dashboard, over a model the size of a project's with its dependencies — the
+    // sample with the launcher's jar, some of it marked the project's own — as it is written
+    // and as French reads it.
+    suite(m"Dashboard"):
+      val doc: Doc = Doc.parse(t"intro.md", t"# Intro\n\nSome words.\n")
+      val corpus: Corpus = Corpus(List(Corpus.Section(t"guide", t"/r/guide", List(doc))))
+
+      val full: Api =
+        val jar: Text = t"$here/out/fuel/launcher/assembly.dest/out.jar"
+
+        val dependencies: Api | Throwable =
+          Checking.session(classpath, Nil): (checker: Checker) =>
+            checker.context.lay[Api | Throwable](Api.empty): context =>
+              Inspection.classpath(List(jar), context)
+
+        val merged: Api = dependencies match
+          case api: Api => api.merge(api0)
+          case _        => api0
+
+        val marked: List[(Text, Api.Entity)] = merged.entities.values.to[List].map: entity =>
+          val own: Boolean = entity.key.starts(t"s") || entity.key.starts(t"a")
+          entity.key -> (if own then entity.copy(own = true) else entity)
+
+        merged.copy(entities = marked.to[Map])
+
+      val french: Api = full.copy(entities = full.entities)
+      val own: Text = full(t"sample.Doc").let(_.url).or(t"")
+      val guide: Text = t"/doc/guide/intro.md"
+
+      // A type of a dependency's, within another, so that its tree unfolds on the way to it.
+      val dependency: Optional[Api.Entity] =
+        full.entities.values.seek: (entity: Api.Entity) =>
+          !entity.own && entity.template.present && entity.parent.let(_.parent).present
+
+      def publish(): Unit =
+        Server.publish
+          ( corpus, full, languages = List(t"en", t"fr"),
+            readings = Map(t"fr" -> Server.Reading(corpus, Apis(List(french)))) )
+
+      // Whether two values are the one object, of a type which may not say.
+      def same(one: Any, other: Any): Boolean =
+        one.asInstanceOf[AnyRef] eq other.asInstanceOf[AnyRef]
+
+      def reading(tongue: Text): fuel.Dashboard = fuel.Dashboard(pyrocosm.Audience(List(tongue)))
+
+      def locate(dashboard: fuel.Dashboard, path: Text): Unit =
+        dashboard.handle(pyrocosm.Event.Located(path))
+
+      // The navigation as it was drawn before it was kept: every node of it, for every page.
+      def whole(api: Api, current: Optional[Text]): List[Block.TreeNode] =
+        val path: List[Text] = ApiPages.ancestry(api, current)
+        api.ownRoots.map(ApiPages.drawn(api, _, true, path, current))
+
+      def roots(api: Api, current: Optional[Text]): List[Block.TreeNode] =
+        ApiPages.tree(api, current).roots
+
+      test(m"the roots with the project's own entities beneath them are told from the others"):
+        (api0.ownRoots.map(_.key), api0.otherRoots.map(_.key), full.otherRoots.has(full.roots.head))
+
+      . assert(_ == (List(t"sample"), Nil, false))
+
+      test(m"the navigation kept is the navigation drawn whole, whichever page is current"):
+        val pages: List[Optional[Text]] =
+          List(Unset, t"sample.Doc", t"sample", dependency.let(_.key), t"no.such.Page")
+
+        pages.map: (current: Optional[Text]) =>
+          roots(full, current).keep(full.ownRoots.size) == whole(full, current)
+
+      . assert(_ == List(true, true, true, true, true))
+
+      test(m"a page's navigation marks the page, and opens the way to it"):
+        def marks(nodes: List[Block.TreeNode]): List[(Optional[Tone], Optional[Boolean])] =
+          nodes.bind: (node: Block.TreeNode) =>
+            val mark: (Optional[Tone], Optional[Boolean]) = (node.tone, node.open)
+            val here: Boolean = node.tone == Tone.Accent || node.open == true
+            (if here then List(mark) else Nil) + marks(node.children)
+
+        marks(roots(api0, t"sample.Doc"))
+
+      . assert(_ == List((Unset, true), (Tone.Accent, Unset)))
+
+      test(m"a dependency's tree unfolds on the way to its page, and is closed otherwise"):
+        def open(current: Optional[Text]): Optional[Boolean] =
+          roots(full, current).last.let(_.open)
+
+        (open(dependency.let(_.key)), open(t"sample.Doc"))
+
+      . assert(_ == (true, false))
+
+      test(m"what a page is not on the way to is the very node drawn before"):
+        val before: List[Block.TreeNode] = roots(full, t"sample.Doc")
+        val after: List[Block.TreeNode] = roots(full, t"sample.Util")
+        val same: Int = before.zip(after).filter { (one, other) => one eq other }.size
+        (before == after, same == full.ownRoots.size - 1)
+
+      . assert(_ == (false, true))
+
+      test(m"a link is followed in a tenth of a second, in either language, once shown"):
+        publish()
+
+        // The least of several, which is the work itself and not what else the machine did.
+        def least(dashboard: fuel.Dashboard, paths: List[Text]): Long =
+          paths.each(locate(dashboard, _))
+
+          val times: List[Long] = List(1, 2, 3, 4, 5).map: (_: Int) =>
+            val start: Long = java.lang.System.nanoTime
+            paths.each(locate(dashboard, _))
+            (java.lang.System.nanoTime - start)/1000000L/paths.size
+
+          times.fold(Long.MaxValue)(_.min(_))
+
+        val paths: List[Text] = List(guide, own, dependency.let(_.url).or(guide))
+        List(t"en", t"fr").map { tongue => least(reading(tongue), paths) < 100L }
+
+      . assert(_ == List(true, true))
+
+      test(m"a page rendered when asked for is kept for the next to ask, until a compile"):
+        publish()
+        val address: Text = t"sample.Doc"
+        val key: (Text, Text, Text) = (t"fr", t"fr", address)
+        locate(reading(t"fr"), own)
+        val kept: List[Block] = Server.demanded(key)(Nil)
+        locate(reading(t"fr"), own)
+        val again: List[Block] = Server.demanded(key)(Nil)
+        publish()
+        (kept.nil, same(kept, again), Server.demanded((t"fr", t"fr", t"other"))(Nil).nil)
+
+      . assert(_ == (false, true, true))
+
+      test(m"the beat after a page is shown shows nothing again, and one after a compile does"):
+        publish()
+        val dashboard: fuel.Dashboard = reading(t"en")
+
+        // A page there is not is said anew each time it is shown, which a document is not.
+        locate(dashboard, t"/nowhere")
+        val first: List[Block] = dashboard.content()
+        dashboard.tick()
+        val second: List[Block] = dashboard.content()
+        publish()
+        dashboard.tick()
+        (same(first, second), same(second, dashboard.content()), second == dashboard.content())
+
+      . assert(_ == (true, false, true))
+
+      // The compiler's one thread, held until `release` is kept, or ten seconds pass: whether
+      // it was released, which is whether what ran meanwhile did not wait for it.
+      def holding[result](body: => result): (result, Boolean) =
+        import threads.virtualThreads
+        val begun: Promise[Unit] = Promise()
+        val release: Promise[Unit] = Promise()
+        val released: Promise[Boolean] = Promise()
+
+        def kept(promise: Promise[Unit]): Boolean =
+          safely(supervise(promise.await(10.0*Second))).present
+
+        VirtualSupervisor.fork(() => Unset):
+          Checking.exclusive:
+            begun.offer(())
+            released.offer(kept(release))
+
+        kept(begun)
+        val result: result = body
+        release.offer(())
+        (result, safely(supervise(released.await(20.0*Second))).or(false))
+
+      test(m"a page rendered when asked for does not wait for the compiler"):
+        publish()
+
+        holding:
+          val dashboard: fuel.Dashboard = reading(t"fr")
+          locate(dashboard, own)
+          dashboard.content().nil
+
+      . assert(_ == (false, true))
+
+      test(m"code is highlighted alone on any thread, however deep, as on the compiler's"):
+        import threads.virtualThreads
+        val deep: Text = t"val x = f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(1))))))))))))))))\n"
+
+        def highlit(): List[List[(Text, harlequin.Accent)]] =
+          val code: SourceCode = Checker.tokenized.check(deep, Preamble.Mode.Parse, Unset)
+          code.lines.to[List].map(_.map { token => (token.text, token.accent) })
+
+        val expected: List[List[(Text, harlequin.Accent)]] = Checking.exclusive(highlit())
+
+        val (results, free) = holding:
+          val promises: List[Promise[Boolean]] = List(1, 2, 3, 4, 5, 6, 7, 8).map: (_: Int) =>
+            val promise: Promise[Boolean] = Promise()
+
+            VirtualSupervisor.fork(() => Unset):
+              promise.offer(List(1, 2, 3, 4, 5).all { (_: Int) => safely(highlit()) == expected })
+
+            promise
+
+          promises.map { promise => safely(supervise(promise.await(10.0*Second))).or(false) }
+
+        (results.all(identity), free)
+
+      . assert(_ == (true, true))
+
+      test(m"a link followed changes a handful of the navigation's nodes, which are all it sends"):
+        publish()
+        val dashboard: fuel.Dashboard = reading(t"en")
+        val renderer: pyrocosm.HtmlRenderer = pyrocosm.HtmlRenderer()
+        locate(dashboard, own)
+        val before: List[Block] = dashboard.navigation()
+        locate(dashboard, dependency.let(_.url).or(guide))
+        val after: List[Block] = dashboard.navigation()
+        locate(dashboard, guide)
+        val last: List[Block] = dashboard.navigation()
+
+        def sent(before: List[Block], after: List[Block]): (Boolean, Boolean) =
+          val grafts: Optional[List[pyrocosm.Graft]] =
+            pyrocosm.Graft.between(before, after, renderer)
+
+          val size: Int = grafts.lay(0)(_.map(_.html.length).fold(0)(_ + _))
+          (grafts.let(_.size < 24).or(false), size < 20000)
+
+        (sent(before, after), sent(after, last))
+
+      . assert(_ == ((true, true), (true, true)))

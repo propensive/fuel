@@ -84,22 +84,22 @@ object Dashboard:
   def docUrl(section: Text, path: Text): Text = Doc.url(section, path)
 
   // A page rendered when asked for — a dependency's, or one the compile did not render — with
-  // its examples highlighted alone, on the compiler's thread.
+  // its examples highlighted alone, which takes no compiler session: each is parsed in a
+  // context of its own, on the thread which asks, so a reader does not wait for a compile.
   private def render(entity: Api.Entity, apis: Apis, locale: Locale[Phrases.Spoken])
   :   List[Block] =
 
-    Checking.exclusive:
-      val api: Api = apis.of(entity)
-      val standard: List[Locator] = api.format.standard(Server.standard)
-      val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Nil), standard)
-      val resolver: Resolver = Resolver(api, scope, Unset, apis)
+    val api: Api = apis.of(entity)
+    val standard: List[Locator] = api.format.standard(Server.standard)
+    val scope: Scope = Scope.of(entity, entity.doc.let(_.imports).or(Nil), standard)
+    val resolver: Resolver = Resolver(api, scope, Unset, apis)
 
-      val scala: Embedding.ScalaCode =
-        Embedding.ScalaCode(Checker.tokenized, entity.key, false, Unset, resolver)
+    val scala: Embedding.ScalaCode =
+      Embedding.ScalaCode(Checker.tokenized, entity.key, false, Unset, resolver)
 
-      val tables: Tables = Tables(entity.key, resolver)
-      val embeddings: List[Embedding] = List(scala, Embedding.JavaCode, tables)
-      ApiPages.page(api, entity, resolver, scope, embeddings, locale)
+    val tables: Tables = Tables(entity.key, resolver)
+    val embeddings: List[Embedding] = List(scala, Embedding.JavaCode, tables)
+    ApiPages.page(api, entity, resolver, scope, embeddings, locale)
 
 // One tab's dashboard: the navigation of every section's documents and of the API, and the
 // page its URL names, in the language of its reader's the documents are in — which a reader
@@ -220,10 +220,14 @@ final class Dashboard(audience: Audience = Audience()):
         section.docs.head.let: (doc: Doc) => Target.Document(section.name, doc.path)
 
   def handle(event: Event): Unit = event match
+    // The compile shown is the one there was before the page was: a later one is another, and
+    // the next beat shows it, while the beat after a page is first shown has nothing to do.
     case Event.Located(path) =>
+      val edition: Long = Server.edition
       selected = target(path)
       show()
       refresh()
+      shown = edition
 
     // Every keystroke decorates the field at once, the decoration carrying the version of the
     // text it describes, and asks for a search, which a later keystroke may overtake.
@@ -291,9 +295,16 @@ final class Dashboard(audience: Audience = Audience()):
           content() = notice + doc.blocks + doc.problems
 
       case Target.Entity(key) =>
+        // A page the compile did not render is rendered once, for every tab which reads it
+        // so; the table is taken before the APIs are, so that a compile meanwhile is not
+        // given a page of the last one's.
+        val demanded: Memo[(Text, Text, Text), List[Block]] = Server.demanded
+        val read: Apis = apis
+
         val page: List[Block] =
           (if rendered then Server.page(tongue, key) else Unset).or:
-            apis.entity(key).let(Dashboard.render(_, apis, locale)).or(Nil)
+            demanded((tongue.or(t""), locale.language.code, key)):
+              read.entity(key).let(Dashboard.render(_, read, locale)).or(Nil)
 
         content() = ApiPages.withIssues(page, Server.issues(key), locale)
 
