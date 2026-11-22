@@ -449,6 +449,16 @@ plain text. The file is replaced whole, and a tool maps it into memory and finds
 its address, so it needs neither Fuel's daemon nor any configuration, and sees a newer index
 the next time it looks.
 
+Beside it, `pages.ratel` has every entity's page — documented or not — by the same address, as
+its path beneath the site's root (`/api/gossamer.Text~length`). The pages are there only while
+Fuel serves them, so for as long as it does, and no longer, `site.ratel` says where: the
+`address` of the site's root as a browser on the machine opens it, without a final `/`
+(`http://localhost:8090/fuel`, or `http://localhost:<port>` where a `port` is configured), and
+the `pid` of the process serving it, by which a tool tells an announcement a crash left behind
+from a live one. A tool which finds it may link a name to the address followed by the page's
+path. It is the project compiled last whose site is announced, since those are the pages the
+daemon serves, and `fuel serve stop` and `fuel quit` withdraw it.
+
 ### Other formats
 
 An API need not be Scala's. A `schema` setting names a [TEL](https://soundness.dev/tel/) schema
