@@ -4606,6 +4606,12 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
           val info: Text = t"compiles the documents, as fuel.compile.force insists"
           result == List((t"toy/fuel.compile", info))
 
+      test(m"the help pages have each entity's page under its format's prefix"):
+        Server.publish(Corpus(Nil), scala, formats = List(commands))
+        fuel.Help.pages().page.seek(_.address == t"toy/fuel.compile").let(_.url)
+
+      . assert(_ == t"/api/toy/fuel.compile")
+
     // A TEL schema, documented as an API is.
     suite(m"Schemas"):
       val text: Text = t"""tel 1.0
@@ -4912,6 +4918,115 @@ entry .Channel
           one.let(_.contains(t"/fuel/")) )
 
       . assert(_ == (true, true, true, true))
+
+      // What a reader is given for an address's page: its `url`, found by the same key.
+      def page(file: Path on Linux, address: Text): Optional[Text] =
+        val reader: Shares.Reader = Shares.Reader(file, 0L)
+
+        try reader.read((ratel.root / t"page").find(address).let(_.text(t"url")))
+        finally reader.close()
+
+      // Where a reader is told the site is served, if it is told so.
+      def site(file: Path on Linux): Optional[Text] =
+        val reader: Shares.Reader = Shares.Reader(file, 0L)
+
+        try reader.read(ratel.root.text(t"address"))
+        finally reader.close()
+
+      test(m"there is a page for every entity, with an info or without"):
+        Server.publish(Corpus(Nil), api)
+        fuel.Help.pages().page.order(_.address).map { page => (page.address, page.url) }
+
+      . assert(_ == List
+          ( (t"sample.Doc", documented.url),
+            (t"sample.Doc#title", t"/api/sample.Doc~title"),
+            (t"sample.Quiet", silent.url) ))
+
+      test(m"an entity without an info has a page and no entry"):
+        Server.publish(Corpus(Nil), api)
+        val listed: Boolean = fuel.Help.pages().page.exists(_.address == t"sample.Quiet")
+        (listed, fuel.Help.index().entry.exists(_.address == t"sample.Quiet"))
+
+      . assert(_ == (true, false))
+
+      test(m"the published pages answer an address with its page's URL"):
+        Filing.temporary: directory =>
+          val file: Path on Linux = unsafely(directory / "share" / "pages.ratel")
+          Server.publish(Corpus(Nil), api)
+          val published: Boolean = Shares.publish(file, fuel.Help.pages())
+
+          ( published, page(file, t"sample.Doc#title"), page(file, t"sample.Quiet"),
+            page(file, t"sample.None") )
+
+      . assert(_ == (true, member.url, t"/api/sample.Quiet", Unset))
+
+      // An entry and a page have one address, and one record's children have distinct keys.
+      test(m"the pages are a share beside the index, under the same cache"):
+        val index: Optional[Text] = fuel.Help.file(t"/work/one").let(_.encode)
+        val pages: Optional[Text] = fuel.Help.pagesFile(t"/work/one").let(_.encode)
+        val site: Optional[Text] = fuel.Help.siteFile(t"/work/one").let(_.encode)
+
+        ( index.let(_.skip(10, Rtl)) == pages.let(_.skip(11, Rtl)),
+          pages.let(_.ends(t"/share/pages.ratel")), site.let(_.ends(t"/share/site.ratel")) )
+
+      . assert(_ == (true, true, true))
+
+      test(m"a site is announced with its address and this process, and withdrawn"):
+        Filing.temporary: directory =>
+          val file: Path on Linux = unsafely(directory / "share" / "site.ratel")
+          val announced: Boolean = fuel.Help.announce(file, t"http://localhost:8090/fuel")
+          val reader: Shares.Reader = Shares.Reader(file, 0L)
+
+          val pid: Optional[Text] =
+            try reader.read(ratel.root.text(t"pid")) finally reader.close()
+
+          val address: Optional[Text] = site(file)
+          fuel.Help.withdraw(file)
+
+          ( announced, address, pid == ProcessHandle.current().nn.pid().toString.tt,
+            Filing.exists(file), site(file) )
+
+      . assert(_ == (true, t"http://localhost:8090/fuel", true, false, Unset))
+
+      test(m"the site's address is the hub's, or a port's own, and ends in no slash"):
+        (fuel.Help.address(0), fuel.Help.address(8060))
+
+      . assert(_ == (t"http://localhost:8090/fuel", t"http://localhost:8060"))
+
+      // A project nobody has, whose cache is this test's alone and is deleted after it.
+      test(m"a project is announced while its pages are served, and only then"):
+        val one: Text = t"/nowhere/fuel-test/${java.util.UUID.randomUUID().toString.tt}/one"
+        val two: Text = t"/nowhere/fuel-test/${java.util.UUID.randomUUID().toString.tt}/two"
+        def told(root: Text): Optional[Text] = fuel.Help.siteFile(root).let(site(_))
+        Server.publish(Corpus(Nil), api)
+
+        try
+          val published: Boolean = fuel.Help.publish(one)
+
+          val found: Optional[Text] =
+            fuel.Help.pagesFile(one).let(page(_, t"sample.Quiet"))
+
+          val unserved: Optional[Text] = told(one)
+          val number: Long = fuel.Help.started(t"http://localhost:8090/fuel")
+          val served: Optional[Text] = told(one)
+          fuel.Help.publish(two)
+          val moved: (Optional[Text], Optional[Text]) = (told(one), told(two))
+          val again: Long = fuel.Help.started(t"http://localhost:8060")
+          fuel.Help.stopped(number)
+          val kept: Optional[Text] = told(two)
+          fuel.Help.stopped(again)
+          (published, found, unserved, served, moved, kept, told(two))
+        finally
+          fuel.Help.stopped()
+
+          List(one, two).each: (root: Text) =>
+            import environments.javaBaseEnvironment
+            Shares.cache(t"fuel", root).let(Filing.wipe(_))
+
+      . assert: result =>
+          val hub: Text = t"http://localhost:8090/fuel"
+          val own: Text = t"http://localhost:8060"
+          result == (true, t"/api/sample.Quiet", Unset, hub, (Unset, hub), own, Unset)
 
     // The documents as an Orthant store holds them: a store of two languages and two releases,
     // written as `orthant` writes one, and read as Fuel reads it.
