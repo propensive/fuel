@@ -5043,7 +5043,7 @@ entry .Channel
         case _                                     => Nil
 
       val axes: Text =
-        t"format 1\ntree docs\naxis\n  name language\n  kind language\n  prefer own\n  value\n    name en\n  value\n    name fr\n    parent en\n    translation true\n  value\n    name fr/CA\n    parent fr\naxis\n  name release\n  kind custom\n  prefer own\n  value\n    name v1\n  value\n    name v2\n    parent v1\n"
+        t"format 2\ntree docs\naxis\n  name language\n  kind language\n  prefer own\n  value\n    name en\n  value\n    name fr\n    parent en\n    translation true\n  value\n    name fr/CA\n    parent fr\naxis\n  name release\n  kind custom\n  prefer own\n  value\n    name v1\n  value\n    name v2\n    parent v1\n"
 
       val intro: Text = t"# Getting started\n\nSee [below](#getting-started).\n\nInstall it.\n"
 
@@ -5055,26 +5055,26 @@ entry .Channel
         def write(path: Text, text: Text): Unit = writeFile(t"$home/.orthant/$path", text)
 
         write(t"config.tel", axes)
-        write(t"data/root/guide/intro.md", intro)
-        write(t"data/root/guide/other.md", t"# Other\n")
-        write(t"data/root/guide/section.tel", t"title  User guide\n")
-        write(t"data/root/api/sample.tel", t"base sample\ninfo a sample package\n")
+        write(t"data/_/guide/intro.md", intro)
+        write(t"data/_/guide/other.md", t"# Other\n")
+        write(t"data/_/guide/section.tel", t"title  User guide\n")
+        write(t"data/_/api/sample.tel", t"base sample\ninfo a sample package\n")
 
         write
-          ( t"data/language=fr/guide/intro.md.delta",
-            t"orthant 1 language\n\n- # Getting started\n+ # Pour commencer\n\n- See [below](#getting-started).\n+ Voir [plus bas](#getting-started).\n" )
+          ( t"data/fr/_/guide/intro.md.delta",
+            t"orthant 2 language\n\n@ 0 1 0 1ba9cb69b5cf831404cea9eee42a6622\n+ # Pour commencer\n\n@ 0 1 0 0204c1e514d2fdf905fb54275aa0e093\n+ Voir [plus bas](#getting-started).\n" )
 
         write
-          ( t"data/language=fr/guide/section.tel.delta",
-            t"orthant 1 language\n\n- title  User guide\n+ title  Guide de l'utilisateur\n" )
+          ( t"data/fr/_/guide/section.tel.delta",
+            t"orthant 2 language\n\n@ 0 1 0 0169e0271bdefc040af9a7c9e50e01fc\n+ title  Guide de l'utilisateur\n" )
 
         write
-          ( t"data/language=fr/api/sample.tel.delta",
-            t"orthant 1 language\n\n- info a sample package\n+ info un paquet\n" )
+          ( t"data/fr/_/api/sample.tel.delta",
+            t"orthant 2 language\n\n@ 0 1 0 044598c8d9f282d91719ce9078b1aa65\n+ info un paquet\n" )
 
         write
-          ( t"data/release=v2/guide/intro.md.delta",
-            t"orthant 1 release\n\n= Install it.\n$$\n+\n+ Then run it.\n" )
+          ( t"data/v2/_/guide/intro.md.delta",
+            t"orthant 2 release\n\n@ 1 0 0 00d968b36937f0f11a5043032cfed8d9\n$$\n+\n+ Then run it.\n" )
 
         home
 
@@ -5135,6 +5135,41 @@ entry .Channel
               List(t"api/sample.tel", t"guide/section.tel"), true, false,
               t"title  Guide de l'utilisateur\n", Unset )
 
+      // A store whose documents are written in a live tree, `written`, at `v2`: the working
+      // value, as the last of a line of releases is not unless the store says so.
+      val lively: Text =
+        axes.sub(t"tree docs\n", t"tree .orthant/work/tree\nlive written\n")
+        . sub(t"    name v2\n    parent v1\n", t"    name v2\n    parent v1\n    working true\n")
+
+      test(m"a store with a live tree is read as that tree would be, and not its working tree"):
+        val depot: Depot = opened(stored(lively))
+        val root: Text = depot.root
+
+        ( root.ends(t"/written"), depot.live == depot.point(),
+          depot.library().files(t"$root/guide", t".md").map(depot.document(_).or(t"")),
+          depot.library(t"fr").text(t"$root/guide/section.tel"), depot.unstored )
+
+      . assert: found =>
+          found ==
+            ( true, true, List(t"guide/intro.md", t"guide/other.md"),
+              t"title  Guide de l'utilisateur\n", Nil )
+
+      test(m"an edit to the live tree is not read until it is stored, and is counted"):
+        val home: Text = stored(lively)
+        val depot: Depot = opened(home)
+
+        depot.store.documents.each: (document: Text) =>
+          depot.text(document).let(writeFile(depot.path(document), _))
+
+        val same: List[Text] = depot.unstored
+        writeFile(depot.path(t"guide/other.md"), t"# Another\n")
+        writeFile(depot.path(t"guide/new.md"), t"# New\n")
+
+        ( same, depot.unstored, depot.library().text(depot.path(t"guide/other.md")),
+          opened(home, List(t"v1")).unstored )
+
+      . assert(_ == (Nil, List(t"guide/new.md", t"guide/other.md"), t"# Other\n", Nil))
+
       test(m"a file outside the working tree is the filesystem's, in every language"):
         val home: Text = stored()
         writeFile(t"$home/elsewhere/notes.md", t"# Notes\n")
@@ -5168,8 +5203,8 @@ entry .Channel
         val home: Text = stored()
 
         writeFile
-          ( t"$home/.orthant/data/language=fr/guide/other.md.delta",
-            t"orthant 1 language\n\n- # Something else\n+ # Autre chose\n" )
+          ( t"$home/.orthant/data/fr/_/guide/other.md.delta",
+            t"orthant 2 language\n\n@ 0 1 0 00000000000000000000000000000000\n+ # Autre chose\n" )
 
         // The change is of the first release's text, and is the first release's to place.
         val depot: Depot = opened(home, List(t"v1"))

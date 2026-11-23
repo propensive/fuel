@@ -11,9 +11,9 @@ name fuel
 record Store
   description
       The Orthant store which holds the documents: the directory it is in, which has
-      `.orthant` in it. Whatever the configuration names within the store's working tree is
-      read from the store, in each language its axis of languages has, and not from the
-      files checked out there. Each `at` is a value of another of its axes, as
+      `.orthant` in it. Whatever the configuration names within the store's live tree, or
+      within its working tree where it has no live tree, is read from the store, in each
+      language its axis of languages has, and not from the files there. Each `at` is a value of another of its axes, as
       `release=1.2.0`, or a value alone where one axis has it, which the documents are read
       at; an axis nothing names is read at its last value, where its values are one line.
   field path String

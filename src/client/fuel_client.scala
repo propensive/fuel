@@ -736,6 +736,20 @@ private def compiling(config: Workspace.Config, force: Boolean, progress: Progre
     config.depot.let: (depot: Depot) =>
       Out.println(t"fuel: the documents of the Orthant store in ${depot.home}, at ${depot.place}")
 
+      // What is written in the live tree and is not in the store, which is not what was read.
+      val unstored: List[Text] = depot.unstored
+
+      if !unstored.nil then
+        val count: Text =
+          if unstored.size == 1 then t"1 document is" else t"${unstored.size.show} documents are"
+
+        val shown: Text = unstored.keep(3).map { (document: Text) => t"`$document`" }.join(t", ")
+        val more: Text = if unstored.size > 3 then t", …" else t""
+
+        Out.println
+          ( t"fuel: $count not in the store as ${depot.root} has them ($shown$more), and " +
+              t"were read as the store has them: `orthant tag` stores them" )
+
       depot.tongues.each: (tongue: Text) =>
         depot.work(tongue).let: (work: orthant.Survey.Sum) =>
           val parts: List[Text] =

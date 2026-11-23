@@ -45,9 +45,12 @@ import sortingAlgorithms.timsort
 // value the configuration gives for each axis which is not the language's (`at`), moved to
 // each value of the axis of languages in turn. What a point holds is the plain text of each
 // document, as `orthant checkout` would write it into the working tree; so the store is read
-// as if it were that tree, a document `api/gossamer.tel` being the file of that path in the
-// tree's directory, whether or not anything is checked out there. Nothing is read from the
-// working tree itself, and so nothing which has not been checked in.
+// as if it were a tree of its documents, a document `api/gossamer.tel` being the file of that
+// path in the tree's directory. That directory is the store's live tree, where it has one —
+// the directory the documents are written in, which is committed — and its working tree
+// otherwise, whether or not anything is checked out there. Nothing is read from either tree
+// itself, and so nothing which is not in the store: an edit to the live tree is read once
+// `orthant tag` has stored it, and until then is counted (`unstored`), so that it can be said.
 //
 // Fuel only reads a store (through `orthant-reader`). A translation is written, held to the
 // text it translates and brought up to date with the `orthant` tool, which is also what says
@@ -188,10 +191,40 @@ case class Depot
     axis:      Optional[orthant.Axis],
     languages: List[(Text, Text)] ):
 
-  // The directory of the working tree, which every document's path is within.
+  // The directory every document's path is within: the store's live tree, where it has one,
+  // and its working tree otherwise.
   val root: Text =
-    val tree: Text = store.settings.tree
+    val tree: Text = store.settings.live.or(store.settings.tree)
     if tree == t"." || tree == t"" then home else t"$home/$tree"
+
+  // The point the live tree is written at, in a store which has one: the working value on
+  // its axis, and the root of every other; the root point, where no value is the working one.
+  val live: Optional[orthant.Point] = store.settings.live.let: (directory: Text) =>
+    val origin: orthant.Point = store.space.root
+
+    store.settings.working.lay(origin):
+      (entry: orthant.AxisEntry, value: orthant.ValueEntry) =>
+        store.axes.filter(_.name == entry.name).head.lay(origin)(origin.move(_, value.name))
+
+  // The documents of the live tree which are not as the store has them — edited, added or
+  // deleted since `orthant tag` last stored the tree — where the documents are read at the
+  // point the live tree is written at: they are read as the store has them. None, where the
+  // documents are read at another point, such as an earlier release; and none where the live
+  // tree's directory is not there at all, since that is no edit of every document.
+  def unstored: List[Text] =
+    if live.absent || live != point() || !Library.Disk.directory(root) then Nil else
+      val written: List[Text] = Library.Disk.files(root, t"").bind: (path: Text) =>
+        document(path).let(List(_)).or(Nil)
+
+      val held: List[Text] = store.documents.filter(text(_).present)
+
+      val deleted: List[Text] = held.filter: (held: Text) =>
+        !written.exists(_ == held)
+
+      (written + deleted).filter: (document: Text) =>
+        Library.Disk.text(path(document)) != text(document)
+
+      . order(identity(_))
 
   // The language the documents are written in, and those they are translated into.
   def original: Optional[Text] = axis.let { (axis: orthant.Axis) => Depot.tongue(axis.root) }
@@ -211,7 +244,7 @@ case class Depot
 
     . join(t", ")
 
-  // The document a path is, if it is within the working tree.
+  // The document a path is, if it is within the tree.
   def document(path: Text): Optional[Text] =
     if path.starts(t"$root/") then path.skip(root.length + 1) else Unset
 
@@ -226,7 +259,7 @@ case class Depot
   def untranslated(document: Text, tongue: Text): Boolean =
     original != tongue && text(document, tongue) == text(document)
 
-  // The files as a language reads them: within the working tree, the store's documents at
+  // The files as a language reads them: within the tree, the store's documents at
   // the language's point; anywhere else, the filesystem's.
   def library(tongue: Optional[Text] = Unset): Library =
     val depot: Depot = this

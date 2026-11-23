@@ -97,9 +97,10 @@ store .
 section guide docs
 ```
 
-Whatever the configuration names within the store's working tree — a section, its file, an
-overlay, a glossary — is then read from the store, in each of its languages, and not from
-the files checked out there: see [Languages](#languages). Anything else is read from the
+Whatever the configuration names within the store's tree — its live tree, where it has one,
+and its working tree otherwise; a section, its file, an overlay, a glossary — is then read
+from the store, in each of its languages, and not from the files there: see
+[Languages](#languages). Anything else is read from the
 filesystem, in the one language its section says, if it says one.
 
 The name is the first part of the address of each of the section's documents,
@@ -569,7 +570,7 @@ for text which has since changed. None of that is Fuel's, which only reads
 (`orthant-reader`), and so has no command which writes a translation.
 
 ```
-store .                             # the store in `.orthant`, whose working tree is `docs`
+store .                             # the store in `.orthant`, whose tree is `docs`
   at release=1.2.0                  # the release to read; the latest, if nothing says
 section guide docs
   metadata section.tel
@@ -590,11 +591,17 @@ else its last value, where its values are one line, each beneath the one before 
 latest release, or what is not yet released on the branch the axis follows. An axis which
 branches has no last value, and wants an `at`.
 
-Fuel reads the store as if it were its working tree with a language checked out: a document
-`api/gossamer.tel` is the file of that path in the tree's directory, in every language, and
-that is where a problem with it is reported, with the language which reads it so. Nothing is
-read from the working tree itself, so **an edit is compiled once it is checked in**, with
-`orthant checkin`. A store which cannot be opened, an `at` which names no value, and a
+Fuel reads the store as if it were a tree of its documents with a language checked out: a
+document `api/gossamer.tel` is the file of that path in the tree's directory, in every
+language, and that is where a problem with it is reported, with the language which reads it
+so. The tree is the store's *live tree*, where it has one (`live docs` in the store's
+configuration): the directory the documents are written in, which is committed, and which
+`orthant tag` stores. Otherwise it is the store's working tree, which a point is checked out
+into. Nothing is read from either tree itself, so **an edit is compiled once it is in the
+store**: with `orthant tag` for the live tree, and `orthant checkin` for the working tree,
+which is still where a translation is written. Where the live tree has edits the store does
+not, `fuel compile` says how many documents differ, and that they were read as the store has
+them. A store which cannot be opened, an `at` which names no value, and a
 document which cannot be derived at a point are failures, each carrying Orthant's own code.
 
 Every file is plain text in every language: a Markdown document is Markdown, and an overlay,
@@ -736,7 +743,7 @@ check-links
 # Write the compiled documents and API pages here, as BinTEL, compiling only what changed.
 output dist/doc
 
-# An Orthant store, whose working tree is `docs`: what is configured within that tree is read
+# An Orthant store, whose live tree is `docs`: what is configured within that tree is read
 # from the store, in each of its languages, at the release named (the latest, if none is).
 store .
   at release=1.2.0

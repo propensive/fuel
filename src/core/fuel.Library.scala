@@ -43,7 +43,7 @@ import sortingAlgorithms.timsort
 // Where the files of the documentation are read from. The documents, the overlays, the
 // glossaries and each section's file are named by their paths, as the configuration names
 // them, and a library says what is at a path: the filesystem does (`Library.Disk`), and so
-// does an Orthant store, for the paths within its working tree, in each language it has
+// does an Orthant store, for the paths within its tree, in each language it has
 // (`Depot#library`). Nothing which reads a file of the documentation need know which.
 object Library:
   // The filesystem, as it is.
