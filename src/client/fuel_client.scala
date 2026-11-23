@@ -43,7 +43,8 @@ import probates.cancelProbate
 import pyrocosm.Boards.{show as showBoard}
 import pyrocosm.Tool
 import pyrocosm.standardRendering.given
-import pyrocosm.{ambient, Attend, Block, Board, Digests, Filing, Notices, TerminalRenderer, Tone}
+import pyrocosm.{ambient, Attend, Block, Board, Digests, Filing, Notices, TerminalRenderer, Token,
+  Tone}
 import soundness.collationComparable
 import sortingAlgorithms.timsort
 import collations.codepointCollation
@@ -1260,6 +1261,7 @@ private def searchApi(text: Text)(using Stdio): Exit | Tool.UsageError.type =
         else
           val outcome: Search.Outcome = apis.search(query, Server.terms)
           val scope: Scope = Scope.document(Server.imports, Server.standard)
+          val renderer: TerminalRenderer = TerminalRenderer()
           outcome.notices.each: (notice: Text) => Out.println(t"fuel: $notice")
 
           outcome.terms.each: (term: Glossary.Term) =>
@@ -1269,17 +1271,16 @@ private def searchApi(text: Text)(using Stdio): Exit | Tool.UsageError.type =
             val api: Api = apis.of(hit.entity)
             Out.println(t"${hit.entity.address}  ${hit.entity.url}")
 
-            // Scala's declaration on one line; another format's as its signature's first line.
-            val written: Text =
+            // Scala's declaration on one line; another format's as its signature's first line:
+            // either in the colours code has wherever else it is shown.
+            val written: List[Token] =
               if api.format == ScalaFormat then
                 Signatures.declaration(hit.entity.name, hit.declaration, api, scope)
-                . map(_.text)
-                . join
               else api.format.signature(hit.entity.name, hit.declaration, api, scope) match
-                case Block.Code(_, line :: _, _, _, _, _, _, _) => line.tokens.map(_.text).join
-                case _                                         => hit.entity.name
+                case Block.Code(_, line :: _, _, _, _, _, _, _) => line.tokens
+                case _                                         => List(Token.plain(hit.entity.name))
 
-            Out.println(t"    $written")
+            Out.println(e"    ${renderer.tokens(written)}")
 
           Out.println(t"fuel: ${outcome.hits.size.show} results")
           Exit.Ok

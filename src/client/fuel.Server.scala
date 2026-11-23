@@ -150,11 +150,29 @@ object Server:
     imports0 = imports
     glossary0 = glossary
     standard0 = standard
+    demanded0 = Memo()
     edition0.since(_ + 1L)
 
-    // The search index is built now, apart, rather than at the first keystroke, on a virtual
-    // thread, which belongs to no invocation and does not keep the daemon alive.
-    VirtualSupervisor.fork(() => Unset) { api.search; () }
+    // What the first reader of each language would otherwise wait for is built now, apart, on
+    // a virtual thread, which belongs to no invocation and does not keep the daemon alive: the
+    // navigation of every API, which every page is shown beside, first; then the search index,
+    // rather than at the first keystroke; then, for each language, what its pages are
+    // rendered from, and its search. A reader who asks for one meanwhile waits for it here.
+    val read: List[Apis] = readings.values.to[List].map(_.apis)
+
+    VirtualSupervisor.fork(() => Unset):
+      val all: List[Api] = (api :: formats) + read.bind(_.all)
+      all.each(_.navigation)
+      api.search
+
+      all.each: (api: Api) =>
+        api.lattice
+        api.byName
+        api.exporters
+        api.unimported
+
+      read.each(_.primary.search)
+
     ()
 
   def corpus: Optional[Corpus] = corpus0
@@ -200,6 +218,16 @@ object Server:
   def edition: Long = edition0()
 
   def page(key: Text): Optional[List[Block]] = pages0.at(key)
+
+  // The pages rendered when a reader asked for them, which the compile did not render — a
+  // dependency's, or any in a language whose words are not the compile's — each kept by the
+  // language it is read in, the language of Fuel's words on it and its entity's address, until
+  // the next compile, which begins with none.
+  @scala.caps.unsafe.untrackedCaptures
+  @volatile
+  private var demanded0: Memo[(Text, Text, Text), List[Block]] = Memo()
+
+  def demanded: Memo[(Text, Text, Text), List[Block]] = demanded0
 
   private val hashes: Memo[(Text, Long, Long), Text] = Memo()
 

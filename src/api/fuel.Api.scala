@@ -290,7 +290,26 @@ case class Api(entities: Map[Text, Api.Entity], format: Format = ScalaFormat):
   def children(entity: Api.Entity): List[Api.Entity] =
     entity.members.bind: (key: Text) => apply(key).let(List(_)).or(Nil)
 
-  def roots: List[Api.Entity] = entities.values.filter(_.parent.absent).order(_.name)
+  lazy val roots: List[Api.Entity] = entities.values.filter(_.parent.absent).order(_.name)
+
+  // The roots with any of the project's own entities at or beneath them, and the others, which
+  // are its dependencies': found once, since it takes every own entity for every root.
+  private lazy val rooted: (List[Api.Entity], List[Api.Entity]) =
+    val own: List[Text] = entities.keys.to[List].filter: (key: Text) =>
+      entities.at(key).lay(false)(_.own)
+
+    roots.partition: (root: Api.Entity) =>
+      val key: Text = root.key
+      val within: Text = t"$key."
+      val member: Text = t"$key#"
+      own.exists: (owned: Text) => owned == key || owned.starts(within) || owned.starts(member)
+
+  def ownRoots: List[Api.Entity] = rooted(0)
+  def otherRoots: List[Api.Entity] = rooted(1)
+
+  // The navigation of the project's own entities with no page current, a node for each of
+  // `ownRoots`: drawn once, and gone with this `Api`.
+  lazy val navigation: List[pyrocosm.Block.TreeNode] = ApiPages.navigation(this)
 
   // The entity a designator names, if it exists as a term or a type member of its parent: a
   // designator written with `.` may name a type (`gossamer.Text`), so both are tried.

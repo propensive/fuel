@@ -405,55 +405,90 @@ object ApiPages:
   // The navigation: the project's own packages, then its dependencies' (closed), each node a
   // link to its page, open along the way to `current`, with the packages, types and objects
   // beneath it (not every method and value, which its page lists).
+  //
+  // The project's own tree is shown whole, and is thousands of nodes, of which a page changes
+  // only those on the way to it: so the tree is drawn once for its `Api`, with no page current
+  // (`Api#navigation`), and every page's is that one with the nodes on its way drawn again,
+  // each other node the very one drawn before.
   def tree
     ( api: Api, current: Optional[Text], locale: Locale[Phrases.Spoken] = Phrases.english )
   :   Block.Tree =
 
     given Locale[Phrases.Spoken] = locale
+    val path: List[Text] = ancestry(api, current)
 
-    val path: List[Text] = current.lay(Nil: List[Text]): (key: Text) =>
-      def up(designator: Optional[Locator]): List[Text] =
-        designator.lay(Nil: List[Text]): (d: Locator) => List(Api.key(d)) + up(d.parent)
+    def marked(entity: Api.Entity, plain: Block.TreeNode): Block.TreeNode =
+      if !path.has(entity.key) then plain else
+        val beneath: List[Api.Entity] = api.children(entity).filter(branch(api, _))
 
-      api(key).lay(Nil: List[Text]): (e: Api.Entity) => List(e.key) + up(e.parent)
+        val children: List[Block.TreeNode] =
+          beneath.zip(plain.children).map: (child: Api.Entity, drawn: Block.TreeNode) =>
+            marked(child, drawn)
 
-    // The project's own tree is shown whole; a dependency's unfolds only along the way to the
-    // current page, since the dependencies together are tens of thousands of entities.
-    def branch(c: Api.Entity): Boolean = !c.hidden && api.format.branch(c)
+        node(api, entity, children, path, current)
 
-    def node(entity: Api.Entity, whole: Boolean): Block.TreeNode =
-      val children: List[Block.TreeNode] =
-        if !whole && !path.has(entity.key) then Nil
-        else api.children(entity).filter(branch).map(node(_, whole))
+    val ownNodes: List[Block.TreeNode] =
+      api.ownRoots.zip(api.navigation).map: (root: Api.Entity, plain: Block.TreeNode) =>
+        marked(root, plain)
 
-      val open: Optional[Boolean] = if children.nil then Unset else path.has(entity.key)
-
-      val tone: Optional[Tone] =
-        if entity.key == current then Tone.Accent else if entity.removed then Tone.Muted else Unset
-
-      val destination: Inline.Destination = Inline.Destination.Local(entity.url)
-
-      // The name is code, a type's in the type accent and a term's in the term's.
-      val accent: Token.Accent =
-        if entity.template.present then Token.Accent.Typal else Token.Accent.Term
-
-      val label: List[Inline] = List(code(api, List(Token(entity.name, accent))))
-      Block.TreeNode(label, children, tone, Unset, open, destination)
-
-    val roots: List[Api.Entity] = api.roots
-    val (own, dependencies) = roots.partition(ownBeneath(api, _))
-    val ownNodes: List[Block.TreeNode] = own.map(node(_, true))
+    val dependencies: List[Api.Entity] = api.otherRoots
 
     val dependencyNodes: List[Block.TreeNode] =
       if dependencies.nil then Nil
       else
         val open: Boolean = dependencies.exists: (d: Api.Entity) => path.has(d.key)
-        val nodes: List[Block.TreeNode] = dependencies.map(node(_, false))
+        val nodes: List[Block.TreeNode] = dependencies.map(drawn(api, _, false, path, current))
         List(Block.TreeNode(Inline.text(Phrases.dependencies()), nodes, Tone.Muted, Unset, open))
 
     Block.Tree(ownNodes + dependencyNodes)
 
-  // Whether a root package has any of the project's own entities beneath it.
-  private def ownBeneath(api: Api, root: Api.Entity): Boolean =
-    api.entities.values.exists: e =>
-      e.own && (e.key == root.key || e.key.starts(t"${root.key}.") || e.key.starts(t"${root.key}#"))
+  // The project's own tree with no page current, a node for each of `Api#ownRoots`.
+  def navigation(api: Api): List[Block.TreeNode] =
+    api.ownRoots.map(drawn(api, _, true, Nil, Unset))
+
+  // The keys on the way to a page: its own, then each entity's it is within, the nearest first.
+  def ancestry(api: Api, current: Optional[Text]): List[Text] =
+    current.lay(Nil: List[Text]): (key: Text) =>
+      def up(designator: Optional[Locator]): List[Text] =
+        designator.lay(Nil: List[Text]): (d: Locator) => List(Api.key(d)) + up(d.parent)
+
+      api(key).lay(Nil: List[Text]): (e: Api.Entity) => List(e.key) + up(e.parent)
+
+  private def branch(api: Api, entity: Api.Entity): Boolean =
+    !entity.hidden && api.format.branch(entity)
+
+  // An entity's node and all beneath it: every branch, where it is drawn `whole`, as the
+  // project's own are, and otherwise only those on the `path`, since the dependencies together
+  // are tens of thousands of entities.
+  def drawn
+    ( api: Api, entity: Api.Entity, whole: Boolean, path: List[Text], current: Optional[Text] )
+  :   Block.TreeNode =
+
+    val children: List[Block.TreeNode] =
+      if !whole && !path.has(entity.key) then Nil
+      else api.children(entity).filter(branch(api, _)).map(drawn(api, _, whole, path, current))
+
+    node(api, entity, children, path, current)
+
+  private def node
+    ( api:      Api,
+      entity:   Api.Entity,
+      children: List[Block.TreeNode],
+      path:     List[Text],
+      current:  Optional[Text] )
+  :   Block.TreeNode =
+
+    val key: Text = entity.key
+    val open: Optional[Boolean] = if children.nil then Unset else path.has(key)
+
+    val tone: Optional[Tone] =
+      if key == current then Tone.Accent else if entity.removed then Tone.Muted else Unset
+
+    val destination: Inline.Destination = Inline.Destination.Local(entity.url)
+
+    // The name is code, a type's in the type accent and a term's in the term's.
+    val accent: Token.Accent =
+      if entity.template.present then Token.Accent.Typal else Token.Accent.Term
+
+    val label: List[Inline] = List(code(api, List(Token(entity.name, accent))))
+    Block.TreeNode(label, children, tone, Unset, open, destination)
