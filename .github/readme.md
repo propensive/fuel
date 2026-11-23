@@ -44,7 +44,8 @@ Propensive's projects: `↯/f.25` to `↯/f.28` are fuel's (its core, API, clien
 `FuelBolts` declares, and `[↯/f.27.5.7] usage: fuel show <file>` is printed after its code's
 label. A code which carries another names the error reported on account of it: a glossary's
 fault the TEL schema finds, `↯/f.25.4.1/s.…`, carries the TEL error's own code. The record of
-what every code means is `f.tel` in [propensive/bolt](https://github.com/propensive/bolt).
+what every code means is `bolt.tel` in
+[propensive/pyrocosm](https://github.com/propensive/pyrocosm).
 
 `fuel compile` reads every `*.md` in each configured section's directory, parses it as
 CommonMark, and converts it to Pyrocosm blocks: a fenced block whose info string is `scala` or
