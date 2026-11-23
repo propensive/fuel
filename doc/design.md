@@ -235,7 +235,7 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
     a table, a link, a fence's run…), and each distinct message a variant of it; a problem
     found in a TEL error carries that error's code (`↯/f.25.4.1/s.…`), and a compiler's message
     the code Proscala begins it with, where it has one. A failure printed other than as a
-    diagnostic follows its code's label. The registry is `f.tel` in propensive/bolt.
+    diagnostic follows its code's label. The record is `bolt.tel` in propensive/pyrocosm.
   - All compiler use (tokenizing included) runs on one dedicated thread with a large stack, in
     `Checking.exclusive`: dotc pins a context base to the thread of its first run, so a later
     run from another thread fails with `RecursionOverflow` and no frames. The daemon serves each
