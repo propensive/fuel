@@ -951,6 +951,13 @@ slide
 
       . assert(_ == (4, List(3)))
 
+      test(m"a colour named in hexadecimal in a document has its swatch before it"):
+        Blocks.inline(t"painted `#ff8800`, not `#1`").bind:
+          case Inline.Phrase(Inline.Swatch(colour) :: rest) => List(colour.hex)
+          case _                                            => Nil
+
+      . assert(_ == List(t"#ff8800"))
+
       test(m"markdown on a slide is blocks, and code on a slide is not numbered"):
         val all: List[Block.Leaf] = leaves(talk)
 
