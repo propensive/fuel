@@ -76,9 +76,12 @@ object Dashboard:
   // Served until `stop`, as every tool's web front-end is (`WebService`): every tab has a
   // session of its own, since every page has a URL of its own, and the ticker drives each a
   // few times a second for as long as the front-end runs, which is what notices a new compile.
-  val web: Tool.Web = WebService.attending(): (audience: Audience) =>
-    val dashboard = Dashboard(audience)
-    WebService.Session(dashboard.interface, dashboard.handle, () => dashboard.tick())
+  // For as long as it is served, the site is announced to the other tools on the machine
+  // (`Help.announcing`).
+  val web: Tool.Web = fuel.Help.announcing:
+    WebService.attending(): (audience: Audience) =>
+      val dashboard = Dashboard(audience)
+      WebService.Session(dashboard.interface, dashboard.handle, () => dashboard.tick())
 
   // The URL of a document: its section and its path, each segment encoded.
   def docUrl(section: Text, path: Text): Text = Doc.url(section, path)
@@ -115,7 +118,9 @@ final class Dashboard(audience: Audience = Audience()):
 
   // The locale Fuel's own words are said in: the language read, where Fuel has words for it,
   // else the first of the reader's it has.
-  private given locale: Locale[Phrases.Spoken] = audience.locale(tongue)
+  private given locale: Locale[Phrases.Spoken] =
+    val wanted: List[Text] = tongue.lay(audience.languages)(_ :: audience.languages)
+    Phrases.locale(pyrocosm.Tongue.choose(wanted, Phrases.spoken))
 
   // Whether the pages the compile rendered say Fuel's words as this tab does: they are
   // rendered in the language the documents are written in.

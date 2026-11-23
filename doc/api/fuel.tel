@@ -208,7 +208,9 @@ entry .Library   where a file of the documentation is read from: the filesystem,
 entry .Depot   an Orthant store as Fuel reads it: one point for each of its languages
   entry .open        the store in a directory, read at the values the terms name
   entry .tongue      the language a value of an axis of languages names
-  entry #root        the directory of the working tree, which every document's path is within
+  entry #root        the directory every document's path is within: the live tree, or else the working tree
+  entry #live        the point the live tree is written at, in a store which has one
+  entry #unstored    the documents of the live tree which are not as the store has them
   entry #languages   each language, and the value of the axis which names it, the original first
   entry #tongues     the languages the documents are translated into
   entry #library     the files as a language reads them

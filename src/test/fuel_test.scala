@@ -4606,6 +4606,12 @@ row  Earth  1.00  1  See [the Moon](https://example.com/moon)
           val info: Text = t"compiles the documents, as fuel.compile.force insists"
           result == List((t"toy/fuel.compile", info))
 
+      test(m"the help pages have each entity's page under its format's prefix"):
+        Server.publish(Corpus(Nil), scala, formats = List(commands))
+        fuel.Help.pages().page.seek(_.address == t"toy/fuel.compile").let(_.url)
+
+      . assert(_ == t"/api/toy/fuel.compile")
+
     // A TEL schema, documented as an API is.
     suite(m"Schemas"):
       val text: Text = t"""tel 1.0
@@ -4913,6 +4919,115 @@ entry .Channel
 
       . assert(_ == (true, true, true, true))
 
+      // What a reader is given for an address's page: its `url`, found by the same key.
+      def page(file: Path on Linux, address: Text): Optional[Text] =
+        val reader: Shares.Reader = Shares.Reader(file, 0L)
+
+        try reader.read((ratel.root / t"page").find(address).let(_.text(t"url")))
+        finally reader.close()
+
+      // Where a reader is told the site is served, if it is told so.
+      def site(file: Path on Linux): Optional[Text] =
+        val reader: Shares.Reader = Shares.Reader(file, 0L)
+
+        try reader.read(ratel.root.text(t"address"))
+        finally reader.close()
+
+      test(m"there is a page for every entity, with an info or without"):
+        Server.publish(Corpus(Nil), api)
+        fuel.Help.pages().page.order(_.address).map { page => (page.address, page.url) }
+
+      . assert(_ == List
+          ( (t"sample.Doc", documented.url),
+            (t"sample.Doc#title", t"/api/sample.Doc~title"),
+            (t"sample.Quiet", silent.url) ))
+
+      test(m"an entity without an info has a page and no entry"):
+        Server.publish(Corpus(Nil), api)
+        val listed: Boolean = fuel.Help.pages().page.exists(_.address == t"sample.Quiet")
+        (listed, fuel.Help.index().entry.exists(_.address == t"sample.Quiet"))
+
+      . assert(_ == (true, false))
+
+      test(m"the published pages answer an address with its page's URL"):
+        Filing.temporary: directory =>
+          val file: Path on Linux = unsafely(directory / "share" / "pages.ratel")
+          Server.publish(Corpus(Nil), api)
+          val published: Boolean = Shares.publish(file, fuel.Help.pages())
+
+          ( published, page(file, t"sample.Doc#title"), page(file, t"sample.Quiet"),
+            page(file, t"sample.None") )
+
+      . assert(_ == (true, member.url, t"/api/sample.Quiet", Unset))
+
+      // An entry and a page have one address, and one record's children have distinct keys.
+      test(m"the pages are a share beside the index, under the same cache"):
+        val index: Optional[Text] = fuel.Help.file(t"/work/one").let(_.encode)
+        val pages: Optional[Text] = fuel.Help.pagesFile(t"/work/one").let(_.encode)
+        val site: Optional[Text] = fuel.Help.siteFile(t"/work/one").let(_.encode)
+
+        ( index.let(_.skip(10, Rtl)) == pages.let(_.skip(11, Rtl)),
+          pages.let(_.ends(t"/share/pages.ratel")), site.let(_.ends(t"/share/site.ratel")) )
+
+      . assert(_ == (true, true, true))
+
+      test(m"a site is announced with its address and this process, and withdrawn"):
+        Filing.temporary: directory =>
+          val file: Path on Linux = unsafely(directory / "share" / "site.ratel")
+          val announced: Boolean = fuel.Help.announce(file, t"http://localhost:8090/fuel")
+          val reader: Shares.Reader = Shares.Reader(file, 0L)
+
+          val pid: Optional[Text] =
+            try reader.read(ratel.root.text(t"pid")) finally reader.close()
+
+          val address: Optional[Text] = site(file)
+          fuel.Help.withdraw(file)
+
+          ( announced, address, pid == ProcessHandle.current().nn.pid().toString.tt,
+            Filing.exists(file), site(file) )
+
+      . assert(_ == (true, t"http://localhost:8090/fuel", true, false, Unset))
+
+      test(m"the site's address is the hub's, or a port's own, and ends in no slash"):
+        (fuel.Help.address(0), fuel.Help.address(8060))
+
+      . assert(_ == (t"http://localhost:8090/fuel", t"http://localhost:8060"))
+
+      // A project nobody has, whose cache is this test's alone and is deleted after it.
+      test(m"a project is announced while its pages are served, and only then"):
+        val one: Text = t"/nowhere/fuel-test/${java.util.UUID.randomUUID().toString.tt}/one"
+        val two: Text = t"/nowhere/fuel-test/${java.util.UUID.randomUUID().toString.tt}/two"
+        def told(root: Text): Optional[Text] = fuel.Help.siteFile(root).let(site(_))
+        Server.publish(Corpus(Nil), api)
+
+        try
+          val published: Boolean = fuel.Help.publish(one)
+
+          val found: Optional[Text] =
+            fuel.Help.pagesFile(one).let(page(_, t"sample.Quiet"))
+
+          val unserved: Optional[Text] = told(one)
+          val number: Long = fuel.Help.started(t"http://localhost:8090/fuel")
+          val served: Optional[Text] = told(one)
+          fuel.Help.publish(two)
+          val moved: (Optional[Text], Optional[Text]) = (told(one), told(two))
+          val again: Long = fuel.Help.started(t"http://localhost:8060")
+          fuel.Help.stopped(number)
+          val kept: Optional[Text] = told(two)
+          fuel.Help.stopped(again)
+          (published, found, unserved, served, moved, kept, told(two))
+        finally
+          fuel.Help.stopped()
+
+          List(one, two).each: (root: Text) =>
+            import environments.javaBaseEnvironment
+            Shares.cache(t"fuel", root).let(Filing.wipe(_))
+
+      . assert: result =>
+          val hub: Text = t"http://localhost:8090/fuel"
+          val own: Text = t"http://localhost:8060"
+          result == (true, t"/api/sample.Quiet", Unset, hub, (Unset, hub), own, Unset)
+
     // The documents as an Orthant store holds them: a store of two languages and two releases,
     // written as `orthant` writes one, and read as Fuel reads it.
     suite(m"Languages"):
@@ -4928,7 +5043,7 @@ entry .Channel
         case _                                     => Nil
 
       val axes: Text =
-        t"format 1\ntree docs\naxis\n  name language\n  kind language\n  prefer own\n  value\n    name en\n  value\n    name fr\n    parent en\n    translation true\n  value\n    name fr/CA\n    parent fr\naxis\n  name release\n  kind custom\n  prefer own\n  value\n    name v1\n  value\n    name v2\n    parent v1\n"
+        t"format 2\ntree docs\naxis\n  name language\n  kind language\n  prefer own\n  value\n    name en\n  value\n    name fr\n    parent en\n    translation true\n  value\n    name fr/CA\n    parent fr\naxis\n  name release\n  kind custom\n  prefer own\n  value\n    name v1\n  value\n    name v2\n    parent v1\n"
 
       val intro: Text = t"# Getting started\n\nSee [below](#getting-started).\n\nInstall it.\n"
 
@@ -4940,26 +5055,26 @@ entry .Channel
         def write(path: Text, text: Text): Unit = writeFile(t"$home/.orthant/$path", text)
 
         write(t"config.tel", axes)
-        write(t"data/root/guide/intro.md", intro)
-        write(t"data/root/guide/other.md", t"# Other\n")
-        write(t"data/root/guide/section.tel", t"title  User guide\n")
-        write(t"data/root/api/sample.tel", t"base sample\ninfo a sample package\n")
+        write(t"data/_/guide/intro.md", intro)
+        write(t"data/_/guide/other.md", t"# Other\n")
+        write(t"data/_/guide/section.tel", t"title  User guide\n")
+        write(t"data/_/api/sample.tel", t"base sample\ninfo a sample package\n")
 
         write
-          ( t"data/language=fr/guide/intro.md.delta",
-            t"orthant 1 language\n\n- # Getting started\n+ # Pour commencer\n\n- See [below](#getting-started).\n+ Voir [plus bas](#getting-started).\n" )
+          ( t"data/fr/_/guide/intro.md.delta",
+            t"orthant 2 language\n\n@ 0 1 0 1ba9cb69b5cf831404cea9eee42a6622\n+ # Pour commencer\n\n@ 0 1 0 0204c1e514d2fdf905fb54275aa0e093\n+ Voir [plus bas](#getting-started).\n" )
 
         write
-          ( t"data/language=fr/guide/section.tel.delta",
-            t"orthant 1 language\n\n- title  User guide\n+ title  Guide de l'utilisateur\n" )
+          ( t"data/fr/_/guide/section.tel.delta",
+            t"orthant 2 language\n\n@ 0 1 0 0169e0271bdefc040af9a7c9e50e01fc\n+ title  Guide de l'utilisateur\n" )
 
         write
-          ( t"data/language=fr/api/sample.tel.delta",
-            t"orthant 1 language\n\n- info a sample package\n+ info un paquet\n" )
+          ( t"data/fr/_/api/sample.tel.delta",
+            t"orthant 2 language\n\n@ 0 1 0 044598c8d9f282d91719ce9078b1aa65\n+ info un paquet\n" )
 
         write
-          ( t"data/release=v2/guide/intro.md.delta",
-            t"orthant 1 release\n\n= Install it.\n$$\n+\n+ Then run it.\n" )
+          ( t"data/v2/_/guide/intro.md.delta",
+            t"orthant 2 release\n\n@ 1 0 0 00d968b36937f0f11a5043032cfed8d9\n$$\n+\n+ Then run it.\n" )
 
         home
 
@@ -5020,6 +5135,41 @@ entry .Channel
               List(t"api/sample.tel", t"guide/section.tel"), true, false,
               t"title  Guide de l'utilisateur\n", Unset )
 
+      // A store whose documents are written in a live tree, `written`, at `v2`: the working
+      // value, as the last of a line of releases is not unless the store says so.
+      val lively: Text =
+        axes.sub(t"tree docs\n", t"tree .orthant/work/tree\nlive written\n")
+        . sub(t"    name v2\n    parent v1\n", t"    name v2\n    parent v1\n    working true\n")
+
+      test(m"a store with a live tree is read as that tree would be, and not its working tree"):
+        val depot: Depot = opened(stored(lively))
+        val root: Text = depot.root
+
+        ( root.ends(t"/written"), depot.live == depot.point(),
+          depot.library().files(t"$root/guide", t".md").map(depot.document(_).or(t"")),
+          depot.library(t"fr").text(t"$root/guide/section.tel"), depot.unstored )
+
+      . assert: found =>
+          found ==
+            ( true, true, List(t"guide/intro.md", t"guide/other.md"),
+              t"title  Guide de l'utilisateur\n", Nil )
+
+      test(m"an edit to the live tree is not read until it is stored, and is counted"):
+        val home: Text = stored(lively)
+        val depot: Depot = opened(home)
+
+        depot.store.documents.each: (document: Text) =>
+          depot.text(document).let(writeFile(depot.path(document), _))
+
+        val same: List[Text] = depot.unstored
+        writeFile(depot.path(t"guide/other.md"), t"# Another\n")
+        writeFile(depot.path(t"guide/new.md"), t"# New\n")
+
+        ( same, depot.unstored, depot.library().text(depot.path(t"guide/other.md")),
+          opened(home, List(t"v1")).unstored )
+
+      . assert(_ == (Nil, List(t"guide/new.md", t"guide/other.md"), t"# Other\n", Nil))
+
       test(m"a file outside the working tree is the filesystem's, in every language"):
         val home: Text = stored()
         writeFile(t"$home/elsewhere/notes.md", t"# Notes\n")
@@ -5053,8 +5203,8 @@ entry .Channel
         val home: Text = stored()
 
         writeFile
-          ( t"$home/.orthant/data/language=fr/guide/other.md.delta",
-            t"orthant 1 language\n\n- # Something else\n+ # Autre chose\n" )
+          ( t"$home/.orthant/data/fr/_/guide/other.md.delta",
+            t"orthant 2 language\n\n@ 0 1 0 00000000000000000000000000000000\n+ # Autre chose\n" )
 
         // The change is of the first release's text, and is the first release's to place.
         val depot: Depot = opened(home, List(t"v1"))

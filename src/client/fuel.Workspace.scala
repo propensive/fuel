@@ -45,8 +45,8 @@ import pyrocosm.decodables.boolean
 // dependencies the project's sources, and the embedded code, are compiled against — the
 // directories of documents, of the project's own sources (whose API is documented) and of the
 // TEL overlays which document it, the Orthant store which holds those of them that are in its
-// working tree, and the imports a document's references resolve through. Relative entries
-// resolve against the root, as flame's do.
+// tree, and the imports a document's references resolve through. Relative entries resolve
+// against the root, as flame's do.
 object Workspace:
   // A configuration's store and its sections, as the schema has them: what `store` and
   // `section` say, each member a keyword which may be written as a child or, in this order,
@@ -176,7 +176,7 @@ object Workspace:
       sections:        List[(Text, Text)]           = Nil,
       // Each section's file, by the section's directory.
       sectionFiles:    List[(Text, Text)]           = Nil,
-      // The Orthant store which holds the documents within its working tree, in each language.
+      // The Orthant store which holds the documents within its tree, in each language.
       depot:           Optional[Depot]              = Unset ):
 
     // Where a file of the documentation is read from: the store, for what is in its working
@@ -236,7 +236,7 @@ object Workspace:
     //       overlay api
     //       glossary glossary.tel
     //
-    // A section whose directory is within the store's working tree is read from the store,
+    // A section whose directory is within the store's tree is read from the store,
     // in each language the store has, and is written in the first of them; any other is
     // read from the filesystem, in the one language it says, or says nothing of. What is
     // wrong with the sections is kept, to be reported; where the schema finds a fault in
@@ -248,7 +248,7 @@ object Workspace:
 
     // A path without its `.` and `..` segments, each `..` taking the segment before it: a
     // file is named one way, whichever way the configuration reaches it, so that a file in
-    // the store's working tree is known to be.
+    // the store's tree is known to be.
     def direct(path: Text): Text =
       val segments: List[Text] =
         path.cut(t"/").fold(List[Text]()): (done: List[Text], segment: Text) =>
@@ -302,7 +302,7 @@ object Workspace:
     val unstored: List[Problem] = opened(1)
 
     // A section as it is written, made the directories and files it names; and what is wrong
-    // with it which the schema cannot say. A section within the store's working tree is
+    // with it which the schema cannot say. A section within the store's tree is
     // written in the store's first language, whatever it says.
     def group(section: Section): (Optional[Group], List[Problem]) =
       val written: Text = t"${section.name} ${section.path}"

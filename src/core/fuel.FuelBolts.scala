@@ -34,8 +34,8 @@ package fuel
 
 // The bolt codes of Fuel, `↯/f.25` to `↯/f.28`: the subdivisions of the letter Fuel shares with
 // Pyrocosm and its other tools (`pyrocosm.Bolts`), one for each of Fuel's modules. The record of
-// what every code means, and of each error's variants, is `f.tel` in propensive/bolt. Declared
-// here, in the module every other module of Fuel's depends on.
+// what every code means, and of each error's variants, is `bolt.tel` in propensive/pyrocosm.
+// Declared here, in the module every other module of Fuel's depends on.
 object FuelBolts:
   final val core     = 25
   final val api      = 26

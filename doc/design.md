@@ -162,9 +162,12 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   That is now [Orthant](https://github.com/propensive/orthant)'s, which does it for any
   line-based document, along a release as well as a language, and Fuel only reads a store
   (`Depot`, over `orthant-reader`): a `store` in the configuration, the documents within its
-  working tree read at one point for each value of its axis of languages, every file plain
-  text in every language. The store is read as if it were its working tree (`Library`), so
-  the code which reads a file by its path does not know which holds it. Each language's text
+  tree read at one point for each value of its axis of languages, every file plain text in
+  every language. The store is read as if it were that tree (`Library`), so the code which
+  reads a file by its path does not know which holds it. The tree is the store's live tree,
+  where it has one — the committed directory the documents are written in, which `orthant
+  tag` stores — and its working tree otherwise; and since neither is read itself, the live
+  tree's edits which are not yet stored are counted and said (`Depot#unstored`), not compiled. Each language's text
   is held to what a file of its kind must be, and a problem it shares with the text it was
   written in is said once (`Compilation.novel`); how far a translation is done is Orthant's
   count. The dashboard serves each language (Pyrocosm's `Audience`): a document as the
@@ -235,7 +238,7 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
     a table, a link, a fence's run…), and each distinct message a variant of it; a problem
     found in a TEL error carries that error's code (`↯/f.25.4.1/s.…`), and a compiler's message
     the code Proscala begins it with, where it has one. A failure printed other than as a
-    diagnostic follows its code's label. The registry is `f.tel` in propensive/bolt.
+    diagnostic follows its code's label. The record is `bolt.tel` in propensive/pyrocosm.
   - All compiler use (tokenizing included) runs on one dedicated thread with a large stack, in
     `Checking.exclusive`: dotc pins a context base to the thread of its first run, so a later
     run from another thread fails with `RecursionOverflow` and no frames. The daemon serves each
