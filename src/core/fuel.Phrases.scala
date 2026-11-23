@@ -42,9 +42,11 @@ import soundness.*
 // No `Locale` is in scope here, and none should be: `|` on a `Polyglot` picks one language at
 // once where it finds one.
 object Phrases:
-  // The languages Fuel's interface is written in, which are Pyrocosm's.
+  // The languages Fuel's interface is written in: three of the ten Pyrocosm's is.
   type Spoken = en & fr & de
   type Phrase = Polyglot[Text, Spoken]
+
+  val spoken: List[Text] = List(t"en", t"fr", t"de")
 
   val english: Locale[Spoken] = Locale(en)
 

@@ -118,7 +118,9 @@ final class Dashboard(audience: Audience = Audience()):
 
   // The locale Fuel's own words are said in: the language read, where Fuel has words for it,
   // else the first of the reader's it has.
-  private given locale: Locale[Phrases.Spoken] = audience.locale(tongue)
+  private given locale: Locale[Phrases.Spoken] =
+    val wanted: List[Text] = tongue.lay(audience.languages)(_ :: audience.languages)
+    Phrases.locale(pyrocosm.Tongue.choose(wanted, Phrases.spoken))
 
   // Whether the pages the compile rendered say Fuel's words as this tab does: they are
   // rendered in the language the documents are written in.
