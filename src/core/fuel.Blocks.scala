@@ -125,6 +125,13 @@ object Blocks:
 
     private var references0: List[Linkage] = Nil
     private var anchors0: List[Text] = Nil
+    private var ambiguous0: List[(Int, Linker.Ambiguity)] = Nil
+
+    // An ambiguous reference, by the line it is on — its paragraph's first.
+    def ambiguous(line: Int, ambiguity: Linker.Ambiguity): Unit =
+      ambiguous0 = (line, ambiguity) :: ambiguous0
+
+    def ambiguities: List[(Int, Linker.Ambiguity)] = ambiguous0.reverse.distinct
 
     def refer(line: Int, target: Linkage.Target): Unit =
       references0 = Linkage(line, target) :: references0
@@ -193,12 +200,14 @@ object Blocks:
   // Inline code, whose tokens link when the linker says it is a reference: a qualified name a
   // link for each segment. A sigil (`#Name` for a type, `.name` for a term) says what is meant
   // and, once resolved, is not shown; a sigilled reference nothing resolves is shown as
-  // written, and recorded for the check to report.
+  // written, and recorded for the check to report, as one which names several entities is, by
+  // its line.
   private def snippet(code: Text, context: Context, line: Int): Inline =
     val tokens: List[Token] = context.linker.tokens(code)
 
-    if Linker.kind(code).present && !tokens.exists(_.link.present)
-    then context.refer(line, Linkage.Target.Sigil(code))
+    if !tokens.exists(_.link.present) then
+      if Linker.kind(code).present then context.refer(line, Linkage.Target.Sigil(code))
+      context.linker.ambiguity(code).let(context.ambiguous(line, _))
 
     Inline.Snippet(Language.Plain, tokens)
 

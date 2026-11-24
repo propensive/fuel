@@ -1827,6 +1827,45 @@ object Exports:
           case api: Api => api
           case _        => Api.empty
 
+      // A library and an umbrella which exports it, as Soundness's does: a parameterised type
+      // with no companion, an extension overloaded over receivers, and a package of the name of
+      // one of the library's.
+      val umbrellaSource: Text = t"""package library
+
+trait Deriving[typeclass[_]]
+
+case class Item(name: String)
+
+def other: Int = 0
+
+extension (item: Item) def shout: String = item.name
+extension (text: String) def shout: String = text
+
+package choices:
+  val first: Item = Item("")
+"""
+
+      val umbrellaExports: Text = t"""package umbrella
+
+export library.{Deriving, Item, other, shout}
+
+package choices:
+  export library.choices.first
+"""
+
+      lazy val umbrella: Api =
+        val output4: Text =
+          scratch(t"fuel-api4")
+
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          checker.build
+            ( Map(t"Library.scala" -> umbrellaSource, t"Umbrella.scala" -> umbrellaExports),
+              output4 )
+
+        Inspection.walk(List(output4), Nil, entries) match
+          case api: Api => Applicables.decorate(api)
+          case _        => Api.empty
+
       test(m"into and annotation classes and objects are recorded as modifiers"):
         def modifiers(key: Text): List[Text] =
           exported(key).let: (e: Api.Entity) =>
@@ -2132,7 +2171,8 @@ class Logger() uses Io.out initially, Io.out:
         val api: Api = Applicables.decorate(exported)
         val resolver: Resolver = Resolver(api, Scope.document(Nil))
         val ambiguous: Optional[Inline.Destination] = resolver.link(t".size")
-        (destination(decorated, Nil, t".describe"), ambiguous, resolver.ambiguities)
+        val found: List[Text] = resolver.ambiguities.map(_.reference)
+        (destination(decorated, Nil, t".describe"), ambiguous, found)
 
       . assert(_ == (t"/api/extended.Shape.describe", Unset, List(t".size")))
 
@@ -2141,6 +2181,105 @@ class Logger() uses Io.out initially, Io.out:
         (destination(api, Nil, t"#exporting.Coding.Code#digits"), destination(api, Nil, t".digits"))
 
       . assert(_ == (t"/api/exporting.Coding.digits", t"/api/exporting.Coding.digits"))
+
+      def umbrellaPaths(imports: List[Text], references: List[Text])
+      :   (List[Optional[Text]], List[Linker.Ambiguity]) =
+
+        val resolver: Resolver = Resolver(umbrella, Scope.document(List(t"umbrella")))
+        resolver.learn(imports)
+
+        val paths: List[Optional[Text]] = references.map: (reference: Text) =>
+          resolver.link(reference) match
+            case Inline.Destination.Local(path, _) => path
+            case _                                 => Unset
+
+        (paths, resolver.ambiguities)
+
+      test(m"a named import brings its name alone, so what an umbrella exports is one entity"):
+        umbrellaPaths
+          ( List(t"import library.other"),
+            List(t"Deriving", t"shout", t"choices", t"other", t"Item") )
+
+      . assert:
+          _ ==
+            ( List
+                ( t"/api/library.Deriving",
+                  t"/api/library.shout",
+                  t"/api/umbrella.choices",
+                  t"/api/library.other",
+                  t"/api/library.Item" ),
+              Nil )
+
+      test(m"a name is imported under another, in braces, or not at all"):
+        umbrellaPaths
+          ( List(t"import library.{other as another, Item as _}, library.choices.first"),
+            List(t"another", t"first", t"Deriving", t"other", t"choices.first") )
+
+      . assert:
+          _ ==
+            ( List
+                ( t"/api/library.other",
+                  t"/api/library.choices.first",
+                  t"/api/library.Deriving",
+                  t"/api/library.other",
+                  t"/api/library.choices.first" ),
+              Nil )
+
+      test(m"a type with parameters is one entity through its export, though both are imported"):
+        umbrellaPaths(List(t"import library.*"), List(t"Deriving", t"choices"))
+
+      . assert:
+          _ ==
+            ( List(t"/api/library.Deriving", Unset),
+              List(Linker.Ambiguity(t"choices", List(t"umbrella.choices", t"library.choices"))) )
+
+      test(m"an extension imported by its name is a member of the type it extends"):
+        def member(imports: List[Text]): Optional[Text] =
+          val resolver: Resolver = Resolver(umbrella, Scope.document(Nil))
+          resolver.learn(imports)
+
+          resolver.link(t"#library.Item#shout") match
+            case Inline.Destination.Local(path, _) => path
+            case _                                 => Unset
+
+        (member(Nil), member(List(t"import library.shout")), member(List(t"import umbrella.shout")))
+
+      . assert(_ == (Unset, t"/api/library.shout", t"/api/library.shout"))
+
+      test(m"an ambiguous reference is reported on its line, with what it names"):
+        val resolver: Resolver = Resolver(umbrella, Scope.document(List(t"umbrella")))
+        resolver.learn(List(t"import library.*"))
+        val text: Text = t"# Title\n\nA paragraph which begins here,\nand names `choices` here.\n"
+
+        Doc.parse(t"doc/page.md", text, linker = resolver).problems.map:
+          case Block.Diagnostic(_, location, message, excerpt, _, _) =>
+            val said: Text =
+              message.map { case Block.Paragraph(content) => Inline.plain(content); case _ => t"" }.join
+
+            (location.let(_.line), said, !excerpt.nil)
+
+          case _ =>
+            (Unset, t"", false)
+
+      . assert:
+          _ ==
+            List
+              ( ( 4,
+                  t"`choices` names more than one entity (`umbrella.choices`, `library.choices`), so it is not linked; qualify it.",
+                  true ) )
+
+      test(m"an ambiguous reference in a table is reported at the table, once"):
+        val resolver: Resolver = Resolver(umbrella, Scope.document(List(t"umbrella")))
+        resolver.learn(List(t"import library.*"))
+
+        val text: Text =
+          t"# Title\n\n```tabular\ncolumn  Name\nrow  `choices`\n```\n"
+
+        Doc.parse(t"doc/page.md", text, linker = resolver).problems.map:
+          case Block.Diagnostic(_, location, _, _, _, _) => location.let(_.line)
+          case _                                         => Unset
+
+      . assert(_ == List(3))
 
       test(m"a name without a sigil is not sought among the extensions"):
         val resolver: Resolver = Resolver(Applicables.decorate(exported), Scope.document(Nil))

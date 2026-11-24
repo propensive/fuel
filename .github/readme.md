@@ -423,7 +423,13 @@ signature; inline code in prose (`` `Text` ``), resolved as a name in code would
 written, then under the page's own entity and those enclosing it, then under the `import`s of
 the overlay (or, for a Markdown document, the `imports` setting and the imports its own fences
 make), then `scala`, `scala.Predef` and `java.lang` — a name which several entities answer to
-in the same scope is a caution and stays plain. A name is followed through an export in its
+in the same scope is a caution and stays plain. A fence's import brings what it would in code:
+`import a.b.*` every member of `a.b`, and `import a.b.C` (or `a.b.{C, D as E}`) those names
+alone, which come before a wildcard's, so that naming one member of a library does not set its
+others beside an umbrella package's exports of them. The caution is at the line the name is
+written on (a table's, at the line its fence opens on) and says which entities answer; an
+export and what it exports — a type with parameters included — are one entity, however many
+imports reach it. A name is followed through an export in its
 prefix (`soundness.Text.s` is the `s` of the `anticipation.internal.Text` it exports), a member
 of a type after `#` is found where the type inherits it (`#List#toList`) or among the
 extensions which apply to the type and reach it — from its companion or an object enclosing it,

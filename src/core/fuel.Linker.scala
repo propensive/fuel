@@ -57,13 +57,43 @@ object Linker:
     else if reference.starts(t".") then Kind.Term
     else Unset
 
+  // A reference which named several entities, as it was written, with the keys of those it
+  // named, where they are entities of one API.
+  case class Ambiguity(reference: Text, candidates: List[Text] = Nil)
+
+  // A linker which keeps the ambiguous references among those it is asked for, which is how
+  // what converts one part of a document — a table — knows which are its own.
+  final class Noting(linker: Linker) extends Linker:
+    private var noted0: List[Ambiguity] = Nil
+
+    def noted: List[Ambiguity] = noted0.reverse.distinct
+
+    private def note(reference: Text, linked: Boolean): Unit =
+      if !linked then linker.ambiguity(reference).let: (ambiguity: Ambiguity) =>
+        noted0 = ambiguity :: noted0
+
+    def link(reference: Text): Optional[Inline.Destination] =
+      val destination: Optional[Inline.Destination] = linker.link(reference)
+      note(reference, destination.present)
+      destination
+
+    override def tokens(reference: Text): List[Token] =
+      val tokens: List[Token] = linker.tokens(reference)
+      note(reference, tokens.exists(_.link.present))
+      tokens
+
+    def link(name: Text, tpe: Syntax): Optional[Inline.Destination] = linker.link(name, tpe)
+    def learn(imports: List[Text]): Unit = linker.learn(imports)
+    def define(anchor: Text, names: List[(Text, Linker.Kind)]): Unit = linker.define(anchor, names)
+    def ambiguities: List[Ambiguity] = linker.ambiguities
+
   // Links nothing: what a document without an API is converted with.
   object none extends Linker:
     def link(reference: Text): Optional[Inline.Destination] = Unset
     def link(name: Text, tpe: Syntax): Optional[Inline.Destination] = Unset
     def learn(imports: List[Text]): Unit = ()
     def define(anchor: Text, names: List[(Text, Linker.Kind)]): Unit = ()
-    def ambiguities: List[Text] = Nil
+    def ambiguities: List[Ambiguity] = Nil
 
   // A highlighted token as the model's, with the link its type gives it.
   def token(linker: Linker, token: harlequin.SourceCode.Token): Token =
@@ -120,7 +150,8 @@ trait Linker:
   // does not link to `Int`.
   def link(name: Text, tpe: Syntax): Optional[Inline.Destination]
 
-  // The imports a fragment makes at its top level (`import a.b.*`), which extend the scope.
+  // The imports a fragment makes at its top level, which extend the scope: `import a.b.*` by
+  // every member of `a.b`, and `import a.b.C` by `C` alone.
   def learn(imports: List[Text]): Unit
 
   // The names a fragment defines at its top level, each a type or a term, by the anchor the
@@ -130,7 +161,12 @@ trait Linker:
   def define(anchor: Text, names: List[(Text, Linker.Kind)]): Unit
 
   // The references which named several entities, and so were not linked.
-  def ambiguities: List[Text]
+  def ambiguities: List[Linker.Ambiguity]
+
+  // The ambiguity a reference was found to be, when it was asked for.
+  def ambiguity(reference: Text): Optional[Linker.Ambiguity] =
+    val written: Text = reference.trim
+    ambiguities.seek(_.reference == written)
 
   // A reference as the tokens of inline code: by default one token, linked as a whole; a
   // linker which can, gives a qualified name a linked token for each segment, each after the
