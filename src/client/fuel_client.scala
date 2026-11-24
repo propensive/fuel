@@ -1147,8 +1147,12 @@ private def rendered
     val embeddings = List(scala, Embedding.JavaCode, tables)
     val blocks: List[Block] = ApiPages.page(api, entity, resolver, scope, embeddings)
 
-    val ambiguous: List[Block] = resolver.ambiguities.map: (reference: Text) =>
-      Doc.ambiguity(reference, Block.Location(place, entity.doc.let(_.line)))
+    // A table has reported, at its own place, the ambiguous references in its cells.
+    val unplaced: List[Linker.Ambiguity] = resolver.ambiguities.filter:
+      (ambiguity: Linker.Ambiguity) => !tables.ambiguous.has(ambiguity.reference)
+
+    val ambiguous: List[Block] = unplaced.map: (ambiguity: Linker.Ambiguity) =>
+      Doc.ambiguity(ambiguity, Block.Location(place, entity.doc.let(_.line)))
 
     (blocks, scala.problems + tables.problems + ambiguous)
 

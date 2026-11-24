@@ -284,8 +284,13 @@ object Tables:
 // the file, in `problems`.
 final class Tables(path: Text, linker: Linker = Linker.none) extends Embedding:
   private var problems0: List[Block] = Nil
+  private var ambiguous0: List[Text] = Nil
 
   def problems: List[Block] = problems0.reverse
+
+  // The references in the tables' cells which named several entities, each of which is among
+  // the `problems`, at its table.
+  def ambiguous: List[Text] = ambiguous0.reverse.distinct
 
   def embed(info: List[Text], content: Text, fence: Int): Optional[List[Block]] =
     if info.head != Tables.language then Unset else
@@ -293,8 +298,16 @@ final class Tables(path: Text, linker: Linker = Linker.none) extends Embedding:
         problems0 = problems.reverse + problems0
         List(Embedding.plain(info, content, fence))
 
-      Tables.read(content, linker) match
+      val noting: Linker.Noting = Linker.Noting(linker)
+
+      Tables.read(content, noting) match
+        // A cell has no line of its own in the model, so a reference in one which names several
+        // entities is reported on the line which opens its fence.
         case table: Block.Table =>
+          noting.noted.each: (ambiguity: Linker.Ambiguity) =>
+            ambiguous0 = ambiguity.reference :: ambiguous0
+            problems0 = Doc.ambiguity(ambiguity, Block.Location(path, fence + 1)) :: problems0
+
           List(table)
 
         case error: Tel.Error =>
