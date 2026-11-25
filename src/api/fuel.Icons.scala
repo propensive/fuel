@@ -77,11 +77,13 @@ import pyrocosm.Inline
 //   extension     a def with a small plus at the top right (e-def)
 //   enum case     a disc (c-case); on a class or object, a dot at the centre (c-class, c-object)
 //
-// A class is three quarters of two rings, open to the east, and a trait the western quarter of
-// the same rings. A class, a case class or a trait with a companion object is one glyph, a whole
-// circle: its own part, and the object's ring in the sector it leaves open, with a gap between
-// them along each radius where they meet (to the north-east and south-east of a class, to the
-// north-west and south-west of a trait), as if a line were drawn there in the page's colour.
+// A class is three quarters of two rings, open to the east, and a trait half of the same rings,
+// from the south-east to the north-west. A type is four arcs of the outer ring, on the
+// diagonals, with a gap at each side. A class, a case class or a trait with a companion object
+// is one glyph, a whole circle: its own part, and the object's ring in the sector it leaves
+// open, with a gap between them along each radius where they meet (to the north-east and
+// south-east of a class, to the north-west and south-east of a trait), as if a line were drawn
+// there in the page's colour.
 // A case class is a class with the disc of a `case` at its centre, small enough to stand a
 // ring's breadth within its rings. The glyph of a pair has the modifiers of both.
 object Icons:
@@ -301,8 +303,8 @@ object Icons:
         Drawing(classRings(dotted, open, sealing, 0) + List(dot))
 
       case Api.Kind.Trait =>
-        if sealing then Drawing(List(walled(135, 225, 0)))
-        else Drawing(List(band(5, 4, 135, 225), band(3, 2, 135, 225)))
+        if sealing then Drawing(List(walled(45, 225, 0)))
+        else Drawing(List(band(5, 4, 45, 225), band(3, 2, 45, 225)))
 
 
       case Api.Kind.Enum =>
@@ -315,7 +317,10 @@ object Icons:
         Drawing(discs)
 
       case Api.Kind.Case      => Drawing(List(disc(2.8)))
-      case Api.Kind.Type      => Drawing(List(band(4, 3, -45, 45), band(4, 3, 135, 225)))
+      // Four arcs of seventy degrees, centred on the diagonals.
+      case Api.Kind.Type =>
+        Drawing(List(45, 135, 225, 315).map { (at: Int) => band(5, 4, at - 35, at + 35) })
+
       case Api.Kind.TypeParam => base(Api.Kind.Type)
       case Api.Kind.Def       => Drawing(List(square))
       case Api.Kind.Val       => Drawing(List(polygon((4.08, 4.95), (9.92, 4.95), (7, 10))))
@@ -346,10 +351,10 @@ object Icons:
     kind match
       case Api.Kind.Trait =>
         val rings: List[Text] =
-          if sealing then List(walled(135, 225, parting))
-          else List(inset(5, 4, 135, 225, parting), inset(3, 2, 135, 225, parting))
+          if sealing then List(walled(45, 225, parting))
+          else List(inset(5, 4, 45, 225, parting), inset(3, 2, 45, 225, parting))
 
-        Drawing(rings + List(inset(5, 3, 225, 135, parting)))
+        Drawing(rings + List(inset(5, 3, 225, 45, parting)))
 
       case _ =>
         val rings: List[Text] =
@@ -366,10 +371,10 @@ object Icons:
     case Api.Kind.Package                          => Fit(2, 12, 12.7, 12.7)
     case Api.Kind.Object | Api.Kind.Class          => Fit(2, 12, 12.7, 12.7)
     case Api.Kind.CaseClass                        => Fit(2, 12, 12.7, 12.7)
-    case Api.Kind.Trait                            => Fit(2, 5, 6.69, 11.64)
+    case Api.Kind.Trait                            => Fit(2, 12, 12.7, 12.7)
     case Api.Kind.Enum                             => Fit(2.2, 11.8, 12.96, 12.12)
     case Api.Kind.Case                             => Fit(4.2, 9.8, 11.14, 11.14)
-    case Api.Kind.Type | Api.Kind.TypeParam        => Fit(3, 11, 11.99, 11.99)
+    case Api.Kind.Type | Api.Kind.TypeParam        => Fit(2, 12, 12.7, 12.7)
     case Api.Kind.Def | Api.Kind.Extension         => Fit(4.5, 9.5, 12.56, 8.48)
     case Api.Kind.Val                              => Fit(4.83, 9.17, 11.13, 8.98)
     case Api.Kind.Var                              => Fit(5, 9, 11.13, 8.7)

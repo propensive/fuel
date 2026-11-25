@@ -3151,18 +3151,21 @@ class Counter extends caps.Mutable:
 
         . assert(_ == (true, true, true, false))
 
-        test(m"a trait is the western quarter of a class's rings, and a pair a whole circle"):
+        test(m"a trait is half a class's rings, a type four arcs, and a pair a whole circle"):
           val alone: Text = Icons.markup(Api.Kind.Trait, Nil)
           val paired: Text = Icons.markup(Api.Kind.Trait, Nil, true)
           val cased: Text = Icons.markup(Api.Kind.CaseClass, Nil, true)
 
-          ( alone.contains(t"M 3.46 10.54 A 5 5 0 0 1 3.46 3.46"),
-            alone.contains(t"A 5 5 0 1 1"),
-            paired.contains(t"A 5 5 0 1 1"),
+          def paths(markup: Text): Int = markup.s.split("<path").nn.length - 1
+
+          ( alone.contains(t"M 10.54 10.54 A 5 5 0 0 1 3.46 3.46"),
+            paths(alone),
+            paths(paired),
+            paths(Icons.markup(Api.Kind.Type, Nil)),
             cased.contains(t"""<circle cx="7" cy="7" r="1"/>"""),
             Icons.markup(Api.Kind.Class, List(t"final"), true).contains(t"<circle") )
 
-        . assert(_ == (true, false, true, true, true))
+        . assert(_ == (true, 2, 3, 4, true, true))
 
         test(m"a glyph of the keyword stands in a column before a member's name"):
           val declaration: Api.Declaration = Api.Declaration(Api.Kind.CaseClass)
@@ -3209,7 +3212,7 @@ class Counter extends caps.Mutable:
             Icons.markup(kind, List(t"final")).contains(t"""viewBox="0 0 14 14"""")
 
           ( List(Api.Kind.Def, Api.Kind.Val, Api.Kind.Case, Api.Kind.Class).all(stop),
-            Icons.markup(Api.Kind.Trait, List(t"infix")).contains(t"""x="5.5"""") )
+            Icons.markup(Api.Kind.Trait, List(t"infix")).contains(t"""x="12.5"""") )
 
         . assert(_ == (true, true))
 
