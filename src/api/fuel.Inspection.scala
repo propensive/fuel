@@ -372,6 +372,37 @@ object Inspection:
 
       . or(false)
 
+    // `consume` is kept as an annotation, a class of the object `scala.caps.internal`.
+    private def isConsume(symbol: Symbol): Boolean =
+      val names: Set[Text] = Set(t"scala.caps.internal$$.consume", t"scala.caps.internal.consume")
+
+      safely:
+        reading:
+          List.from(symbol.annotations).exists: annotation =>
+            names.has(annotation.tpe.typeSymbol.fullName.tt)
+
+      . or(false)
+
+    // An `update def` is a method the compiler marks mutable, as it does a `consume def`, which
+    // is written without `update`, and the setter it makes for a `var`, which is not written.
+    private def isUpdate(symbol: Symbol): Boolean =
+      symbol.isDefDef && symbol.flags.is(Flags.Mutable) && !isConsume(symbol) && !isAccessor(symbol)
+
+    private def isAccessor(symbol: Symbol): Boolean =
+      safely:
+        reading:
+          import dotty.tools.dotc.core.Symbols.toDenot
+          given dotty.tools.dotc.core.Contexts.Context = context
+
+          symbol match
+            case symbol: dotty.tools.dotc.core.Symbols.Symbol =>
+              symbol.is(dotty.tools.dotc.core.Flags.Accessor)
+
+            case _ =>
+              false
+
+      . or(false)
+
     private def modifiers(symbol: Symbol): List[Text] =
       val flags = symbol.flags
 
@@ -386,6 +417,8 @@ object Inspection:
         (flags.is(Flags.Transparent), t"transparent"),
         (flags.is(Flags.Inline), t"inline"),
         (flags.is(Flags.Lazy), t"lazy"),
+        (isUpdate(symbol), t"update"),
+        (isConsume(symbol), t"consume"),
         // The compiler also marks an object which holds an opaque type, which is not one itself.
         (flags.is(Flags.Opaque) && !flags.is(Flags.Module), t"opaque"),
         (flags.is(Flags.Infix), t"infix"),
