@@ -62,6 +62,9 @@ import pyrocosm.{Block, Inline}
 //     at 12.5                     # seconds the frame holds when played, its time on the
 //     language java               # page's clock, its own language, and marks of its own
 //     highlight x  the variable
+//     errors show                 # the frame is meant not to compile: each of its errors is
+//                                 # a note on it, and a later fragment follows the last
+//                                 # frame which is not so marked
 //   autoplay                      # play when shown; `loop` to start again at the end
 //   restart                       # in a session, a fresh one begins at this fragment
 //   typecheck                     # how far the compiler goes: `parse` (syntax alone),
@@ -111,7 +114,8 @@ object Preamble:
       at:            Optional[Double]   = Unset,
       language:      Optional[Text]     = Unset,
       marks:         List[Mark]         = Nil,
-      substitutions: List[Substitution] = Nil )
+      substitutions: List[Substitution] = Nil,
+      errors:        Errors             = Errors.Fail )
 
   enum Errors:
     case Fail, Show, Ignore
@@ -216,7 +220,8 @@ object Preamble:
               number(child(node, t"at")),
               child(node, t"language"),
               marks(node),
-              substitutions(node) )
+              substitutions(node),
+              if child(node, t"errors") == t"show" then Errors.Show else Errors.Fail )
 
       val frames: List[Frame] = framesOf(tel)
 

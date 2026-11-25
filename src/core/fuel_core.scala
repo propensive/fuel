@@ -677,9 +677,30 @@ object Embedding:
           val own: Text = frame.language.or(language)
           val scala: Boolean = own == t"scala"
           val number: Text = (index.n0 + 1).show
+          val expected: Boolean = frame.errors == Preamble.Errors.Show
 
           val highlighted: Optional[SourceCode | Throwable] =
             highlight(own, code, framing, mode, checked && scala)
+
+          // The errors of a frame which is meant not to compile, each a note on it whose
+          // caption is the compiler's message, on one line, as far as it says what is wrong.
+          val failures: List[Block.Note] = highlighted match
+            case source: SourceCode if checked && scala && expected =>
+              source.diagnostics.bind[List[Block.Note], Block.Note, List[Block.Note]]:
+                (diagnostic: harlequin.Diagnostic) =>
+                  val from: Int = diagnostic.span.offset.let(_.n0).or(0) - framing.shift
+                  val length: Int = diagnostic.span.length.or(0)
+
+                  if diagnostic.importance != harlequin.Diagnostic.Importance.Error || from < 0
+                  then Nil
+                  else
+                    val message: Text = Frames.caption(diagnostic.message)
+
+                    val style: Block.Note.Style = Block.Note.Style.Erroneous
+                    List(Notes.of(code, from, from + length, style, Inline.text(message)))
+
+            case _ =>
+              Nil
 
           val raw: List[Block.Line] = highlighted match
             case error: Throwable =>
@@ -688,7 +709,12 @@ object Embedding:
               lines(code)
 
             case source: SourceCode =>
-              if checked && scala && preamble.errors == Preamble.Errors.Fail then
+              if checked && scala && expected then
+                if failures.nil then
+                  val message: Text = t"Frame $number is marked `errors show`, but it compiled."
+                  report(Block.Location(path, start), message, bolt(FuelBolts.frame, 5))
+
+              else if checked && scala && preamble.errors == Preamble.Errors.Fail then
                 source.diagnostics.each: (diagnostic: harlequin.Diagnostic) =>
                   if diagnostic.importance == harlequin.Diagnostic.Importance.Error then
                     val (message, code) = compiled(diagnostic.message, bolt(FuelBolts.frame, 4))
@@ -708,12 +734,12 @@ object Embedding:
                 frame.hold,
                 frame.at,
                 if own == language then Unset else Language(own),
-                notes(code, preamble.marks + frame.marks) )
+                failures + notes(code, preamble.marks + frame.marks) )
 
           (frameLines, detail)
 
       val last: Optional[Preamble.Frame] = frames.reverse.seek: (frame: Preamble.Frame) =>
-        frame.language.or(language) == t"scala"
+        frame.language.or(language) == t"scala" && frame.errors != Preamble.Errors.Show
 
       val followed: Text = last.let(_.code).or(t"")
 
