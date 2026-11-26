@@ -549,6 +549,8 @@ and read, so M2 adds a compiler session without touching the configuration or th
 ### Modules and files
 
 ```
+src/code/      fuel-code (published; capture-checked): the `Embedding` of fenced code alone,
+               split from `fuel-core` so that a build which is not a tool's can depend on it
 src/core/      fuel-core (published; capture-checked)
   fuel_core.scala          package-level givens and the `Embedding` typeclass
   fuel.Document.scala      Document(path, title, blocks)

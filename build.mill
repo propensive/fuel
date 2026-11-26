@@ -126,27 +126,44 @@ object settings:
   // so the rest of the surface `import soundness.*` touches arrives transitively.
   def component(soundness: String)(name: String): Dep = mvn"dev.propensive:$name:$soundness"
 
-  // `fuel-core`: the document model and the Markdown-to-blocks conversion, usable by another tool.
-  def coreDeps(soundness: String) = Seq(
-    "punctuation-core",          // the Markdown parser
-    "cosmopolite-core",          // Locale and Polyglot: Fuel's own words, in each language
+  // `fuel-code`: a fence of code as Pyrocosm blocks — highlighted, typechecked, animated — with
+  // nothing of the documents around it, so that a build which is no tool's can embed it.
+  def codeDeps(soundness: String) = Seq(
     "harlequin-core",            // syntax highlighting of fenced code (needs the compiler at runtime)
     "harlequin-typed",           // typechecked highlighting, in a compiler session
     "anthology-core",            // the compiler: Scalac, Universe
     "anthology-scala",           // and its session
     "hellenism-jvm",             // LocalClasspath
-    "yossarian-core",            // Pty: a run fragment's output, as a terminal shows it
     "stratiform-core",           // TEL: a fence's preamble
     "ambience-core",             // systems.javaBaseSystem
-    "galilei-jvm",               // the filesystem: the document directories
-    "kaleidoscope-core",         // Glob
+    "galilei-jvm",               // the filesystem: a fence's sample files
+    "kaleidoscope-core",         // the patterns a line is read by
     "serpentine-core",           // paths
     "contingency-core",
     "gossamer-core",
+    "vacuous-core",
+    "eucalyptus-core")           // logging.silentLogging
+  . map(component(soundness))
+
+  // `fuel-core`: the document model and the Markdown-to-blocks conversion, usable by another tool.
+  def coreDeps(soundness: String) = codeDeps(soundness) ++ Seq(
+    "punctuation-core",          // the Markdown parser
+    "cosmopolite-core",          // Locale and Polyglot: Fuel's own words, in each language
+    "yossarian-core",            // Pty: a run fragment's output, as a terminal shows it
+    "kaleidoscope-core",         // Glob
     "gossamer-lexicon",          // Lexicon: fuzzy name search
     "acyclicity-core",           // Dag.layered: the type-hierarchy figure
     "vacuous-core",
     "eucalyptus-core")           // logging.silentLogging
+  . map(component(soundness))
+
+  // `fuel-api`: what the API model needs beyond the documents'. These were once had through
+  // Pyrocosm's tool runtime, which the libraries no longer depend on, so they are named.
+  def apiDeps(soundness: String) = Seq(
+    "zeppelin-core",             // Zipfile: the TASTy within a jar
+    "telekinesis-core",          // HTTP: whether an external link answers
+    "telekinesis-jvm",
+    "urticose-core")             // Url
   . map(component(soundness))
 
   // `fuel-client`: the daemon, its subcommands and the dashboard.
@@ -165,9 +182,15 @@ object settings:
     "eucalyptus-core")
   . map(component(soundness))
 
-  def pyrocosmDeps(pyrocosm: String) = Seq(
+  // Pyrocosm as a library: what the libraries (`fuel-code`, `fuel-core`, `fuel-api`) are
+  // written against, none of which is a tool's runtime.
+  def pyrocosmLibraryDeps(pyrocosm: String) = Seq(
     mvn"dev.propensive:pyrocosm-model:$pyrocosm",       // Block, Inline, Interface
     mvn"dev.propensive:pyrocosm-compiler:$pyrocosm",    // harlequin tokens as the model's
+    mvn"dev.propensive:pyrocosm-system:$pyrocosm")      // Filing, Digests, Diversions, Bolts
+
+  // And as the tool Fuel is: the client's alone.
+  def pyrocosmDeps(pyrocosm: String) = pyrocosmLibraryDeps(pyrocosm) ++ Seq(
     mvn"dev.propensive:pyrocosm-terminal:$pyrocosm",    // `fuel show`
     mvn"dev.propensive:pyrocosm-web:$pyrocosm",         // the dashboard `fuel serve` serves
     mvn"dev.propensive:pyrocosm-cli:$pyrocosm")         // the standard command line (Tool)
@@ -271,13 +294,23 @@ trait Pyrocosmic(name: String) extends Component:
 
 // Fuel, the documentation tool.
 object fuel extends Project:
+  // Released as `dev.propensive:fuel-code`: the `Embedding` of fenced code — a fence's
+  // preamble, its highlighting and typechecking, its notes and its animation, as Pyrocosm
+  // blocks — and nothing of the documents, the daemon or the tool. It is what a build which is
+  // not a Pyrocosm tool's depends on to compile samples of code (Glimmer's, for soundness.dev).
+  object code extends Component(), Publishing:
+    def mvnDeps = Task:
+      settings.codeDeps(deps.soundness())
+        ++ settings.pyrocosmLibraryDeps(deps.pyrocosm())
+        ++ settings.compilerDeps
+
   // Released as `dev.propensive:fuel-core`: the document model (`Document`, `Corpus`), the
   // conversion of Markdown to Pyrocosm blocks and the `Embedding` of fenced code — what another
   // tool embeds. Carries the version resource `fuel --version` and `fuel about` report.
-  object core extends Component(), Pyrocosmic("fuel"), Publishing:
+  object core extends Component(code), Pyrocosmic("fuel"), Publishing:
     def mvnDeps = Task:
       settings.coreDeps(deps.soundness())
-        ++ settings.pyrocosmDeps(deps.pyrocosm())
+        ++ settings.pyrocosmLibraryDeps(deps.pyrocosm())
         ++ settings.orthantDeps(deps.orthant())
         ++ settings.compilerDeps
 
@@ -287,7 +320,8 @@ object fuel extends Project:
   object api extends Component(core), Publishing:
     def mvnDeps = Task:
       settings.coreDeps(deps.soundness())
-        ++ settings.pyrocosmDeps(deps.pyrocosm())
+        ++ settings.apiDeps(deps.soundness())
+        ++ settings.pyrocosmLibraryDeps(deps.pyrocosm())
         ++ settings.orthantDeps(deps.orthant())
         ++ settings.compilerDeps
         ++ settings.inspectorDeps
@@ -340,7 +374,7 @@ object fuel extends Project:
 // snapshot` publishes an unreleased build for a dependent repository to pin.
 object release extends Module:
   def modules: Seq[PublishModule] =
-    Seq(fuel.core, fuel.api, fuel.client)
+    Seq(fuel.code, fuel.core, fuel.api, fuel.client)
 
   private def withDescriptors(source: os.Path, target: os.Path, entries: Seq[(String, os.Path)])
   :   Unit =

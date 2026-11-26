@@ -51,29 +51,10 @@ object Output:
   // codecs are in scope as the model's own derivations see them; `decode` is `Unset` for bytes
   // which are not one.
 
-  object Fragment:
-    import derivation.throwing
-    import pyrocosm.given
-
-    def encode(fragment: Fragment): Data = fragment.bintel
-
-    def decode(data: Data): Optional[Fragment] =
-      safely(Bintel.read[Fragment](data))
-
-  // One fence's output: its blocks (the code, and the diagnostics which follow it), the
-  // problems it raised, and what it left to its session — whether it joined it, the names it
-  // defines, and its top-level imports — so that a later fragment can be compiled after it
-  // without compiling it again; the text a fragment which follows it is given; and the line
-  // of the fence it was compiled at, from which its lines are shifted to wherever the fence
-  // is now.
-  case class Fragment
-    ( blocks:   List[Block],
-      problems: List[Block],
-      joined:   Boolean,
-      defined:  List[Text],
-      imports:  List[Text],
-      follow:   Text,
-      line:     Int )
+  // One fence's output, which the code module's embedding makes and keeps: the record is
+  // its own, named here as the other records are.
+  type Fragment = fuel.Fragment
+  val Fragment: fuel.Fragment.type = fuel.Fragment
 
   object Prose:
     import derivation.throwing

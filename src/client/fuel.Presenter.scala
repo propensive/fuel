@@ -200,7 +200,7 @@ object Presenter:
   :   (Block, List[Block]) =
 
     def build(checker: Checker): (Block, List[Block]) =
-      val scala = Embedding.ScalaCode(checker, path, config.session)
+      val scala = Blocks.scala(checker, path, config.session)
       val tables: Tables = Tables(path)
       val deck: Block = Presentation.deck(presentation, scala, Linker.none, tables)
       (deck, scala.problems + tables.problems)

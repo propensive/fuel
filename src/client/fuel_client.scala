@@ -1142,7 +1142,7 @@ private def rendered
     val scope: Scope = Scope.of(entity, imports, api.format.standard(standard))
     val resolver: Resolver = Resolver(api, scope, Unset, apis)
     val place: Text = entity.doc.let(_.file).or(entity.key)
-    val scala: Embedding.ScalaCode = Embedding.ScalaCode(checker, place, false, Unset, resolver)
+    val scala: Embedding.ScalaCode = Blocks.scala(checker, place, false, Unset, resolver)
     val tables: Tables = Tables(place, resolver)
     val embeddings = List(scala, Embedding.JavaCode, tables)
     val blocks: List[Block] = ApiPages.page(api, entity, resolver, scope, embeddings)

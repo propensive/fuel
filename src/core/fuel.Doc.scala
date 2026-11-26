@@ -100,7 +100,7 @@ object Doc:
 
       case _ =>
         val context: Blocks.Context = Blocks.Context(linker, page, glossary)
-        val scala = Embedding.ScalaCode(checker, path, session, fixture, linker, section = section)
+        val scala = Blocks.scala(checker, path, session, fixture, linker, section = section)
         val tables: Tables = Tables(path, linker)
         val embeddings: List[Embedding] = List(scala, Embedding.JavaCode, tables)
         val blocks: List[Block] = Blocks.of(markdown, embeddings, context)
@@ -182,7 +182,7 @@ object Doc:
       cache.prose(key, prose)
       prose
 
-    val scala = Embedding.ScalaCode(checker, path, session, fixture, linker, cache, base, section)
+    val scala = Blocks.scala(checker, path, session, fixture, linker, cache, base, section)
     val tables: Tables = Tables(path, linker)
     val embeddings: List[Embedding] = List(scala, Embedding.JavaCode, tables)
 

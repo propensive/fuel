@@ -6,7 +6,7 @@
 name       fuel
 title      fuel
 
-build      fuel.core.compile fuel.client.compile
+build      fuel.code.compile fuel.core.compile fuel.client.compile
 launcher   fuel.launcher
 
 # The publication homes Burdock matches the classpath against by SHA-256, so that a library on

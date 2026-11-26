@@ -45,6 +45,14 @@ import yossarian.*
 // and what it throws kept; and reads that text as a terminal would, into the lines and styled
 // runs of an `Output` block.
 object Runner:
+  // The runner an embedding of the documents is given: a fragment's body run, and what it
+  // wrote as a terminal shows it.
+  val running: Running = new Running:
+    def run(body: => Unit): Running.Outcome =
+      val outcome: Outcome = Runner.run(body)
+      val (text, runs) = styled(outcome.text)
+      Running.Outcome(text, runs, outcome.error)
+
   case class Outcome(text: Text, error: Optional[Throwable])
 
   // Soundness has no means to capture the standard streams, Java's and Scala's `Console`,
