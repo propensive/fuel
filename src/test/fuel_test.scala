@@ -429,6 +429,35 @@ error oops
 
       . assert(_ == (1, List(1, 1), t"a second value", 2.0, 12.5))
 
+      test(m"a frame marked errors show carries its error, and the session follows the last sound frame"):
+        val text: Text =
+          t"```scala fuel\nid steps\nframe\n  code\n      val n: Int = 1\n" +
+            t"frame\n  errors show\n  code\n      val n: Int = \"oops\"\n##\n```\n\n" +
+            t"```scala fuel\nfollows steps\n##\nval m: Int = n\n```\n"
+
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          val doc = Doc.parse(t"doc/anim.md", text, checker)
+
+          doc.blocks match
+            case Block.Code(_, _, _, _, animation, _, _, _) :: _ =>
+              animation.let: (animation: Block.Animation) =>
+                (doc.problems.size, animation.slides.map(_.notes.size))
+
+            case _ =>
+              Unset
+
+      . assert(_ == (0, List(0, 1)))
+
+      test(m"a frame marked errors show which compiles is a problem"):
+        val text: Text =
+          t"```scala fuel\nframe\n  errors show\n  code\n      val n: Int = 1\n" +
+            t"frame\n  code\n      val n: Int = 2\n##\n```\n"
+
+        Checking.session(classpath, Nil): (checker: Checker) =>
+          Doc.parse(t"doc/anim.md", text, checker).problems.size
+
+      . assert(_ == 1)
+
       test(m"a java frame is highlighted without the checker, in its own language"):
         val text: Text =
           t"```scala fuel\nframe\n  code\n      val x: Int = 1\nframe\n" +
