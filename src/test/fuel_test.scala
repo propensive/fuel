@@ -1628,6 +1628,14 @@ object Util:
 
       . assert(_ == false)
 
+      test(m"a member without a body is abstract, though that is not written"):
+        entity(t"sample.Shape#area").let(_.definition).let: (area: Api.Declaration) =>
+          (area.modifiers.has(t"abstract"), area.written.has(t"abstract"))
+
+        . or((false, true))
+
+      . assert(_ == (true, false))
+
       test(m"a given and a val are declarations of their kinds"):
         ( entity(t"sample.Util.given_Ordering_Doc").let(_.definition.let(_.kind)),
           entity(t"sample.Util.limit").let(_.definition.let(_.kind)) )
@@ -1657,6 +1665,50 @@ object Util:
             error.toString.tt
 
       . assert(_ == (true, false, Api.Kind.Class, true, t"scala.Option[B]"))
+
+      test(m"a class in a jar Kotlin built is marked kotlin, and the same class elsewhere java"):
+        // A jar of one classfile, with the module descriptor Kotlin writes, or without it.
+        def jar(name: Text, kotlin: Boolean): Text =
+          val path: Text = t"${scratch(name)}/classes.jar"
+          val entry: Text = t"xsbti/WorkspaceEdit.class"
+          val stream = Classloader[Tests.type].java.getResourceAsStream(entry.s).nn
+          val bytes = stream.readAllBytes()
+          stream.close()
+          val out = java.util.zip.ZipOutputStream(java.io.FileOutputStream(path.s))
+
+          if kotlin then
+            out.putNextEntry(java.util.zip.ZipEntry("META-INF/sample.kotlin_module"))
+            out.closeEntry()
+
+          out.putNextEntry(java.util.zip.ZipEntry(entry.s))
+          out.write(bytes)
+          out.closeEntry()
+          out.close()
+          path
+
+        def marks(path: Text): List[Text] =
+          val result: Api | Throwable =
+            Checking.session(classpath, Nil): (checker: Checker) =>
+              checker.context.lay[Api | Throwable](Api.empty): context =>
+                Inspection.classpath(List(path), context)
+
+          result match
+            case api: Api =>
+              val members: List[Api.Entity] =
+                api.entities.values.to[List].filter(_.key.starts(t"xsbti.WorkspaceEdit"))
+
+              members.bind: (entity: Api.Entity) =>
+                entity.template.let(_.modifiers).or(Nil) + entity.definition.let(_.modifiers).or(Nil)
+
+              . filter { m => m == t"java" || m == t"kotlin" }
+              . distinct
+
+            case error: Throwable =>
+              List(error.toString.tt)
+
+        (marks(jar(t"fuel-kotlin", true)), marks(jar(t"fuel-java", false)))
+
+      . assert(_ == (List(t"kotlin"), List(t"java")))
 
       test(m"the JDK's public classes are walked, and named as Scala names them"):
         val result: Api | Throwable =
@@ -1983,7 +2035,71 @@ object Io extends caps.SharedCapability:
 class Logger() uses Io.out initially, Io.out:
   Io.out.toString
   def log(): Unit = Io.out.toString
+
+class Counter extends caps.Mutable:
+  var count: Int = 0
+  def read: Int = count
+  update def bump(): Unit = count += 1
+  consume def finish(): Int = count
 """
+
+      val none: List[Text] = List()
+
+      test(m"an update def and a consume def are recorded as such, and a var's setter is not"):
+        val output5: Text =
+          scratch(t"fuel-api5")
+
+        val notices: List[Compiler.Notice] =
+          Checking.session(classpath, Nil): (checker: Checker) =>
+            checker.build(Map(t"Capturing.scala" -> capturing), output5)
+
+        val errors: List[Text] = notices.filter(_.importance == Importance.Error).map(_.toString.tt)
+
+        Inspection.walk(List(output5), Nil, entries) match
+          case api: Api =>
+            def modifiers(name: Text): List[Text] =
+              api(t"capturing.Counter#$name").let(_.definition).let(_.modifiers).or(List(t"?"))
+
+            ( errors,
+              modifiers(t"bump"),
+              modifiers(t"finish"),
+              modifiers(t"read"),
+              modifiers(t"count"),
+              modifiers(t"count_=") )
+
+          case _ =>
+            (errors, none, none, none, none, none)
+
+      . assert(_ == (none, List(t"update"), List(t"consume"), none, none, none))
+
+      test(m"a tracked class parameter is recorded as such, and written"):
+        val output6: Text =
+          scratch(t"fuel-api6")
+
+        val source: Text =
+          t"package tracking\n\nimport scala.language.experimental.modularity\n\n" +
+            t"class Box(tracked val size: Int, val other: Int)\n"
+
+        val notices: List[Compiler.Notice] =
+          Checking.session(classpath, Nil): (checker: Checker) =>
+            checker.build(Map(t"Tracking.scala" -> source), output6)
+
+        val errors: List[Text] = notices.filter(_.importance == Importance.Error).map(_.toString.tt)
+
+        Inspection.walk(List(output6), Nil, entries) match
+          case api: Api =>
+            def declared(name: Text): Optional[Api.Declaration] =
+              api(t"tracking.Box#$name").let(_.definition)
+
+            ( errors,
+              declared(t"size").let(_.modifiers.has(t"tracked")).or(false),
+              declared(t"size").let(_.written.has(t"tracked")).or(false),
+              declared(t"other").let(_.modifiers.has(t"tracked")).or(true) )
+
+          case _ =>
+            (errors, false, false, true)
+
+      . assert(_ == (none, true, true, false))
 
       test(m"a uses clause is recorded and written, marking what is used initially"):
         val output4: Text =
@@ -3061,6 +3177,23 @@ class Logger() uses Io.out initially, Io.out:
         . assert(_ == (List(t"export export"), List(t"case class val")))
 
         test(m"a name both a type and a term has both glyphs, each described by its keywords"):
+          val template: Api.Declaration = Api.Declaration(Api.Kind.Trait, List(t"sealed"))
+          val term: Api.Declaration = Api.Declaration(Api.Kind.Val)
+
+          val entity: Api.Entity =
+            Api.Entity(Designator.Top(t"p"), t"Doc", true, term, template)
+
+          val api: Api = Api(Map(entity.key -> entity))
+          val resolver: Resolver = Resolver(api, scope)
+
+          ApiPages.rows(entity, true, api, scope, resolver).bind: row =>
+            contents(row.cells.head).bind:
+              case Inline.Icon(_, alt) => List(alt)
+              case _                   => Nil
+
+        . assert(_ == List(t"sealed trait", t"val"))
+
+        test(m"a class and its companion object have one glyph, described by both"):
           val template: Api.Declaration = Api.Declaration(Api.Kind.Class, List(t"final", t"java"))
           val term: Api.Declaration = Api.Declaration(Api.Kind.Object)
 
@@ -3075,7 +3208,112 @@ class Logger() uses Io.out initially, Io.out:
               case Inline.Icon(_, alt) => List(alt)
               case _                   => Nil
 
-        . assert(_ == List(t"final class", t"object"))
+        . assert(_ == List(t"final class object"))
+
+        test(m"an abstract class is dotted, and a lazy val has an ellipsis but an object none"):
+          def paths(kind: Api.Kind, modifiers: Text*): Int =
+            Icons.markup(kind, List(modifiers*)).s.split("<path").nn.length - 1
+
+          def discs(kind: Api.Kind): Int =
+            Icons.markup(kind, List(t"lazy")).s.split("<circle").nn.length - 1
+
+          ( paths(Api.Kind.Class),
+            paths(Api.Kind.Class, t"abstract"),
+            paths(Api.Kind.CaseClass, t"abstract"),
+            discs(Api.Kind.Val),
+            discs(Api.Kind.Object) )
+
+        . assert(_ == (2, 2, 2, 3, 0))
+
+        test(m"an open class's inner ring is its western half, and a final one has a pilcrow"):
+          val opened: Text = Icons.markup(Api.Kind.Class, List(t"open"))
+          val stopped: Text = Icons.markup(Api.Kind.Class, List(t"final"))
+
+          ( opened.contains(t"M 7 10 A 3 3 0 0 1 7 4"),
+            Icons.markup(Api.Kind.Class, Nil).contains(t"M 7 10 A 3 3 0 0 1 7 4"),
+            stopped.contains(t"""translate(12 9.92)""") )
+
+        . assert(_ == (true, false, true))
+
+        test(m"a sealed class or trait is walled, a case is a disc, and an enum's ring threaded"):
+          def one(kind: Api.Kind, modifiers: Text*): Boolean =
+            val markup: Text = Icons.markup(kind, List(modifiers*))
+            markup.contains(t"evenodd") && markup.s.split("<path").nn.length == 2
+
+          ( one(Api.Kind.Class, t"sealed"),
+            one(Api.Kind.Trait, t"sealed"),
+            one(Api.Kind.Class),
+            Icons.markup(Api.Kind.Class, List(t"sealed", t"abstract")).s.split("<path").nn.length - 1,
+            Icons.markup(Api.Kind.Case, Nil).contains(t"""r="2.8""""),
+            Icons.markup(Api.Kind.Enum, Nil).contains(t"""<circle cx="7" cy="3" r="1"/>"""),
+            Icons.markup(Api.Kind.Enum, Nil, true).s.split("<path").nn.length - 1 )
+
+        . assert(_ == (true, true, false, 1, true, true, 5))
+
+        test(m"what is abstract is dotted or hatched, and an extension's plus is one shape"):
+          def paths(kind: Api.Kind, modifiers: Text*): List[Text] =
+            Icons.markup(kind, List(modifiers*)).cut(t"<path").skip(1)
+
+          ( paths(Api.Kind.Class, t"abstract").all(_.contains(t"""stroke-width="0.3"""")),
+            Icons.markup(Api.Kind.Given, List(t"abstract")).contains(t"rotate(45 7 7)"),
+            paths(Api.Kind.Val, t"abstract").bind(_.cut(t"M ").skip(1)).size,
+            paths(Api.Kind.Var, t"abstract").bind(_.cut(t"M ").skip(1)).size,
+            Icons.markup(Api.Kind.Extension, Nil).cut(t"<polygon").size - 1,
+            Icons.markup(Api.Kind.Extension, Nil).contains(t"<rect x=\"10.5\"") )
+
+        . assert(_ == (true, true, 6, 5, 1, false))
+
+        test(m"a tracked val is crossed, and a type with a val or var is drawn about it"):
+          val tracked: Text = Icons.markup(Api.Kind.Val, List(t"tracked"))
+          val withVal: Text = Icons.markup(Api.Kind.Type, Nil, Api.Kind.Val)
+          val withVar: Text = Icons.markup(Api.Kind.Type, Nil, Api.Kind.Var)
+
+          val sealedHatch: List[Text] =
+            Icons.markup(Api.Kind.Class, List(t"sealed", t"abstract")).cut(t"<path").skip(1)
+
+          ( tracked.cut(t"<polygon").size - 1,
+            withVal.contains(t"5.01,5.85 8.99,5.85 7,9.3"),
+            withVar.contains(t"7,6.91"),
+            sealedHatch.size )
+
+        . assert(_ == (4, true, true, 1))
+
+        test(m"a pilcrow clears an underline, and a shelter an extension's plus"):
+          val both: Text = Icons.markup(Api.Kind.Def, List(t"final", t"override"))
+          val sheltered: Text = Icons.markup(Api.Kind.Extension, List(t"protected"))
+          (both.contains(t"translate(11.5 9.92)"), sheltered.contains(t"10,0.98"))
+
+        . assert(_ == (true, true))
+
+        test(m"an update def has a notch cut from its square, and a consume def a semicircle"):
+          val update: Text = Icons.markup(Api.Kind.Def, List(t"update"))
+          val consume: Text = Icons.markup(Api.Kind.Def, List(t"consume"))
+          val extension: Text = Icons.markup(Api.Kind.Extension, List(t"update"))
+
+          ( update.contains(t"7,6.23") && !update.contains(t"<rect"),
+            consume.contains(t"A 1.25 1.25 0 0 0 9.5 8.25"),
+            extension.contains(t"7,6.23") && extension.contains(t"10.5,1.5 11.5,1.5"),
+            Icons.markup(Api.Kind.Val, List(t"update")).contains(t"7,6.23") )
+
+        . assert(_ == (true, true, true, false))
+
+        test(m"a trait is half a class's rings, a type four arcs, and a pair a whole circle"):
+          val alone: Text = Icons.markup(Api.Kind.Trait, Nil)
+          val paired: Text = Icons.markup(Api.Kind.Trait, Nil, true)
+          val cased: Text = Icons.markup(Api.Kind.CaseClass, Nil, true)
+
+          def paths(markup: Text): Int = markup.s.split("<path").nn.length - 1
+
+          ( alone.contains(t"M 10.54 10.54 A 5 5 0 0 1 3.46 3.46"),
+            paths(alone),
+            paths(paired),
+            paths(Icons.markup(Api.Kind.Type, Nil)),
+            paths(Icons.markup(Api.Kind.Type, Nil, true)),
+            Icons.markup(Api.Kind.Type, List(t"opaque"), true).contains(t"""r="5.75""""),
+            cased.contains(t"""<circle cx="7" cy="7" r="1"/>"""),
+            Icons.markup(Api.Kind.Class, List(t"final"), true).contains(t"translate(12.68 9.92)") )
+
+        . assert(_ == (true, 2, 3, 4, 8, true, true, true))
 
         test(m"a glyph of the keyword stands in a column before a member's name"):
           val declaration: Api.Declaration = Api.Declaration(Api.Kind.CaseClass)
@@ -3107,43 +3345,64 @@ class Logger() uses Io.out initially, Io.out:
 
           ( plain.contains(t"""viewBox="0 0 14 14""""),
             plain.contains(t"<rect"),
-            finished.contains(t"""viewBox="0 0 14 14"""") && finished.contains(t"<circle"),
+            finished.contains(t"""viewBox="0 0 14 14"""") && finished.contains(t"translate(10.81 9.92)"),
             inlined.contains(t"skewX"),
-            translucent.contains(t"<mask"),
-            hollow.contains(t"evenodd"),
+            translucent.contains(t"""fill="none" stroke="currentColor" stroke-width="0.3""""),
+            hollow.contains(t"M 6.5 6.5 h 1 v 1 h -1 Z"),
             slashed.contains(t"rotate(45 7 7)"),
             overridden.contains(t"""y="12.6""""),
             placed.contains(t"""x="10"""") && placed.contains(t"""x="2.5"""") )
 
         . assert(_ == (true, true, true, true, true, true, true, true, true))
 
-        test(m"a stop and infix squares stand close to each shape"):
-          def stop(kind: Api.Kind): Boolean =
-            Icons.markup(kind, List(t"final")).contains(t"""viewBox="0 0 14 14"""")
+        test(m"every glyph has the same box, whatever decorates it"):
+          val kinds: List[Api.Kind.Scala] =
+            List
+              ( Api.Kind.Class, Api.Kind.CaseClass, Api.Kind.Object, Api.Kind.Trait, Api.Kind.Type,
+                Api.Kind.Enum, Api.Kind.Case, Api.Kind.Def, Api.Kind.Val, Api.Kind.Var,
+                Api.Kind.Given )
 
-          ( List(Api.Kind.Def, Api.Kind.Val, Api.Kind.Case, Api.Kind.Class).all(stop),
-            Icons.markup(Api.Kind.Trait, List(t"infix")).contains(t"""x="4"""") )
+          val decorated: List[List[Text]] =
+            List
+              ( List(t"final", t"infix", t"into"), List(t"java", t"annotation", t"lazy"),
+                List(t"kotlin", t"override", t"protected"), List(t"key", t"optional") )
 
-        . assert(_ == (true, true))
+          val boxes: List[Text] = kinds.bind: (kind: Api.Kind.Scala) =>
+            decorated.map: (modifiers: List[Text]) =>
+              Icons.markup(kind, modifiers).cut(t">").head
 
-        test(m"a package is a cube, and a case class's outer ring is closed"):
+          ( boxes.distinct.size,
+            Icons.markup(Api.Kind.Trait, List(t"infix")).contains(t"""x="12.5"""") )
+
+        . assert(_ == (1, true))
+
+        test(m"a package is a cube, a case class a class about a disc, and protected a shelter"):
           val cube: Text = Icons.markup(Api.Kind.Package, Nil)
           val cased: Text = Icons.markup(Api.Kind.CaseClass, Nil)
-          (cube.contains(t"stroke"), cube.contains(t"<rect"), cased.contains(t"evenodd"))
+          val centre: Text = t"""<circle cx="7" cy="7" r="1"/>"""
+          val rim: Text = t"M 10.54 10.54 A 5 5 0 1 1 10.54 3.46"
 
-        . assert(_ == (true, false, true))
+          ( cube.cut(t"<polygon").size - 1,
+            cube.contains(t"stroke"),
+            cased.contains(centre) && cased.contains(rim),
+            Icons.markup(Api.Kind.Class, List(t"protected")).contains(t"7,0 10.5,1.14") )
 
-        test(m"into, annotation and java each decorate the glyph"):
+        . assert(_ == (3, false, true, true))
+
+        test(m"into, annotation, java and kotlin each decorate the glyph, a gap from it"):
           val plain: Text = Icons.markup(Api.Kind.Class, Nil)
           val into: Text = Icons.markup(Api.Kind.Class, List(t"into"))
           val annotation: Text = Icons.markup(Api.Kind.Class, List(t"annotation"))
           val java: Text = Icons.markup(Api.Kind.Class, List(t"java"))
+          val kotlin: Text = Icons.markup(Api.Kind.Class, List(t"kotlin"))
+          val method: Text = Icons.markup(Api.Kind.Def, List(t"java"))
 
-          ( into.contains(t"<polygon") && into.contains(t"""viewBox="-0.5 """),
-            annotation.contains(t"""viewBox="0 0 15.5 14""""),
-            java != plain && java.contains(t"""viewBox="0 0 14 14"""") )
+          ( into.contains(t"<polygon") && into.contains(t"""viewBox="0 0 14 14""""),
+            annotation.contains(t"""translate(11.92 0.3)"""),
+            java.contains(t"""translate(-1.09 0.3)""") && java != kotlin && java != plain,
+            method.contains(t"""translate(0.77 0.3)""") )
 
-        . assert(_ == (true, true, true))
+        . assert(_ == (true, true, true, true))
 
         test(m"java and annotation are said by the glyph, not written in a signature"):
           val declaration: Api.Declaration =
