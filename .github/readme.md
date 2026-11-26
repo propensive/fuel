@@ -354,7 +354,11 @@ An overloaded name is one page, since each of its variants means the same thing,
 its companion object are one page, which can speak of "the type" and "the companion object".
 A glyph of the member's keyword — the icons of Amok, drawn on their grid — precedes its name in
 every table and in its page's title, transformed by its modifiers: a full stop follows a `final`
-one, an `inline` one is sheared, a `transparent` one striped.
+one, an `inline` one is sheared, a `transparent` one drawn in outline, an abstract one dotted.
+A class is three quarters of two rings, a trait half of them, a type four arcs of a ring, and an
+enum five discs; a class, a trait, a type or an enum with a companion object is one glyph, a
+whole circle, the object's ring filling the sectors the type leaves open, or threading the
+enum's discs.
 A parameter is an entity too, a member of the type form of what it parameterises: in package
 `quux`, `def foo[T](bar: Baz)` is the page `quux.foo`, and its parameters are `quux.foo#bar` and
 `quux.foo#T`, listed in a table of their own on its page; a class's constructor parameters and
@@ -423,7 +427,13 @@ signature; inline code in prose (`` `Text` ``), resolved as a name in code would
 written, then under the page's own entity and those enclosing it, then under the `import`s of
 the overlay (or, for a Markdown document, the `imports` setting and the imports its own fences
 make), then `scala`, `scala.Predef` and `java.lang` — a name which several entities answer to
-in the same scope is a caution and stays plain. A name is followed through an export in its
+in the same scope is a caution and stays plain. A fence's import brings what it would in code:
+`import a.b.*` every member of `a.b`, and `import a.b.C` (or `a.b.{C, D as E}`) those names
+alone, which come before a wildcard's, so that naming one member of a library does not set its
+others beside an umbrella package's exports of them. The caution is at the line the name is
+written on (a table's, at the line its fence opens on) and says which entities answer; an
+export and what it exports — a type with parameters included — are one entity, however many
+imports reach it. A name is followed through an export in its
 prefix (`soundness.Text.s` is the `s` of the `anticipation.internal.Text` it exports), a member
 of a type after `#` is found where the type inherits it (`#List#toList`) or among the
 extensions which apply to the type and reach it — from its companion or an object enclosing it,

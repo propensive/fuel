@@ -34,6 +34,7 @@ package fuel
 
 import soundness.*
 
+import dysasymptotics.linearSize
 import pyrocosm.{Block, Digests, Tone}
 
 object Doc:
@@ -104,21 +105,72 @@ object Doc:
         val tables: Tables = Tables(path, linker)
         val embeddings: List[Embedding] = List(scala, Embedding.JavaCode, tables)
         val blocks: List[Block] = Blocks.of(markdown, embeddings, context)
-        val problems: List[Block] = scala.problems + tables.problems + ambiguous(path, linker) + open
+        val unclear: List[Block] = ambiguous(path, text, linker, context, tables.ambiguous)
+        val problems: List[Block] = scala.problems + tables.problems + unclear + open
         val title: Text = Blocks.title(blocks).or(filename(path))
         Doc(path, title, blocks, problems, context.references, context.anchors, text)
 
-  // A reference which named several entities is a caution: it is shown unlinked.
-  private def ambiguous(path: Text, linker: Linker): List[Block] =
-    linker.ambiguities.map: (reference: Text) =>
-      ambiguity(reference, Block.Location(path))
+  // A reference which named several entities is a caution: it is shown unlinked. Each is
+  // reported where the prose has it, on its line; one the prose did not place — in a glossary's
+  // definition, say — at the document alone, unless it is one of the `elsewhere`, which a table
+  // has reported at its own place.
+  private def ambiguous
+    ( path:      Text,
+      text:      Text,
+      linker:    Linker,
+      context:   Blocks.Context,
+      elsewhere: List[Text] )
+  :   List[Block] =
 
-  // The caution that a reference names several entities, at its place in a document or on an
-  // API's page, `↯/f.25.3`.
-  def ambiguity(reference: Text, location: Block.Location): Block.Diagnostic =
-    val text: Text = t"`$reference` names more than one entity, so it is not linked; qualify it."
+    val lines: List[Text] = text.cut(t"\n")
+
+    // The line the reference is written on: the first at or after its paragraph's first, and
+    // before the paragraph ends, to have it in backticks.
+    def written(first: Int, reference: Text): Int =
+      def recur(line: Int, rest: List[Text]): Int = rest match
+        case content :: rest if content.trim != t"" =>
+          if content.contains(t"`$reference`") then line else recur(line + 1, rest)
+
+        case _ =>
+          first
+
+      recur(first, lines.skip(first - 1))
+
+    val placed: List[Block] = context.ambiguities.map: (first: Int, ambiguity: Linker.Ambiguity) =>
+      val line: Int = written(first, ambiguity.reference)
+
+      val excerpt: List[Block] =
+        if text == t"" then Nil
+        else Excerpts.plainAt(text, line, ambiguity.reference, Block.Note.Style.Caution)
+
+      Doc.ambiguity(ambiguity, Block.Location(path, line), excerpt)
+
+    val known: List[Text] = context.ambiguities.map(_(1).reference) + elsewhere
+
+    val others: List[Linker.Ambiguity] = linker.ambiguities.filter:
+      (ambiguity: Linker.Ambiguity) => !known.has(ambiguity.reference)
+
+    val unplaced: List[Block] = others.map(Doc.ambiguity(_, Block.Location(path)))
+
+    placed + unplaced
+
+  // The caution that a reference names several entities, which it names where they are known,
+  // at its place in a document or on an API's page, `↯/f.25.3`.
+  def ambiguity
+    ( ambiguity: Linker.Ambiguity, location: Block.Location, excerpt: List[Block] = Nil )
+  :   Block.Diagnostic =
+
+    val candidates: Text =
+      if ambiguity.candidates.nil then t""
+      else t" (${ambiguity.candidates.map { (key: Text) => t"`$key`" }.join(t", ")})"
+
+    val reference: Text = ambiguity.reference
+
+    val text: Text =
+      t"`$reference` names more than one entity$candidates, so it is not linked; qualify it."
+
     val code: fulminate.Bolt = FuelBolts(FuelBolts.core, FuelBolts.ambiguous)
-    Block.Diagnostic(Tone.Warning, location, List(Block.paragraph(text)), code = code)
+    Block.Diagnostic(Tone.Warning, location, List(Block.paragraph(text)), excerpt, code = code)
 
   // A document compiled in two parts, each kept by the key of its own inputs: its prose, with a
   // sentinel where each fence is — keyed by that prose, unlinked, its place on the site, the
@@ -177,7 +229,7 @@ object Doc:
       linker.learn(imports)
       val context: Blocks.Context = Blocks.Context(linker, page, glossary)
       val blocks: List[Block] = Blocks.of(markdown, List(Blocks.sentinels(linker)), context)
-      val problems: List[Block] = ambiguous(path, linker)
+      val problems: List[Block] = ambiguous(path, text, linker, context, Nil)
       val prose: Output.Prose = Output.Prose(blocks, problems, context.references, context.anchors)
       cache.prose(key, prose)
       prose

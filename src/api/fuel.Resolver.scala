@@ -39,10 +39,11 @@ import pyrocosm.{Inline, Purview, Token}
 import stenography.{Designator, Syntax}
 
 // The scope a page's references resolve in: the entity it is about and those enclosing it (so
-// that a member may be named by its leaf), the packages and objects whose members are imported,
-// and what every Scala source sees (`scala`, `scala.Predef`, `java.lang`). A name is tried as
-// written, then under each enclosing entity, then under each import; one entity found is the
-// link, several are an ambiguity, none is plain text.
+// that a member may be named by its leaf), the names imported one by one (`named`: each as it
+// is written, and what it names), the packages and objects whose every member is imported
+// (`imports`), and what every Scala source sees (`scala`, `scala.Predef`, `java.lang`). A name
+// is tried as written, then under each enclosing entity, then as a name imported, then under
+// each import; one entity found is the link, several are an ambiguity, none is plain text.
 object Scope:
   val standard: List[Locator] =
     List(Locator(t"java.lang"), Locator(t"scala"), Locator(t"scala.Predef"))
@@ -89,7 +90,8 @@ object Scope:
 case class Scope
   ( enclosing: List[Locator],
     imports:   List[Locator],
-    standard:  List[Locator] = Scope.standard ):
+    standard:  List[Locator]         = Scope.standard,
+    named:     List[(Text, Locator)] = Nil ):
 
   def all: List[Locator] = enclosing + imports + standard
 
@@ -121,10 +123,12 @@ extends Linker:
   @volatile
   private var defined: List[(Text, Linker.Kind, Text)] = Nil
 
-  // The references found ambiguous, latest first.
-  private val ambiguous: Atomic.Ref[List[Text]] = Atomic(Nil: List[Text])
+  // The references found ambiguous, latest first, each with the keys of what it named.
+  private val ambiguous: Atomic.Ref[List[Linker.Ambiguity]] =
+    Atomic(Nil: List[Linker.Ambiguity])
 
-  private def ambiguity(reference: Text): Unit = ambiguous.since(reference :: _)
+  private def ambiguity(reference: Text, candidates: List[Text] = Nil): Unit =
+    ambiguous.since(Linker.Ambiguity(reference, candidates) :: _)
 
   def define(anchor: Text, names: List[(Text, Linker.Kind)]): Unit =
     val latest: List[(Text, Linker.Kind, Text)] =
@@ -160,44 +164,101 @@ extends Linker:
 
         !ofType && (entity.definition.present || ofTerm)
 
-  def ambiguities: List[Text] = ambiguous().reverse.distinct
+  def ambiguities: List[Linker.Ambiguity] = ambiguous().reverse.distinct
 
-  // `import a.b.*`, `import a.b.C` and `import a.b.{C, D as E}`: the package or object itself
-  // for a wildcard, else the named members' parent (which is enough to resolve their leaves).
+  // What a fragment's imports bring into scope, as code has it: `import a.b.*` (or `a.b.given`)
+  // every member of the package or object `a.b`, and `import a.b.C` the name `C` alone, so that
+  // another member of `a.b` is no more in scope than it was. Of `import a.b.{C, D as E, F as _,
+  // *}`, `C` is `a.b.C`, `E` is `a.b.D`, `F` is nothing, and `*` is every member; a line's
+  // clauses are separated by commas outside its braces.
   def learn(imports: List[Text]): Unit =
-    val learned: List[Locator] = imports.bind: (line: Text) =>
+    // The clauses of a line, cut at each comma which no brace encloses.
+    def clauses(parts: List[Text], open: Optional[Text], done: List[Text]): List[Text] =
+      parts match
+        case part :: rest =>
+          val text: Text = open.lay(part) { (open: Text) => t"$open,$part" }
+
+          if text.contains(t"{") && !text.contains(t"}") then clauses(rest, text, done)
+          else clauses(rest, Unset, text.trim :: done)
+
+        case _ =>
+          done.reverse
+
+    // One selector of a prefix: every member, or a name and what it names.
+    def selector(prefix: Text, text: Text): Optional[Locator | (Text, Locator)] =
+      text.cut(t" ").filter(_ != t"") match
+        case (t"*" | t"_" | t"given") :: _             => Locator(prefix)
+        case _ :: (t"as" | t"=>") :: t"_" :: _         => Unset
+        case name :: (t"as" | t"=>") :: renamed :: _   => (renamed, Locator(t"$prefix.$name"))
+        case name :: _                                 => (name, Locator(t"$prefix.$name"))
+        case _                                         => Unset
+
+    def clause(text: Text): List[Locator | (Text, Locator)] =
+      val braced: Optional[Ordinal] = text.where(_ == '{')
+
+      val (prefix, selectors) = braced.lay((t"", List(text))): (brace: Ordinal) =>
+        val inner: Text = text.skip(brace.n0 + 1).sub(t"}", t"")
+        (text.keep(brace.n0).trim, inner.cut(t","))
+
+      // Without braces, the selector is what follows the last `.`.
+      val (path, picked) = if braced.present then (prefix, selectors) else
+        val segments: List[Text] = text.cut(t".").map(_.trim).filter(_ != t"")
+        (segments.keep(segments.size - 1).join(t"."), segments.reverse.keep(1))
+
+      val base: Text = if path.ends(t".") then path.skip(1, Rtl) else path
+      if base == t"" then Nil else picked.bind(selector(base, _).let(List(_)).or(Nil))
+
+    val learned: List[Locator | (Text, Locator)] = imports.bind: (line: Text) =>
       val body: Text = line.trim.skip(t"import ".length).trim
-      val cleaned: Text = body.sub(t"{", t"").sub(t"}", t"")
+      clauses(body.cut(t","), Unset, Nil).bind(clause)
 
-      cleaned.cut(t",").bind: (clause: Text) =>
-        val path: Text = clause.trim.cut(t" ").head
-        val segments: List[Text] = path.cut(t".").filter(_ != t"")
-        val prefix: List[Text] = segments.keep(segments.size - 1)
-        if prefix.nil then Nil else List(Locator(prefix.join(t".")))
+    val wildcards: List[Locator] = learned.bind:
+      case locator: Locator => List(locator)
+      case _                => Nil
 
-    scope = scope.copy(imports = (scope.imports + learned).distinct)
+    // The latest import of a name is the one it has.
+    val names: List[(Text, Locator)] =
+      learned.bind:
+        case (name: Text, locator: Locator) => List((name, locator))
+        case _                              => Nil
+
+      . reverse
+
+    scope =
+      scope.copy
+        ( imports = (scope.imports + wildcards).distinct,
+          named   = (names + scope.named).distinct )
 
   // The entity a designator written in prose names, through what its prefix forwards to and
-  // what a type inherits, then through an exported alias to its target.
+  // what a type inherits, then — where it is an export, whether of a term, of a type or of a
+  // type with parameters — through to what it exports, whose page is its own.
   private def entity(designator: Locator): Optional[Api.Entity] =
     api.resolve(designator).let: (found: Api.Entity) =>
-      found.alias.let(Locator.of).let(api.find).or(found)
+      if found.exported then api.through(found) else found
 
   // The keys of the packages and objects whose members are in scope, which an extension
   // declared in one of them is reached through.
   private def reachable: Set[Text] = scope.all.map(Api.key(_)).to[Set]
 
+  // The keys of what is imported by its name.
+  private def chosen: Set[Text] =
+    scope.named.map { (entry: (Text, Locator)) => Api.key(entry(1)) }.to[Set]
+
   // Whether an extension reaches its receiver here: without an import (it is in the companion
   // of the receiver or of a base, or in an object enclosing it), or through what is in scope —
-  // the object or package which declares it, or one which exports it.
+  // the object or package which declares it, or one which exports it — or by its own name,
+  // or an export's of it, imported.
   private def admitted(applicable: Api.Applicable): Boolean =
     val keys: Set[Text] = reachable
+    val names: Set[Text] = chosen
 
     def exported: Boolean = api.exporters.at(applicable.key).or(Nil).exists:
       (forwarder: Api.Entity) =>
-        forwarder.parent.lay(false) { (p: Locator) => keys.has(Api.key(p)) }
+        names.has(forwarder.key) ||
+          forwarder.parent.lay(false) { (p: Locator) => keys.has(Api.key(p)) }
 
-    api.implicitly(applicable) || applicable.importFrom.lay(false)(keys.has(_)) || exported
+    api.implicitly(applicable) || applicable.importFrom.lay(false)(keys.has(_)) ||
+      names.has(applicable.key) || exported
 
   // The extensions of a name which apply to a receiver, written as its members
   // (`Angle#principal`): the receiver's own (an alias seen through) and those of every value,
@@ -219,12 +280,14 @@ extends Linker:
   private def bare(designator: Locator): List[Api.Entity] =
     if designator.parent.present then Nil else
       val keys: Set[Text] = reachable
+      val names: Set[Text] = chosen
 
       api.byName.at(designator.name).or(Nil).filter: (entity: Api.Entity) =>
         val extension: Boolean = entity.declarations.exists(_.kind == Api.Kind.Extension)
 
         val inScope: Boolean =
-          entity.parent.lay(false) { (p: Locator) => keys.has(Api.key(p)) }
+          names.has(entity.key) ||
+            entity.parent.lay(false) { (p: Locator) => keys.has(Api.key(p)) }
 
         extension && (api.unimported.has(entity.key) || inScope)
 
@@ -232,9 +295,20 @@ extends Linker:
   private def under(prefix: Locator, designator: Locator): Locator =
     designator.copy(parent = designator.parent.lay(prefix)(under(prefix, _)))
 
-  // As written first, then under the enclosing entities (innermost first), then under the
-  // imports, then the standard scope: the first tier which names anything decides, as a name
-  // in code resolves in its innermost scope, so an outer match is no ambiguity. A sigil keeps
+  // A locator whose first name is one imported by name, as each such import has it: the first
+  // name gives way to what it names, in the form it is written in.
+  private def renamed(designator: Locator): List[Locator] = designator.parent match
+    case parent: Locator =>
+      renamed(parent).map { (parent: Locator) => designator.copy(parent = parent) }
+
+    case _ =>
+      scope.named.filter(_(0) == designator.name).keep(1).map: (entry: (Text, Locator)) =>
+        entry(1).copy(isType = designator.isType)
+
+  // As written first, then under the enclosing entities (innermost first), then as a name
+  // imported, then under the imports of every member, then the standard scope: the first tier
+  // which names anything decides, as a name in code resolves in its innermost scope and a name
+  // imported shadows a wildcard's, so an outer match is no ambiguity. A sigil keeps
   // only the entities of its kind in every tier, which is how `#title` on `Doc`'s page finds
   // `Doc#title` through the enclosing tier, and `#Doc` under an import finds the type.
   //
@@ -272,8 +346,10 @@ extends Linker:
     val extension: List[Api.Entity] =
       if kind == Linker.Kind.Term then fit(bare(designator)) else Nil
 
+    val named: List[Api.Entity] = renamed(designator).bind(lookup).distinct
+
     val tiers: List[List[Api.Entity]] =
-      List(lookup(designator), tier(scope.enclosing), tier(scope.imports)) + standard +
+      List(lookup(designator), tier(scope.enclosing), named, tier(scope.imports)) + standard +
         List(extension)
 
     tiers.seek(!_.nil).or(Nil)
@@ -381,7 +457,7 @@ extends Linker:
           case many =>
             // The same page reached by several routes is no ambiguity.
             if many.map(_.key).distinct.size == 1 then many.head.let(destination) else
-              if record then ambiguity(text)
+              if record then ambiguity(text, many.map(_.address).distinct)
               Unset
 
     apis.let(_.split(name)) match

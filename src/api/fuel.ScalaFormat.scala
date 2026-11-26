@@ -52,6 +52,14 @@ object ScalaFormat extends Format:
   override def glyph(declaration: Api.Declaration, exported: Boolean = false): Inline =
     Icons.of(declaration, exported)
 
+  // A class or a trait and its companion object are one glyph, a whole circle.
+  override def glyphs(entity: Api.Entity, exported: Boolean = false): List[Inline] =
+    val one: Optional[Inline] =
+      entity.template.let: (template: Api.Declaration) =>
+        entity.definition.let(Icons.of(template, _, exported))
+
+    one.let(List(_)).or(super.glyphs(entity, exported))
+
   override def signature(name: Text, declaration: Api.Declaration, api: Api, scope: Scope)
   :   Block =
 

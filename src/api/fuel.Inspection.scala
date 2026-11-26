@@ -134,7 +134,8 @@ object Inspection:
   // symbol — its signatures, never a body — which is what makes it robust where unpickling
   // whole trees is not; a class which cannot be loaded is left out. A `.class` entry with no
   // `.tasty` beside it is a Java class, which the compiler reads from its classfile, and of
-  // which only what is public is kept.
+  // which only what is public is kept; or a Kotlin class, read as a Java class is, when the jar
+  // is Kotlin's, as the module descriptor Kotlin writes in every jar it builds says.
   // The `shadowed` packages are the project's own, whose copies in a jar (a launcher assembly
   // carrying the project itself) are left to the project's sources: loading them into the
   // session ahead of the compile leaves it writing nothing.
@@ -164,6 +165,13 @@ object Inspection:
           val segments: List[Text] = full.cut(t".")
           val pkg: Text = segments.keep(segments.size - 1).join(t".")
           if !shadows(pkg) then walker.load(full, java)
+
+        val kotlin: Boolean = entries.exists: (entry: Text) =>
+          entry.starts(t"META-INF/") && entry.ends(t".kotlin_module")
+
+        if kotlin then
+          val named: List[Text] = javas.map(_.skip(6, Rtl).tr('/', '.'))
+          walker.kotlins = (walker.kotlins.to[List] + named).to[Set]
 
         tastys.each(load(_, false))
         javas.each(load(_, true))
@@ -254,6 +262,23 @@ object Inspection:
     import quotes.reflect.*
 
     given Bindings = Bindings()
+
+    // The top-level classes, by their full names, of the Kotlin jars being walked, which the
+    // compiler reads as it reads Java's.
+    var kotlins: Set[Text] = Set()
+
+    // Whether a symbol is declared within one of them: its outermost class is.
+    private def isKotlin(symbol: Symbol): Boolean =
+      def outermost(symbol: Symbol): Symbol =
+        if symbol.owner.isNoSymbol || symbol.owner.isPackageDef then symbol
+        else outermost(symbol.owner)
+
+      // An object's class is named with a `$` its classfile's name does not have.
+      !kotlins.nil && safely:
+        val name: Text = outermost(symbol).fullName.tt
+        kotlins.has(if name.ends(t"$$") then name.skip(1, Rtl) else name)
+
+      . or(false)
 
     // The compiler's context behind the quotes, through which its symbol table is reached.
     private def context: dotty.tools.dotc.core.Contexts.Context =
@@ -357,6 +382,22 @@ object Inspection:
 
       . or(false)
 
+    // Whether a class parameter is `tracked`, which the quotes cannot say.
+    private def isTracked(symbol: Symbol): Boolean =
+      safely:
+        reading:
+          import dotty.tools.dotc.core.Symbols.toDenot
+          given dotty.tools.dotc.core.Contexts.Context = context
+
+          symbol match
+            case symbol: dotty.tools.dotc.core.Symbols.Symbol =>
+              symbol.is(dotty.tools.dotc.core.Flags.Tracked)
+
+            case _ =>
+              false
+
+      . or(false)
+
     // Whether a class, or an object's class, extends an annotation class.
     private def isAnnotation(symbol: Symbol): Boolean =
       val annotations: Set[Text] =
@@ -372,13 +413,50 @@ object Inspection:
 
       . or(false)
 
+    // `consume` is kept as an annotation, a class of the object `scala.caps.internal`.
+    private def isConsume(symbol: Symbol): Boolean =
+      val names: Set[Text] = Set(t"scala.caps.internal$$.consume", t"scala.caps.internal.consume")
+
+      safely:
+        reading:
+          List.from(symbol.annotations).exists: annotation =>
+            names.has(annotation.tpe.typeSymbol.fullName.tt)
+
+      . or(false)
+
+    // An `update def` is a method the compiler marks mutable, as it does a `consume def`, which
+    // is written without `update`, and the setter it makes for a `var`, which is not written.
+    private def isUpdate(symbol: Symbol): Boolean =
+      symbol.isDefDef && symbol.flags.is(Flags.Mutable) && !isConsume(symbol) && !isAccessor(symbol)
+
+    private def isAccessor(symbol: Symbol): Boolean =
+      safely:
+        reading:
+          import dotty.tools.dotc.core.Symbols.toDenot
+          given dotty.tools.dotc.core.Contexts.Context = context
+
+          symbol match
+            case symbol: dotty.tools.dotc.core.Symbols.Symbol =>
+              symbol.is(dotty.tools.dotc.core.Flags.Accessor)
+
+            case _ =>
+              false
+
+      . or(false)
+
     private def modifiers(symbol: Symbol): List[Text] =
       val flags = symbol.flags
+
+      // Read from a classfile: compiled from Java, or from Kotlin.
+      val foreign: Boolean = flags.is(Flags.JavaDefined) && !flags.is(Flags.Package)
 
       val pairs: List[(Boolean, Text)] = List(
         (flags.is(Flags.Protected), t"protected"),
         (flags.is(Flags.Override), t"override"),
         (flags.is(Flags.Abstract) && !flags.is(Flags.Trait) && !symbol.isTypeDef, t"abstract"),
+        // A member without a body: a def, a val or a given, said to be abstract though not
+        // written so.
+        (flags.is(Flags.Deferred) && !symbol.isTypeDef && !symbol.isClassDef, t"abstract"),
         (flags.is(Flags.Sealed), t"sealed"),
         (flags.is(Flags.Open), t"open"),
         (flags.is(Flags.Final) && !flags.is(Flags.Module) && !flags.is(Flags.Package), t"final"),
@@ -386,12 +464,16 @@ object Inspection:
         (flags.is(Flags.Transparent), t"transparent"),
         (flags.is(Flags.Inline), t"inline"),
         (flags.is(Flags.Lazy), t"lazy"),
+        (isUpdate(symbol), t"update"),
+        (isConsume(symbol), t"consume"),
         // The compiler also marks an object which holds an opaque type, which is not one itself.
         (flags.is(Flags.Opaque) && !flags.is(Flags.Module), t"opaque"),
         (flags.is(Flags.Infix), t"infix"),
         (isInto(symbol), t"into"),
+        (isTracked(symbol), t"tracked"),
         (isAnnotation(symbol), t"annotation"),
-        (flags.is(Flags.JavaDefined) && !flags.is(Flags.Package), t"java"),
+        (foreign && !isKotlin(symbol), t"java"),
+        (foreign && isKotlin(symbol), t"kotlin"),
         (flags.is(Flags.Implicit), t"implicit"))
 
       pairs.filter(_(0)).map(_(1))
