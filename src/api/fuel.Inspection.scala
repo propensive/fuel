@@ -382,6 +382,22 @@ object Inspection:
 
       . or(false)
 
+    // Whether a class parameter is `tracked`, which the quotes cannot say.
+    private def isTracked(symbol: Symbol): Boolean =
+      safely:
+        reading:
+          import dotty.tools.dotc.core.Symbols.toDenot
+          given dotty.tools.dotc.core.Contexts.Context = context
+
+          symbol match
+            case symbol: dotty.tools.dotc.core.Symbols.Symbol =>
+              symbol.is(dotty.tools.dotc.core.Flags.Tracked)
+
+            case _ =>
+              false
+
+      . or(false)
+
     // Whether a class, or an object's class, extends an annotation class.
     private def isAnnotation(symbol: Symbol): Boolean =
       val annotations: Set[Text] =
@@ -438,6 +454,9 @@ object Inspection:
         (flags.is(Flags.Protected), t"protected"),
         (flags.is(Flags.Override), t"override"),
         (flags.is(Flags.Abstract) && !flags.is(Flags.Trait) && !symbol.isTypeDef, t"abstract"),
+        // A member without a body: a def, a val or a given, said to be abstract though not
+        // written so.
+        (flags.is(Flags.Deferred) && !symbol.isTypeDef && !symbol.isClassDef, t"abstract"),
         (flags.is(Flags.Sealed), t"sealed"),
         (flags.is(Flags.Open), t"open"),
         (flags.is(Flags.Final) && !flags.is(Flags.Module) && !flags.is(Flags.Package), t"final"),
@@ -451,6 +470,7 @@ object Inspection:
         (flags.is(Flags.Opaque) && !flags.is(Flags.Module), t"opaque"),
         (flags.is(Flags.Infix), t"infix"),
         (isInto(symbol), t"into"),
+        (isTracked(symbol), t"tracked"),
         (isAnnotation(symbol), t"annotation"),
         (foreign && !isKotlin(symbol), t"java"),
         (foreign && isKotlin(symbol), t"kotlin"),

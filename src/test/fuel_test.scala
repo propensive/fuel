@@ -1599,6 +1599,14 @@ object Util:
 
       . assert(_ == false)
 
+      test(m"a member without a body is abstract, though that is not written"):
+        entity(t"sample.Shape#area").let(_.definition).let: (area: Api.Declaration) =>
+          (area.modifiers.has(t"abstract"), area.written.has(t"abstract"))
+
+        . or((false, true))
+
+      . assert(_ == (true, false))
+
       test(m"a given and a val are declarations of their kinds"):
         ( entity(t"sample.Util.given_Ordering_Doc").let(_.definition.let(_.kind)),
           entity(t"sample.Util.limit").let(_.definition.let(_.kind)) )
@@ -2034,6 +2042,35 @@ class Counter extends caps.Mutable:
             (errors, none, none, none, none, none)
 
       . assert(_ == (none, List(t"update"), List(t"consume"), none, none, none))
+
+      test(m"a tracked class parameter is recorded as such, and written"):
+        val output6: Text =
+          scratch(t"fuel-api6")
+
+        val source: Text =
+          t"package tracking\n\nimport scala.language.experimental.modularity\n\n" +
+            t"class Box(tracked val size: Int, val other: Int)\n"
+
+        val notices: List[Compiler.Notice] =
+          Checking.session(classpath, Nil): (checker: Checker) =>
+            checker.build(Map(t"Tracking.scala" -> source), output6)
+
+        val errors: List[Text] = notices.filter(_.importance == Importance.Error).map(_.toString.tt)
+
+        Inspection.walk(List(output6), Nil, entries) match
+          case api: Api =>
+            def declared(name: Text): Optional[Api.Declaration] =
+              api(t"tracking.Box#$name").let(_.definition)
+
+            ( errors,
+              declared(t"size").let(_.modifiers.has(t"tracked")).or(false),
+              declared(t"size").let(_.written.has(t"tracked")).or(false),
+              declared(t"other").let(_.modifiers.has(t"tracked")).or(true) )
+
+          case _ =>
+            (errors, false, false, true)
+
+      . assert(_ == (none, true, true, false))
 
       test(m"a uses clause is recorded and written, marking what is used initially"):
         val output4: Text =
@@ -3111,7 +3148,7 @@ class Counter extends caps.Mutable:
         . assert(_ == (List(t"export export"), List(t"case class val")))
 
         test(m"a name both a type and a term has both glyphs, each described by its keywords"):
-          val template: Api.Declaration = Api.Declaration(Api.Kind.Type, List(t"opaque"))
+          val template: Api.Declaration = Api.Declaration(Api.Kind.Trait, List(t"sealed"))
           val term: Api.Declaration = Api.Declaration(Api.Kind.Val)
 
           val entity: Api.Entity =
@@ -3125,7 +3162,7 @@ class Counter extends caps.Mutable:
               case Inline.Icon(_, alt) => List(alt)
               case _                   => Nil
 
-        . assert(_ == List(t"opaque type", t"val"))
+        . assert(_ == List(t"sealed trait", t"val"))
 
         test(m"a class and its companion object have one glyph, described by both"):
           val template: Api.Declaration = Api.Declaration(Api.Kind.Class, List(t"final", t"java"))
@@ -3157,7 +3194,7 @@ class Counter extends caps.Mutable:
             discs(Api.Kind.Val),
             discs(Api.Kind.Object) )
 
-        . assert(_ == (2, 14, 14, 3, 0))
+        . assert(_ == (2, 2, 2, 3, 0))
 
         test(m"an open class's inner ring is its western half, and a final one has a pilcrow"):
           val opened: Text = Icons.markup(Api.Kind.Class, List(t"open"))
@@ -3177,12 +3214,47 @@ class Counter extends caps.Mutable:
           ( one(Api.Kind.Class, t"sealed"),
             one(Api.Kind.Trait, t"sealed"),
             one(Api.Kind.Class),
-            Icons.markup(Api.Kind.Class, List(t"sealed", t"abstract")).s.split("<path").nn.length,
+            Icons.markup(Api.Kind.Class, List(t"sealed", t"abstract")).s.split("<path").nn.length - 1,
             Icons.markup(Api.Kind.Case, Nil).contains(t"""r="2.8""""),
             Icons.markup(Api.Kind.Enum, Nil).contains(t"""<circle cx="7" cy="3" r="1"/>"""),
             Icons.markup(Api.Kind.Enum, Nil, true).s.split("<path").nn.length - 1 )
 
-        . assert(_ == (true, true, false, 15, true, true, 5))
+        . assert(_ == (true, true, false, 1, true, true, 5))
+
+        test(m"what is abstract is dotted or hatched, and an extension's plus is one shape"):
+          def paths(kind: Api.Kind, modifiers: Text*): List[Text] =
+            Icons.markup(kind, List(modifiers*)).cut(t"<path").skip(1)
+
+          ( paths(Api.Kind.Class, t"abstract").all(_.contains(t"""stroke-width="0.3"""")),
+            Icons.markup(Api.Kind.Given, List(t"abstract")).contains(t"rotate(45 7 7)"),
+            paths(Api.Kind.Val, t"abstract").bind(_.cut(t"M ").skip(1)).size,
+            paths(Api.Kind.Var, t"abstract").bind(_.cut(t"M ").skip(1)).size,
+            Icons.markup(Api.Kind.Extension, Nil).cut(t"<polygon").size - 1,
+            Icons.markup(Api.Kind.Extension, Nil).contains(t"<rect x=\"10.5\"") )
+
+        . assert(_ == (true, true, 6, 5, 1, false))
+
+        test(m"a tracked val is crossed, and a type with a val or var is drawn about it"):
+          val tracked: Text = Icons.markup(Api.Kind.Val, List(t"tracked"))
+          val withVal: Text = Icons.markup(Api.Kind.Type, Nil, Api.Kind.Val)
+          val withVar: Text = Icons.markup(Api.Kind.Type, Nil, Api.Kind.Var)
+
+          val sealedHatch: List[Text] =
+            Icons.markup(Api.Kind.Class, List(t"sealed", t"abstract")).cut(t"<path").skip(1)
+
+          ( tracked.cut(t"<polygon").size - 1,
+            withVal.contains(t"5.01,5.85 8.99,5.85 7,9.3"),
+            withVar.contains(t"7,6.91"),
+            sealedHatch.size )
+
+        . assert(_ == (4, true, true, 1))
+
+        test(m"a pilcrow clears an underline, and a shelter an extension's plus"):
+          val both: Text = Icons.markup(Api.Kind.Def, List(t"final", t"override"))
+          val sheltered: Text = Icons.markup(Api.Kind.Extension, List(t"protected"))
+          (both.contains(t"translate(11.5 9.92)"), sheltered.contains(t"10,0.98"))
+
+        . assert(_ == (true, true))
 
         test(m"an update def has a notch cut from its square, and a consume def a semicircle"):
           val update: Text = Icons.markup(Api.Kind.Def, List(t"update"))
@@ -3191,7 +3263,7 @@ class Counter extends caps.Mutable:
 
           ( update.contains(t"7,6.23") && !update.contains(t"<rect"),
             consume.contains(t"A 1.25 1.25 0 0 0 9.5 8.25"),
-            extension.contains(t"7,6.23") && extension.contains(t"""<rect x="10.5""""),
+            extension.contains(t"7,6.23") && extension.contains(t"10.5,1.5 11.5,1.5"),
             Icons.markup(Api.Kind.Val, List(t"update")).contains(t"7,6.23") )
 
         . assert(_ == (true, true, true, false))
@@ -3208,7 +3280,7 @@ class Counter extends caps.Mutable:
             paths(paired),
             paths(Icons.markup(Api.Kind.Type, Nil)),
             paths(Icons.markup(Api.Kind.Type, Nil, true)),
-            Icons.markup(Api.Kind.Type, List(t"opaque"), true).contains(t"evenodd"),
+            Icons.markup(Api.Kind.Type, List(t"opaque"), true).contains(t"""r="5.75""""),
             cased.contains(t"""<circle cx="7" cy="7" r="1"/>"""),
             Icons.markup(Api.Kind.Class, List(t"final"), true).contains(t"translate(12.68 9.92)") )
 
@@ -3281,12 +3353,12 @@ class Counter extends caps.Mutable:
           val centre: Text = t"""<circle cx="7" cy="7" r="1"/>"""
           val rim: Text = t"M 10.54 10.54 A 5 5 0 1 1 10.54 3.46"
 
-          ( cube.contains(t"stroke"),
-            cube.contains(t"<rect"),
+          ( cube.cut(t"<polygon").size - 1,
+            cube.contains(t"stroke"),
             cased.contains(centre) && cased.contains(rim),
             Icons.markup(Api.Kind.Class, List(t"protected")).contains(t"7,0 10.5,1.14") )
 
-        . assert(_ == (true, false, true, true))
+        . assert(_ == (3, false, true, true))
 
         test(m"into, annotation, java and kotlin each decorate the glyph, a gap from it"):
           val plain: Text = Icons.markup(Api.Kind.Class, Nil)

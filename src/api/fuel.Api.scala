@@ -130,8 +130,12 @@ object Api:
       // What follows the keyword and the name, for a format whose signatures are words.
       signature:   Optional[Signature] = Unset ):
 
+    // What is said of it but not written: what compiled it, an annotation, and that a member
+    // without a body is abstract, as a class is written to be.
     def written: List[Text] =
-      modifiers.filter { m => m != t"java" && m != t"kotlin" && m != t"annotation" }
+      val bodiless: Boolean = !kind.isType && kind != Api.Kind.Object
+      modifiers.filter: (m: Text) =>
+        m != t"java" && m != t"kotlin" && m != t"annotation" && !(bodiless && m == t"abstract")
 
   // A word of a signature, for a format which writes one as words rather than as Scala's
   // syntax: its text, what it is (which is how it is coloured), and the key of the entity, in
