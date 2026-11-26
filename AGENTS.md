@@ -7,8 +7,11 @@ agent must follow when working in this repository.
 
 Fuel compiles against Soundness, Pyrocosm and Orthant (whose `orthant-reader` reads the store
 the documents are held in), each pinned in `etc/refs`. Its own libraries
-(`fuel-core`, the document model and the Markdown-to-blocks conversion; and `fuel-client`, the
-daemon's commands and the dashboard) are versioned by the release tag alone: a release builds
+(`fuel-code`, the embedding of a fence of code alone, which a build that is not a Pyrocosm tool's
+can depend on, and which depends on Pyrocosm's `model`, `compiler` and `system` only; `fuel-core`,
+the document model and the Markdown-to-blocks conversion; `fuel-api`, the API model; and
+`fuel-client`, the daemon's commands and the dashboard, which alone depends on Pyrocosm's tool
+runtime) are versioned by the release tag alone: a release builds
 them at the tag's version, and the launcher resolves them at that same version; any other build
 is the patch after the latest release (`settings.nextVersion` in `build.mill`).
 

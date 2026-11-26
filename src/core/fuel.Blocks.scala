@@ -197,6 +197,26 @@ object Blocks:
   def inline(text: Text, linker: Linker = Linker.none): List[Inline] =
     Markdowns.inline(text, Context(linker).hooks(Nil))
 
+  // The same, as what an embedding phrases a frame's or an alternative's label by.
+  val phrasing: Phrasing = new Phrasing:
+    def inline(text: Text, linker: Linker): List[Inline] = Blocks.inline(text, linker)
+
+  // A Scala embedding of the documents: the code module's, which by itself neither runs a
+  // fragment nor links a label, given the runner and the phrasing which do.
+  def scala
+    ( checker: Checker,
+      path:    Text,
+      session: Boolean                 = false,
+      fixture: Optional[(Text, Text)]  = Unset,
+      linker:  Linker                  = Linker.none,
+      cache:   Optional[FragmentCache] = Unset,
+      base:    Text                    = t"",
+      section: Optional[Text]          = Unset )
+  :   Embedding.ScalaCode =
+
+    Embedding.ScalaCode
+      ( checker, path, session, fixture, linker, cache, base, section, Runner.running, phrasing )
+
   // Inline code, whose tokens link when the linker says it is a reference: a qualified name a
   // link for each segment. A sigil (`#Name` for a type, `.name` for a term) says what is meant
   // and, once resolved, is not shown; a sigilled reference nothing resolves is shown as

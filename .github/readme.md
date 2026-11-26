@@ -776,10 +776,17 @@ and a `FUEL_`-prefixed environment variable, in that order of priority ahead of 
 
 ## Modules
 
+- `fuel-code` (`src/code`): the `Embedding` of fenced code alone — a fence's `Preamble`, its
+  highlighting and typechecking by a `Checker`, its notes and its animation, as Pyrocosm
+  blocks. It knows nothing of documents, of the daemon or of Pyrocosm's tool runtime (it
+  depends on Pyrocosm's `model`, `compiler` and `system` modules only), so a build which is
+  not a tool's can depend on it to compile samples of code: `Checking.session` opens a
+  checker, and an `Embedding.ScalaCode` made with it embeds each fence and collects its
+  `problems`. By itself it neither runs a `run` fragment nor links a label's references;
+  `Blocks.scala` (in `fuel-core`) makes the embedding the documents use, which does both.
 - `fuel-core` (`src/core`): `Doc`, `Corpus`, the `Blocks` conversion of Markdown to Pyrocosm
-  blocks (recording every `Linkage` it makes), the `Glossary`, the `Embedding` of fenced
-  code, for another tool to embed, and the `Library` a file is read from: the filesystem, or
-  the `Depot` which reads an Orthant store.
+  blocks (recording every `Linkage` it makes), the `Glossary`, and the `Library` a file is
+  read from: the filesystem, or the `Depot` which reads an Orthant store.
 - `fuel-api` (`src/api`): the `Api` model of each `Format` (`Apis`), Scala's read from
   compiled code by `Inspection` and a TEL schema's by `TelsFormat`, documented by `Overlay`s,
   with the `Resolver` of references, `Signatures` as tokens, `ApiPages` and the `Links` check.

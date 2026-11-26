@@ -220,7 +220,7 @@ object Presentation:
             if Compounds.children(child).nil then
               List(Part.Code(language, source(child).or(words(child).skip(1).join(t" "))))
             else
-              val preamble: Preamble = Preamble.of(node)
+              val preamble: Preamble = Preamble.of(node, Blocks.phrasing)
               val body: Optional[Text] = this.child(node, t"code")
 
               if body.absent && preamble.frames.nil

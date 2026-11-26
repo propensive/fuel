@@ -69,9 +69,11 @@ object Embedding:
       session: Boolean                = false,
       fixture: Optional[(Text, Text)] = Unset,
       linker:  Linker                 = Linker.none,
-      cache:   Optional[Cache]        = Unset,
+      cache:   Optional[FragmentCache] = Unset,
       base:    Text                   = t"",
-      section: Optional[Text]         = Unset )
+      section: Optional[Text]         = Unset,
+      runner:  Optional[Running]      = Unset,
+      phrasing: Phrasing              = Phrasing.markdown )
   extends Embedding:
 
     // A fragment's lines as the model's, each typed token linked to what it names.
@@ -153,7 +155,7 @@ object Embedding:
 
     // A kept fragment's effect on the session, as if it had been compiled: its object, whose
     // unit is entered when a later fence is compiled, or its imports.
-    private def rejoin(fragment: Output.Fragment, unit: Text => Text, index: Int): Unit =
+    private def rejoin(fragment: Fragment, unit: Text => Text, index: Int): Unit =
       if session then
         if fragment.joined then
           history = Joined.Object(objectName(index), fragment.defined, fragment.imports) :: history
@@ -291,9 +293,9 @@ object Embedding:
         fixture.let: (entry: (Text, Text)) =>
           val (fixturePath, text) = entry
           val framed: Framing = Framing(t"object ${objectName(0)} {\n", t"\n}", 0, Unset)
-          val kept: Optional[Output.Fragment] = cache.let(_.fragment(chain))
+          val kept: Optional[Fragment] = cache.let(_.fragment(chain))
 
-          kept.let: (fragment: Output.Fragment) =>
+          kept.let: (fragment: Fragment) =>
             rejoin(fragment.copy(follow = text), framed.unit, 0)
             problems0 = fragment.problems.reverse + problems0
 
@@ -303,8 +305,8 @@ object Embedding:
             val (joined, defined, imports) = left(Nil)
             val raised: List[Block] = problems0.keep(problems0.size - before.size).reverse
 
-            val fragment: Output.Fragment =
-              Output.Fragment(Nil, raised, joined, defined, imports, text, 0)
+            val fragment: Fragment =
+              Fragment(Nil, raised, joined, defined, imports, text, 0)
 
             cache.let(_.fragment(chain, fragment))
 
@@ -395,7 +397,7 @@ object Embedding:
         // A preamble that is not TEL is reported at its place, and the fence read as if it
         // had none.
         val preamble: Preamble = header.lay(Preamble.empty): (text: Text) =>
-          Preamble.parse(text) match
+          Preamble.parse(text, phrasing) match
             case preamble: Preamble => preamble
 
             case error: Tel.Error =>
@@ -574,7 +576,7 @@ object Embedding:
               versions.bind: (alternative: Preamble.Alternative, blocks: List[Block]) =>
                 blocks.head match
                   case code: Block.Code =>
-                    val label: List[Inline] = Blocks.inline(alternative.label, linker)
+                    val label: List[Inline] = phrasing.inline(alternative.label, linker)
 
                     List:
                       Block.Alternative
@@ -602,7 +604,7 @@ object Embedding:
       if session then chain = key
 
       cache.let(_.fragment(key)) match
-        case kept: Output.Fragment =>
+        case kept: Fragment =>
           val delta: Int = fence - kept.line
           problems0 = Relocation.shift(kept.problems, path, delta).reverse + before
           fragments = (id, kept.follow) :: fragments
@@ -616,7 +618,7 @@ object Embedding:
           val (joined, defined, imports) = left(history0)
           val raised: List[Block] = problems0.keep(problems0.size - before.size).reverse
           val follow: Text = fragment(id)
-          val record = Output.Fragment(blocks, raised, joined, defined, imports, follow, fence)
+          val record = Fragment(blocks, raised, joined, defined, imports, follow, fence)
           cache.let(_.fragment(key, record))
           blocks
 
@@ -822,7 +824,16 @@ object Embedding:
     // not already enter it (a `context term` fragment, one whose errors are shown, or any
     // outside a session), then its object loaded, which runs its body, with what it writes
     // shown beneath it; what it throws is a failure, as its `errors` says.
+    // Without a runner, it is not run, and shows nothing beneath it.
     private def ran(code: Text, framing: Framing, preamble: Preamble, start: Int): List[Block] =
+      runner match
+        case running: Running => ranBy(running, code, framing, preamble, start)
+        case _                => Nil
+
+    private def ranBy
+      ( running: Running, code: Text, framing: Framing, preamble: Preamble, start: Int )
+    :   List[Block] =
+
       val name: Text = objectName(count)
 
       val entered: Boolean = history match
@@ -840,8 +851,8 @@ object Embedding:
         report(Block.Location(path, start), message, bolt(FuelBolts.run, 4))
         Nil
       else
-        val outcome: Runner.Outcome = Runner.run(checker.run(t"$name$$"))
-        val (text, runs) = Runner.styled(outcome.text)
+        val outcome: Running.Outcome = running.run(checker.run(t"$name$$"))
+        val (text, runs) = (outcome.text, outcome.runs)
 
         val output: List[Block] =
           if text == t"" then Nil else List(Block.Output(text, false, runs))

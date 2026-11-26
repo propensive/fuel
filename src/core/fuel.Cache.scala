@@ -55,8 +55,6 @@ object Cache:
 // Where compiled output is kept between compiles, by the key of the inputs which produced it:
 // a fence's, and a document's prose. A key not kept is `Unset`, and its output is compiled and
 // kept; `fuel compile` keeps them in its output directory, and `--force` starts it empty.
-trait Cache:
-  def fragment(key: Text): Optional[Output.Fragment]
-  def fragment(key: Text, fragment: Output.Fragment): Unit
+trait Cache extends FragmentCache:
   def prose(key: Text): Optional[Output.Prose]
   def prose(key: Text, prose: Output.Prose): Unit

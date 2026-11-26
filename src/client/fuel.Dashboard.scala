@@ -98,7 +98,7 @@ object Dashboard:
     val resolver: Resolver = Resolver(api, scope, Unset, apis)
 
     val scala: Embedding.ScalaCode =
-      Embedding.ScalaCode(Checker.tokenized, entity.key, false, Unset, resolver)
+      Blocks.scala(Checker.tokenized, entity.key, false, Unset, resolver)
 
     val tables: Tables = Tables(entity.key, resolver)
     val embeddings: List[Embedding] = List(scala, Embedding.JavaCode, tables)

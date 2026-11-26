@@ -132,11 +132,12 @@ object Preamble:
       (lines.keep(index.n0).join(t"\n"), lines.skip(index.n0 + 1).join(t"\n"))
 
   // A preamble parsed from its text, or the TEL error if it is not TEL.
-  def parse(text: Text): Preamble | Tel.Error =
+  // A label in it is phrased as `phrasing` says.
+  def parse(text: Text, phrasing: Phrasing = Phrasing.markdown): Preamble | Tel.Error =
     recover:
       case error: Tel.Error => error
 
-    . protect[Preamble | Tel.Error](of(text.read[Tel]))
+    . protect[Preamble | Tel.Error](of(text.read[Tel], phrasing))
 
   // A preamble's TEL error as a diagnostic at its place in the file: the preamble's text is
   // the excerpt, and its line is counted from `line`, where it begins in the file (from zero).
@@ -156,7 +157,7 @@ object Preamble:
   // A preamble read from a TEL node whose children are its keywords: the document above a
   // fence's `##`, or anything else which says what a fragment's preamble says — a slide's code.
   // A keyword the preamble does not know is left for the node's owner to read.
-  def of(tel: Tel): Preamble =
+  def of(tel: Tel, phrasing: Phrasing = Phrasing.markdown): Preamble =
     locally:
       def atoms(keyword: Text): List[Text] =
         tel.fields(keyword).to[List].map(_.primaryAtom).filter(_ != t"")
@@ -215,7 +216,7 @@ object Preamble:
         parent.fields(t"frame").to[List].map: (node: Tel) =>
           Frame
             ( node.fields(t"code").to[List].head.let(_.atomTexts.to[List].join(t" ")),
-              child(node, t"label").lay(Nil)(Blocks.inline(_)),
+              child(node, t"label").lay(Nil)(phrasing.inline(_, Linker.none)),
               number(child(node, t"hold")),
               number(child(node, t"at")),
               child(node, t"language"),
