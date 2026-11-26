@@ -162,7 +162,11 @@ before it by that frame's hold), a `language` of its own, and marks of its own â
 so a `focus`, which fades everything else in the block, comes and goes with its frame; a mark
 on the fence itself applies in every frame it matches. Step with the buttons, or the arrow
 keys when the block is focused; space plays. The code after `##`, if any, is the last frame.
-Each Scala frame is compiled on its own; a Java frame is highlighted.
+Each Scala frame is compiled on its own; a Java frame is highlighted. A frame which says
+`errors show` is meant not to compile: each error the compiler gives is a note on that frame,
+where the compiler put it, so an animation can step from a mistake to its correction; such a
+frame which compiles after all fails the compile, and a later fence follows the last frame
+which is not so marked.
 
 ```scala fuel
 id greet
