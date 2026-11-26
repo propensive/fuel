@@ -130,7 +130,8 @@ object Api:
       // What follows the keyword and the name, for a format whose signatures are words.
       signature:   Optional[Signature] = Unset ):
 
-    def written: List[Text] = modifiers.filter { m => m != t"java" && m != t"annotation" }
+    def written: List[Text] =
+      modifiers.filter { m => m != t"java" && m != t"kotlin" && m != t"annotation" }
 
   // A word of a signature, for a format which writes one as words rather than as Scala's
   // syntax: its text, what it is (which is how it is coloured), and the key of the entity, in

@@ -134,7 +134,8 @@ object Inspection:
   // symbol — its signatures, never a body — which is what makes it robust where unpickling
   // whole trees is not; a class which cannot be loaded is left out. A `.class` entry with no
   // `.tasty` beside it is a Java class, which the compiler reads from its classfile, and of
-  // which only what is public is kept.
+  // which only what is public is kept; or a Kotlin class, read as a Java class is, when the jar
+  // is Kotlin's, as the module descriptor Kotlin writes in every jar it builds says.
   // The `shadowed` packages are the project's own, whose copies in a jar (a launcher assembly
   // carrying the project itself) are left to the project's sources: loading them into the
   // session ahead of the compile leaves it writing nothing.
@@ -164,6 +165,13 @@ object Inspection:
           val segments: List[Text] = full.cut(t".")
           val pkg: Text = segments.keep(segments.size - 1).join(t".")
           if !shadows(pkg) then walker.load(full, java)
+
+        val kotlin: Boolean = entries.exists: (entry: Text) =>
+          entry.starts(t"META-INF/") && entry.ends(t".kotlin_module")
+
+        if kotlin then
+          val named: List[Text] = javas.map(_.skip(6, Rtl).tr('/', '.'))
+          walker.kotlins = (walker.kotlins.to[List] + named).to[Set]
 
         tastys.each(load(_, false))
         javas.each(load(_, true))
@@ -254,6 +262,23 @@ object Inspection:
     import quotes.reflect.*
 
     given Bindings = Bindings()
+
+    // The top-level classes, by their full names, of the Kotlin jars being walked, which the
+    // compiler reads as it reads Java's.
+    var kotlins: Set[Text] = Set()
+
+    // Whether a symbol is declared within one of them: its outermost class is.
+    private def isKotlin(symbol: Symbol): Boolean =
+      def outermost(symbol: Symbol): Symbol =
+        if symbol.owner.isNoSymbol || symbol.owner.isPackageDef then symbol
+        else outermost(symbol.owner)
+
+      // An object's class is named with a `$` its classfile's name does not have.
+      !kotlins.nil && safely:
+        val name: Text = outermost(symbol).fullName.tt
+        kotlins.has(if name.ends(t"$$") then name.skip(1, Rtl) else name)
+
+      . or(false)
 
     // The compiler's context behind the quotes, through which its symbol table is reached.
     private def context: dotty.tools.dotc.core.Contexts.Context =
@@ -406,6 +431,9 @@ object Inspection:
     private def modifiers(symbol: Symbol): List[Text] =
       val flags = symbol.flags
 
+      // Read from a classfile: compiled from Java, or from Kotlin.
+      val foreign: Boolean = flags.is(Flags.JavaDefined) && !flags.is(Flags.Package)
+
       val pairs: List[(Boolean, Text)] = List(
         (flags.is(Flags.Protected), t"protected"),
         (flags.is(Flags.Override), t"override"),
@@ -424,7 +452,8 @@ object Inspection:
         (flags.is(Flags.Infix), t"infix"),
         (isInto(symbol), t"into"),
         (isAnnotation(symbol), t"annotation"),
-        (flags.is(Flags.JavaDefined) && !flags.is(Flags.Package), t"java"),
+        (foreign && !isKotlin(symbol), t"java"),
+        (foreign && isKotlin(symbol), t"kotlin"),
         (flags.is(Flags.Implicit), t"implicit"))
 
       pairs.filter(_(0)).map(_(1))

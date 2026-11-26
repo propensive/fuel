@@ -40,19 +40,18 @@ import pyrocosm.Inline
 // The glyph beside a member's name: a drawing of its keyword, on the 14-unit grid of the
 // original icons (a 10 mm box, every shape on multiples of a fourteenth of it), as SVG markup
 // which Pyrocosm draws inline, in the text's colour and at its size. A modifier transforms the
-// drawing: generically where it can — `final` adds a full stop beside it, `inline` shears it,
+// drawing: generically where it can — `final` adds a pilcrow beside it, `inline` shears it,
 // `transparent` draws only its outline, as if it were seen through — and by a shape of its own
 // where the drawings differ: an abstract `def` is nine small squares, an opaque type has a core,
 // an enum case is a disc.
 //
-// Every modifier fuel records, and what the glyph does with it (one marked *undecided* is drawn
-// plainly until it is decided; the drawings named are the originals to decide from):
+// Every modifier fuel records, and what the glyph does with it:
 //
-//   final         a full stop at the glyph's lower right, placed for each shape: its own
-//                 diameter away from the nearest part of it
+//   final         a pilcrow at the glyph's lower right, on the baseline
 //   inline        sheared to the right
 //   transparent   only the outline of each shape
-//   abstract      dotted: a def's square is nine small squares, a class's rings are dashes
+//   abstract      dotted: a def's square is nine small squares, a class's rings are dashes;
+//                 nothing on anything else
 //   opaque        type: a core ring (o-type)
 //   sealed        class, trait: the two rings joined across each open end by a wall along
 //                 its radius
@@ -66,6 +65,7 @@ import pyrocosm.Inline
 //   into          a narrow right-pointing triangle to the left of the glyph
 //   annotation    an `@` in the top right corner, on what extends an annotation class
 //   java          a `J` in the top left corner, on what was compiled from Java
+//   kotlin        a `K` there instead, on what was compiled from Kotlin
 //   implicit      nothing: it is deprecated
 //   open          class: the inner ring only its western half, its mouth twice as wide
 //   optional      a small `?` in the top right corner (a TEL schema's member); with
@@ -74,8 +74,8 @@ import pyrocosm.Inline
 //   key           a small key in the top left corner, hanging down the left-hand side
 //   update        def: a notch cut from the top of the square, as a var's from a val's triangle
 //   consume       def: a semicircle cut from the right-hand side of the square
-//   extension     a def with a small plus at the top right (e-def)
-//   enum case     a disc (c-case); on a class or object, a dot at the centre (c-class, c-object)
+//   extension     a def with a small plus at the top right
+//   enum case     a disc
 //
 // A class is three quarters of two rings, open to the east, and a trait half of the same rings,
 // from the south-east to the north-west. A type is four arcs of the outer ring, each an eighth of
@@ -83,26 +83,26 @@ import pyrocosm.Inline
 // is one glyph, a whole circle: its own part, and the object's ring in the sectors it leaves
 // open, with a gap between them along each radius where they meet (to the north-east and
 // south-east of a class, to the north-west and south-east of a trait, on either side of each
-// of a type's arcs), as if a line were drawn there in the page's colour.
+// of a type's arcs), as if a line were drawn there in the page's colour. An enum is five discs
+// on the middle of an object's ring; with a companion, that ring threads them, cut back from
+// each disc by the same gap.
 // A case class is a class with the disc of a `case` at its centre, small enough to stand a
 // ring's breadth within its rings. The glyph of a pair has the modifiers of both.
 object Icons:
   private val grid: Int = 14
   private val c: Double = 7.0
 
-  // A drawing: its elements, and how far it reaches left and right, past the grid where a
-  // decoration needs to.
-  private case class Drawing(elements: List[Text], left: Double = 0, right: Double = grid):
+  // A drawing: its elements, on the grid, whatever stands beside it. Every glyph has the same box,
+  // so that it is drawn the same size, in the same place, and on the same baseline, whatever its
+  // modifiers; a decoration beyond the box is drawn over the space about it, as overflow.
+  private case class Drawing(elements: List[Text]):
     def add(more: Text*): Drawing = copy(elements = elements + more)
-
-    def reach(from: Double, to: Double): Drawing =
-      copy(left = left.min(from), right = right.max(to))
 
     def within(open: Text, close: Text): Drawing =
       copy(elements = List(open) + elements + List(close))
 
     def markup: Text =
-      val box: Text = t"""viewBox="${num(left)} 0 ${num(right - left)} ${grid.show}""""
+      val box: Text = t"""viewBox="0 0 ${grid.show} ${grid.show}" overflow="visible""""
       t"""<svg xmlns="http://www.w3.org/2000/svg" $box>${elements.join}</svg>"""
 
   // A coordinate to two decimal places, without the zeros a fraction ends with, nor a point
@@ -257,10 +257,50 @@ object Icons:
     val paint: Text = t"""fill="none" stroke="currentColor" stroke-width="${num(width)}""""
     t"""<path d="$d" $paint stroke-linejoin="round"/>"""
 
-  // The radius of the full stop of a `final` one.
-  private val stop: Double = 1.02
+  // The text's baseline, where a glyph held at the height of the text, a quarter of a unit in
+  // fourteen below it, meets the line: what stands on it, stands on it whatever the shape.
+  private val baseline: Double = 12.25
 
   private val square: Text = rect(4.5, 4.5, 5, 5)
+
+  // The letters which say what compiled a member, Java or Kotlin, and the `@` of an annotation,
+  // as JetBrains Mono's extra-bold draws them, a capital 3.6 units tall, each drawn from the top
+  // left corner of its bounds: the widths of the letters, and the outlines.
+  //
+  // JetBrains Mono: Copyright 2020 The JetBrains Mono Project Authors
+  // (https://github.com/JetBrains/JetBrainsMono), licensed under the SIL Open Font License,
+  // Version 1.1 (https://scripts.sil.org/OFL).
+  private val javaWidth: Double = 2.47
+  private val kotlinWidth: Double = 2.52
+
+  private val javaJ: Text =
+    t"M 1.23 3.65 Q 0.67 3.65 0.33 3.34 Q 0 3.03 0 2.51 L 0.74 2.51 Q 0.74 2.74 0.87 2.87 " +
+    t"Q 1.01 3.01 1.23 3.01 Q 1.46 3.01 1.59 2.88 Q 1.73 2.75 1.73 2.52 L 1.73 0 L 2.47 0 " +
+    t"L 2.47 2.52 Q 2.47 3.04 2.14 3.35 Q 1.8 3.65 1.23 3.65 Z"
+
+  private val kotlinK: Text =
+    t"M 0 3.6 L 0 0 L 0.74 0 L 0.74 1.41 L 1.08 1.41 L 1.69 0 L 2.49 0 L 1.74 1.7 " +
+    t"L 2.52 3.6 L 1.71 3.6 L 1.09 2.06 L 0.74 2.06 L 0.74 3.6 Z"
+
+  private val annotationAt: Text =
+    t"M 1.48 4.54 Q 1.02 4.54 0.69 4.36 Q 0.36 4.19 0.18 3.87 Q 0 3.55 0 3.1 L 0 1.43 " +
+    t"Q 0 0.98 0.17 0.66 Q 0.34 0.34 0.66 0.17 Q 0.99 0 1.43 0 Q 1.84 0 2.13 0.15 " +
+    t"Q 2.43 0.31 2.58 0.57 Q 2.74 0.84 2.74 1.18 L 2.74 2.52 Q 2.74 2.91 2.5 3.15 " +
+    t"Q 2.26 3.38 1.85 3.38 Q 1.45 3.38 1.22 3.15 Q 0.99 2.91 0.99 2.52 L 0.99 2.02 " +
+    t"Q 0.99 1.65 1.16 1.43 Q 1.33 1.21 1.62 1.21 Q 1.87 1.21 2.01 1.33 " +
+    t"Q 2.15 1.46 2.15 1.68 L 2.07 1.53 L 2.15 1.53 L 2.15 1.18 Q 2.15 0.86 1.95 0.69 " +
+    t"Q 1.76 0.52 1.4 0.52 Q 1.02 0.52 0.81 0.75 Q 0.59 0.99 0.59 1.43 L 0.59 3.1 " +
+    t"Q 0.59 3.53 0.82 3.76 Q 1.05 3.99 1.48 3.99 L 2.02 3.99 L 2.02 4.54 Z M 1.85 2.91 " +
+    t"Q 1.99 2.91 2.07 2.81 Q 2.15 2.7 2.15 2.52 L 2.15 2.02 Q 2.15 1.83 2.07 1.73 " +
+    t"Q 1.99 1.63 1.85 1.63 Q 1.71 1.63 1.63 1.73 Q 1.55 1.83 1.55 2.02 L 1.55 2.52 " +
+    t"Q 1.55 2.7 1.63 2.81 Q 1.71 2.91 1.85 2.91 Z"
+
+  // The pilcrow of a `final` one, smaller, in the same face, drawn from the top left corner of
+  // its bounds.
+  private val pilcrow: Text =
+    t"M 0.61 2.9 L 0.61 1.34 Q 0.33 1.34 0.17 1.19 Q 0 1.04 0 0.8 L 0 0.54 " +
+    t"Q 0 0.3 0.17 0.15 Q 0.33 0 0.61 0 L 0.96 0 L 0.96 2.9 Z M 1.18 2.9 L 1.18 0 L 1.53 0 " +
+    t"L 1.53 2.9 Z"
 
   // The square of an `update def`, a notch cut from its top as a `var`'s is from a `val`'s
   // triangle, with the slope of that triangle's sides; and of a `consume def`, a semicircle cut
@@ -308,13 +348,7 @@ object Icons:
 
 
       case Api.Kind.Enum =>
-        // Five discs about the centre, half a disc's breadth between each and the next.
-        val spread: Double = 3.57
-        val discs: List[Text] = List(0, 1, 2, 3, 4).map: (n: Int) =>
-          val radians: Double = (n*72 - 90)*π/180
-          disc(1.4, c + spread*cos(radians).double, c + spread*sin(radians).double)
-
-        Drawing(discs)
+        Drawing(cases)
 
       case Api.Kind.Case      => Drawing(List(disc(2.8)))
       // Four arcs of forty-five degrees, centred on the diagonals.
@@ -337,10 +371,37 @@ object Icons:
       case Api.Kind.Extension => Drawing(List(square, rect(10.5, 1.5, 1, 3), rect(9.5, 2.5, 3, 1)))
       case Api.Kind.Param     => Drawing(List(rect(3.5, 9.95, 7, 1.17)))
 
+  // The angles of an enum's five discs, the first at the top.
+  private val pentagon: List[Double] = List(0, 1, 2, 3, 4).map { (n: Int) => n*72.0 - 90 }
+
+  // An enum's five discs, centred on the middle of an object's ring, so that they stand where
+  // they are whether its companion's ring is drawn about them or not.
+  private val cases: List[Text] = pentagon.map: (at: Double) =>
+    val radians: Double = at*π/180
+    disc(1, c + 4*cos(radians).double, c + 4*sin(radians).double)
+
+  // An object's ring, threaded with an enum's discs: five pieces of it, each cut back from the
+  // discs either side of it by a circle half a ring's breadth wider than a disc.
+  private val threaded: List[Text] =
+    val cut: Double = 1.5
+
+    // Where the cut meets a circle of the radius, in degrees from the disc's own angle.
+    def meet(radius: Double): Double =
+      acos((radius*radius + 16 - cut*cut)/(8*radius)).double*180/π
+
+    pentagon.map: (at: Double) =>
+      val next: Double = at + 72
+      val start: Text = point(5, at + meet(5))
+      val outer: Text = t"A 5 5 0 0 1 ${point(5, next - meet(5))}"
+      val inward: Text = t"A ${num(cut)} ${num(cut)} 0 0 0 ${point(3, next - meet(3))}"
+      val inner: Text = t"A 3 3 0 0 0 ${point(3, at + meet(3))}"
+      val outward: Text = t"A ${num(cut)} ${num(cut)} 0 0 0 $start"
+      t"""<path d="M $start $outer $inward $inner $outward Z"/>"""
+
   // Whether a kind's glyph can be drawn as one with its companion object's.
   def pairs(kind: Api.Kind): Boolean =
     kind == Api.Kind.Class || kind == Api.Kind.CaseClass || kind == Api.Kind.Trait
-    || kind == Api.Kind.Type
+    || kind == Api.Kind.Type || kind == Api.Kind.Enum
 
   // Half the width of the gap between a type's part of a circle and its companion's.
   private val parting: Double = 0.5
@@ -356,6 +417,9 @@ object Icons:
           else List(inset(5, 4, 45, 225, parting), inset(3, 2, 45, 225, parting))
 
         Drawing(rings + List(inset(5, 3, 225, 45, parting)))
+
+      case Api.Kind.Enum =>
+        Drawing(threaded + cases)
 
       // The type's arcs on the diagonals, and the object's ring in the four gaps between them.
       case Api.Kind.Type =>
@@ -374,23 +438,29 @@ object Icons:
         Drawing(if kind == Api.Kind.CaseClass then rings + List(dot) else rings)
 
   // Where a shape's decorations go: the left and right edges it presents at mid-height, which the
-  // infix squares and the `into` triangle stand against, and the centre of its full stop, a
-  // stop's own diameter from its lower right.
-  private case class Fit(left: Double, right: Double, stopX: Double, stopY: Double)
+  // infix squares and the `into` triangle stand against; and where those which stand a gap of
+  // 1.4 units from the nearest part of it go: the right edge of the `J` or `K` in the top left
+  // corner, the left edge of the `@` in the top right, and on the baseline, the left edge of a
+  // `final` one's pilcrow and the right edge of a `lazy` one's ellipsis.
+  private case class Fit
+    ( left: Double, right: Double, letter: Double = 0, at: Double = 14, stop: Double = 14,
+      lazily: Double = 0 )
 
   private def fit(kind: Api.Kind.Scala): Fit = kind match
-    case Api.Kind.Package                          => Fit(2, 12, 12.7, 12.7)
-    case Api.Kind.Object | Api.Kind.Class          => Fit(2, 12, 12.7, 12.7)
-    case Api.Kind.CaseClass                        => Fit(2, 12, 12.7, 12.7)
-    case Api.Kind.Trait                            => Fit(2, 12, 12.7, 12.7)
-    case Api.Kind.Enum                             => Fit(2.2, 11.8, 12.96, 12.12)
-    case Api.Kind.Case                             => Fit(4.2, 9.8, 11.14, 11.14)
-    case Api.Kind.Type | Api.Kind.TypeParam        => Fit(2, 12, 12.7, 12.7)
-    case Api.Kind.Def | Api.Kind.Extension         => Fit(4.5, 9.5, 12.56, 8.48)
-    case Api.Kind.Val                              => Fit(4.83, 9.17, 11.13, 8.98)
-    case Api.Kind.Var                              => Fit(5, 9, 11.13, 8.7)
-    case Api.Kind.Given                            => Fit(3.46, 10.54, 10.93, 10.93)
-    case Api.Kind.Param                            => Fit(3.5, 10.5, 13.56, 10.1)
+    case Api.Kind.Package                    => Fit(2, 12)
+    case Api.Kind.Object                     => Fit(2, 12, 1.38, 13.02, 12.68, 2)
+    case Api.Kind.Class                      => Fit(2, 12, 1.38, 11.92, 12, 2)
+    case Api.Kind.CaseClass                  => Fit(2, 12, 1.38, 11.92, 12, 2)
+    case Api.Kind.Trait                      => Fit(2, 12, 1.38, 6.76, 12, 2)
+    case Api.Kind.Enum                       => Fit(2.2, 11.8, 1.63, 13, 11.8, 2.2)
+    case Api.Kind.Case                       => Fit(4.2, 9.8, 4.15, 10.6, 9.98, 4.2)
+    case Api.Kind.Type | Api.Kind.TypeParam  => Fit(2, 12, 1.38, 12.98, 12.68, 2)
+    case Api.Kind.Def                        => Fit(4.5, 9.5, 3.24, 10.88, 10.81, 4.5)
+    case Api.Kind.Extension                  => Fit(4.5, 9.5, 3.24, 13.88, 10.81, 4.5)
+    case Api.Kind.Val                        => Fit(4.83, 9.17, 3.15, 11.27, 9.17, 4.83)
+    case Api.Kind.Var                        => Fit(5, 9, 2.93, 11.28, 9, 5)
+    case Api.Kind.Given                      => Fit(3.46, 10.54, 4.55, 10.34, 10.54, 3.46)
+    case Api.Kind.Param                      => Fit(3.5, 10.5)
 
   // The drawing with its modifiers: the shapes of their own first, then the transformations of
   // the whole, then what stands beside it, placed for the shape.
@@ -471,30 +541,30 @@ object Icons:
 
     val placed: Drawing =
       if !has(t"infix") then sheltered else
-        sheltered
-        . add(rect(leftOfSquare, 6.25, small, small), rect(rightOfSquare, 6.25, small, small))
-        . reach(leftOfSquare, rightOfSquare + small)
+        val squares: List[Text] = List(leftOfSquare, rightOfSquare).map(rect(_, 6.25, small, small))
+        sheltered.add(squares*)
 
     // Narrow, and two and a half times as tall as it is wide, outside any infix square.
     val converting: Drawing =
       if !has(t"into") then placed else
         val edge: Double = if has(t"infix") then leftOfSquare - gap else shape.left - gap + mid
         val tip: Text = polygon((edge - 2, 4.5), (edge, 7), (edge - 2, 9.5))
-        placed.add(tip).reach(edge - 2, grid)
+        placed.add(tip)
+
+    // A letter, its outline drawn from the top left corner of its bounds, placed with that corner
+    // at a point.
+    def letter(outline: Text, x: Double): Text =
+      t"""<path transform="translate(${num(x)} 0.3)" d="$outline"/>"""
 
     val annotated: Drawing =
-      if !has(t"annotation") then converting else
-        val x: Double = 13.1
-        val y: Double = 2.5
-        val rim: Text = num(x + 0.8)
-        val eye: Text = t"M $rim ${num(y + 0.2)} A 0.8 0.8 0 1 1 $rim ${num(y - 0.2)}"
-        val outer: Text = t"A 2 2 0 1 0 ${num(x + 1.1)} ${num(y + 1.7)}"
-        val at: Text = t"$eye V ${num(y + 0.4)} A 0.5 0.5 0 0 0 ${num(x + 2)} ${num(y)} $outer"
-        converting.add(stroked(at, 0.6)).reach(0, x + 2.4)
+      if !has(t"annotation") then converting
+      else converting.add(letter(annotationAt, shape.at))
 
     val java: Drawing =
-      if !has(t"java") || kind == Api.Kind.Package || kind == Api.Kind.Param then annotated
-      else annotated.add(stroked(t"M 2.6 0.4 V 3 A 1.05 1.05 0 0 1 0.5 3", 0.8))
+      if kind == Api.Kind.Package || kind == Api.Kind.Param then annotated
+      else if has(t"java") then annotated.add(letter(javaJ, shape.letter - javaWidth))
+      else if has(t"kotlin") then annotated.add(letter(kotlinK, shape.letter - kotlinWidth))
+      else annotated
 
     // How many times a member of a TEL schema may be said, in the top right corner, as a
     // grammar writes it: `?` for one which may be left out, `+` for one said once or more, and
@@ -513,15 +583,15 @@ object Icons:
       def spokes(angles: Double*): Text = stroked(angles.map(spoke).join(t" "), 0.6)
 
       if has(t"optional") && has(t"repeatable") then
-        java.add(spokes(90, 30, 150)).reach(0, x + r + 0.4)
+        java.add(spokes(90, 30, 150))
       else if has(t"repeatable") then
-        java.add(spokes(0, 90)).reach(0, x + r + 0.4)
+        java.add(spokes(0, 90))
       else if has(t"optional") then
         val hook: Text =
           t"M ${num(x - 0.95)} ${num(y - 0.75)} A 0.95 0.95 0 1 1 ${num(x)} ${num(y + 0.2)} " +
             t"V ${num(y + 0.7)}"
 
-        java.add(stroked(hook, 0.6), disc(0.4, x, y + 1.5)).reach(0, x + r + 0.4)
+        java.add(stroked(hook, 0.6), disc(0.4, x, y + 1.5))
       else
         java
 
@@ -531,28 +601,23 @@ object Icons:
       if !has(t"key") then counted else
         val bow: Text = t"M 0.4 3.2 A 1 1 0 1 1 0.4 1.2 A 1 1 0 1 1 0.4 3.2"
         val shaft: Text = t"M 0.4 3.2 V 6.2 H -0.7 M 0.4 5.1 H -0.5"
-        counted.add(stroked(t"$bow $shaft", 0.6)).reach(-1, grid)
+        counted.add(stroked(t"$bow $shaft", 0.6))
 
-    // An ellipsis, at the lower left: beside the foot of the shape, its last dot nearest it.
+    // An ellipsis, on the baseline at the lower left.
     val pending: Drawing =
       if !has(t"lazy") || kind == Api.Kind.Object || companion then marked else
-        val place: (Double, Double) = kind match
-          case Api.Kind.Val                      => (5.1, 9.55)
-          case Api.Kind.Var                      => (5.1, 9.27)
-          case Api.Kind.Given                    => (4.6, 10.09)
-          case Api.Kind.Def | Api.Kind.Extension => (3.55, 9.05)
-          case _                                 => (15.49 - shape.stopX, shape.stopY - 1.49)
+        val x: Double = shape.lazily + lean(baseline)
+        val dots: List[Text] = List(2.85, 1.65, 0.45).map(x - _).map(disc(0.45, _, baseline - 0.45))
+        marked.add(dots*)
 
-        val y: Double = place(1)
-        val x: Double = place(0) + lean(y)
-        val dots: List[Text] = List(2.4, 1.2, 0.0).map { (back: Double) => disc(0.45, x - back, y) }
-        marked.add(dots*).reach(x - 2.85, grid)
-
+    // A pilcrow, on the baseline at the lower right.
     if !has(t"final") then pending else
-      // Below the right infix square, where there is one and the stop would otherwise touch it.
-      val y: Double = if has(t"infix") then shape.stopY.max(9.35) else shape.stopY
-      val x: Double = shape.stopX + lean(y)
-      pending.add(disc(stop, x, y)).reach(x - stop, x + stop)
+      val x: Double = shape.stop + lean(baseline)
+      val top: Double = baseline - 2.33
+      val paint: Text = t"""stroke="currentColor" stroke-width="0.12" stroke-linejoin="round""""
+      val place: Text = t"translate(${num(x)} ${num(top)})"
+      val mark: Text = t"""<path transform="$place" $paint d="$pilcrow"/>"""
+      pending.add(mark)
 
   // What a declaration is, in the words which declare it: its written modifiers and its keyword,
   // or `export` for an export.

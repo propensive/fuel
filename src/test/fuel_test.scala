@@ -1629,6 +1629,50 @@ object Util:
 
       . assert(_ == (true, false, Api.Kind.Class, true, t"scala.Option[B]"))
 
+      test(m"a class in a jar Kotlin built is marked kotlin, and the same class elsewhere java"):
+        // A jar of one classfile, with the module descriptor Kotlin writes, or without it.
+        def jar(name: Text, kotlin: Boolean): Text =
+          val path: Text = t"${scratch(name)}/classes.jar"
+          val entry: Text = t"xsbti/WorkspaceEdit.class"
+          val stream = Classloader[Tests.type].java.getResourceAsStream(entry.s).nn
+          val bytes = stream.readAllBytes()
+          stream.close()
+          val out = java.util.zip.ZipOutputStream(java.io.FileOutputStream(path.s))
+
+          if kotlin then
+            out.putNextEntry(java.util.zip.ZipEntry("META-INF/sample.kotlin_module"))
+            out.closeEntry()
+
+          out.putNextEntry(java.util.zip.ZipEntry(entry.s))
+          out.write(bytes)
+          out.closeEntry()
+          out.close()
+          path
+
+        def marks(path: Text): List[Text] =
+          val result: Api | Throwable =
+            Checking.session(classpath, Nil): (checker: Checker) =>
+              checker.context.lay[Api | Throwable](Api.empty): context =>
+                Inspection.classpath(List(path), context)
+
+          result match
+            case api: Api =>
+              val members: List[Api.Entity] =
+                api.entities.values.to[List].filter(_.key.starts(t"xsbti.WorkspaceEdit"))
+
+              members.bind: (entity: Api.Entity) =>
+                entity.template.let(_.modifiers).or(Nil) + entity.definition.let(_.modifiers).or(Nil)
+
+              . filter { m => m == t"java" || m == t"kotlin" }
+              . distinct
+
+            case error: Throwable =>
+              List(error.toString.tt)
+
+        (marks(jar(t"fuel-kotlin", true)), marks(jar(t"fuel-java", false)))
+
+      . assert(_ == (List(t"kotlin"), List(t"java")))
+
       test(m"the JDK's public classes are walked, and named as Scala names them"):
         val result: Api | Throwable =
           Checking.session(classpath, Nil): (checker: Checker) =>
@@ -3115,17 +3159,17 @@ class Counter extends caps.Mutable:
 
         . assert(_ == (2, 14, 14, 3, 0))
 
-        test(m"an open class's inner ring is its western half, and a stop is drawn smaller"):
+        test(m"an open class's inner ring is its western half, and a final one has a pilcrow"):
           val opened: Text = Icons.markup(Api.Kind.Class, List(t"open"))
           val stopped: Text = Icons.markup(Api.Kind.Class, List(t"final"))
 
           ( opened.contains(t"M 7 10 A 3 3 0 0 1 7 4"),
             Icons.markup(Api.Kind.Class, Nil).contains(t"M 7 10 A 3 3 0 0 1 7 4"),
-            stopped.contains(t"""<circle cx="12.7" cy="12.7" r="1.02"/>""") )
+            stopped.contains(t"""translate(12 9.92)""") )
 
         . assert(_ == (true, false, true))
 
-        test(m"a sealed class or trait is one shape, walled at its ends, and a case is a disc"):
+        test(m"a sealed class or trait is walled, a case is a disc, and an enum's ring threaded"):
           def one(kind: Api.Kind, modifiers: Text*): Boolean =
             val markup: Text = Icons.markup(kind, List(modifiers*))
             markup.contains(t"evenodd") && markup.s.split("<path").nn.length == 2
@@ -3135,9 +3179,10 @@ class Counter extends caps.Mutable:
             one(Api.Kind.Class),
             Icons.markup(Api.Kind.Class, List(t"sealed", t"abstract")).s.split("<path").nn.length,
             Icons.markup(Api.Kind.Case, Nil).contains(t"""r="2.8""""),
-            Icons.markup(Api.Kind.Enum, Nil).contains(t"""cx="7" cy="3.43" r="1.4"""") )
+            Icons.markup(Api.Kind.Enum, Nil).contains(t"""<circle cx="7" cy="3" r="1"/>"""),
+            Icons.markup(Api.Kind.Enum, Nil, true).s.split("<path").nn.length - 1 )
 
-        . assert(_ == (true, true, false, 15, true, true))
+        . assert(_ == (true, true, false, 15, true, true, 5))
 
         test(m"an update def has a notch cut from its square, and a consume def a semicircle"):
           val update: Text = Icons.markup(Api.Kind.Def, List(t"update"))
@@ -3165,7 +3210,7 @@ class Counter extends caps.Mutable:
             paths(Icons.markup(Api.Kind.Type, Nil, true)),
             Icons.markup(Api.Kind.Type, List(t"opaque"), true).contains(t"evenodd"),
             cased.contains(t"""<circle cx="7" cy="7" r="1"/>"""),
-            Icons.markup(Api.Kind.Class, List(t"final"), true).contains(t"<circle") )
+            Icons.markup(Api.Kind.Class, List(t"final"), true).contains(t"translate(12.68 9.92)") )
 
         . assert(_ == (true, 2, 3, 4, 8, true, true, true))
 
@@ -3199,7 +3244,7 @@ class Counter extends caps.Mutable:
 
           ( plain.contains(t"""viewBox="0 0 14 14""""),
             plain.contains(t"<rect"),
-            finished.contains(t"""viewBox="0 0 14 14"""") && finished.contains(t"<circle"),
+            finished.contains(t"""viewBox="0 0 14 14"""") && finished.contains(t"translate(10.81 9.92)"),
             inlined.contains(t"skewX"),
             translucent.contains(t"""fill="none" stroke="currentColor" stroke-width="0.3""""),
             hollow.contains(t"M 6.5 6.5 h 1 v 1 h -1 Z"),
@@ -3209,14 +3254,26 @@ class Counter extends caps.Mutable:
 
         . assert(_ == (true, true, true, true, true, true, true, true, true))
 
-        test(m"a stop and infix squares stand close to each shape"):
-          def stop(kind: Api.Kind): Boolean =
-            Icons.markup(kind, List(t"final")).contains(t"""viewBox="0 0 14 14"""")
+        test(m"every glyph has the same box, whatever decorates it"):
+          val kinds: List[Api.Kind.Scala] =
+            List
+              ( Api.Kind.Class, Api.Kind.CaseClass, Api.Kind.Object, Api.Kind.Trait, Api.Kind.Type,
+                Api.Kind.Enum, Api.Kind.Case, Api.Kind.Def, Api.Kind.Val, Api.Kind.Var,
+                Api.Kind.Given )
 
-          ( List(Api.Kind.Def, Api.Kind.Val, Api.Kind.Case, Api.Kind.Class).all(stop),
+          val decorated: List[List[Text]] =
+            List
+              ( List(t"final", t"infix", t"into"), List(t"java", t"annotation", t"lazy"),
+                List(t"kotlin", t"override", t"protected"), List(t"key", t"optional") )
+
+          val boxes: List[Text] = kinds.bind: (kind: Api.Kind.Scala) =>
+            decorated.map: (modifiers: List[Text]) =>
+              Icons.markup(kind, modifiers).cut(t">").head
+
+          ( boxes.distinct.size,
             Icons.markup(Api.Kind.Trait, List(t"infix")).contains(t"""x="12.5"""") )
 
-        . assert(_ == (true, true))
+        . assert(_ == (1, true))
 
         test(m"a package is a cube, a case class a class about a disc, and protected a shelter"):
           val cube: Text = Icons.markup(Api.Kind.Package, Nil)
@@ -3231,17 +3288,20 @@ class Counter extends caps.Mutable:
 
         . assert(_ == (true, false, true, true))
 
-        test(m"into, annotation and java each decorate the glyph"):
+        test(m"into, annotation, java and kotlin each decorate the glyph, a gap from it"):
           val plain: Text = Icons.markup(Api.Kind.Class, Nil)
           val into: Text = Icons.markup(Api.Kind.Class, List(t"into"))
           val annotation: Text = Icons.markup(Api.Kind.Class, List(t"annotation"))
           val java: Text = Icons.markup(Api.Kind.Class, List(t"java"))
+          val kotlin: Text = Icons.markup(Api.Kind.Class, List(t"kotlin"))
+          val method: Text = Icons.markup(Api.Kind.Def, List(t"java"))
 
-          ( into.contains(t"<polygon") && into.contains(t"""viewBox="-0.5 """),
-            annotation.contains(t"""viewBox="0 0 15.5 14""""),
-            java != plain && java.contains(t"""viewBox="0 0 14 14"""") )
+          ( into.contains(t"<polygon") && into.contains(t"""viewBox="0 0 14 14""""),
+            annotation.contains(t"""translate(11.92 0.3)"""),
+            java.contains(t"""translate(-1.09 0.3)""") && java != kotlin && java != plain,
+            method.contains(t"""translate(0.77 0.3)""") )
 
-        . assert(_ == (true, true, true))
+        . assert(_ == (true, true, true, true))
 
         test(m"java and annotation are said by the glyph, not written in a signature"):
           val declaration: Api.Declaration =
