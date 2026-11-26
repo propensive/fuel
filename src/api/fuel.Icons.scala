@@ -71,19 +71,19 @@ import pyrocosm.Inline
 //   optional      a small `?` in the top right corner (a TEL schema's member); with
 //                 `repeatable`, a small `*` there instead
 //   repeatable    a small `+` in the top right corner: one or more; with `optional`, the `*`
-//   key           a small key in the top left corner
+//   key           a small key in the top left corner, hanging down the left-hand side
 //   update        def: a notch cut from the top of the square, as a var's from a val's triangle
 //   consume       def: a semicircle cut from the right-hand side of the square
 //   extension     a def with a small plus at the top right (e-def)
 //   enum case     a disc (c-case); on a class or object, a dot at the centre (c-class, c-object)
 //
 // A class is three quarters of two rings, open to the east, and a trait half of the same rings,
-// from the south-east to the north-west. A type is four arcs of the outer ring, on the
-// diagonals, with a gap at each side. A class, a case class or a trait with a companion object
-// is one glyph, a whole circle: its own part, and the object's ring in the sector it leaves
+// from the south-east to the north-west. A type is four arcs of the outer ring, each an eighth of
+// it, centred on the diagonals. A class, a case class, a trait or a type with a companion object
+// is one glyph, a whole circle: its own part, and the object's ring in the sectors it leaves
 // open, with a gap between them along each radius where they meet (to the north-east and
-// south-east of a class, to the north-west and south-east of a trait), as if a line were drawn
-// there in the page's colour.
+// south-east of a class, to the north-west and south-east of a trait, on either side of each
+// of a type's arcs), as if a line were drawn there in the page's colour.
 // A case class is a class with the disc of a `case` at its centre, small enough to stand a
 // ring's breadth within its rings. The glyph of a pair has the modifiers of both.
 object Icons:
@@ -317,9 +317,9 @@ object Icons:
         Drawing(discs)
 
       case Api.Kind.Case      => Drawing(List(disc(2.8)))
-      // Four arcs of seventy degrees, centred on the diagonals.
+      // Four arcs of forty-five degrees, centred on the diagonals.
       case Api.Kind.Type =>
-        Drawing(List(45, 135, 225, 315).map { (at: Int) => band(5, 4, at - 35, at + 35) })
+        Drawing(List(45, 135, 225, 315).map { (at: Int) => band(5, 4, at - 22.5, at + 22.5) })
 
       case Api.Kind.TypeParam => base(Api.Kind.Type)
       case Api.Kind.Def       => Drawing(List(square))
@@ -340,6 +340,7 @@ object Icons:
   // Whether a kind's glyph can be drawn as one with its companion object's.
   def pairs(kind: Api.Kind): Boolean =
     kind == Api.Kind.Class || kind == Api.Kind.CaseClass || kind == Api.Kind.Trait
+    || kind == Api.Kind.Type
 
   // Half the width of the gap between a type's part of a circle and its companion's.
   private val parting: Double = 0.5
@@ -355,6 +356,16 @@ object Icons:
           else List(inset(5, 4, 45, 225, parting), inset(3, 2, 45, 225, parting))
 
         Drawing(rings + List(inset(5, 3, 225, 45, parting)))
+
+      // The type's arcs on the diagonals, and the object's ring in the four gaps between them.
+      case Api.Kind.Type =>
+        val arcs: List[Text] =
+          List(45, 135, 225, 315).map { (at: Int) => inset(5, 4, at - 22.5, at + 22.5, parting) }
+
+        val gaps: List[Text] =
+          List(0, 90, 180, 270).map { (at: Int) => inset(5, 3, at - 22.5, at + 22.5, parting) }
+
+        Drawing(arcs + gaps)
 
       case _ =>
         val rings: List[Text] =
@@ -395,7 +406,9 @@ object Icons:
       else Unset
 
     val shaped: Drawing =
-      if companion then paired(kind, has(t"abstract"), has(t"open"), has(t"sealed"))
+      if companion then
+        val pair: Drawing = paired(kind, has(t"abstract"), has(t"open"), has(t"sealed"))
+        if kind == Api.Kind.Type && has(t"opaque") then pair.add(ring(2, 1)) else pair
       else if kind == Api.Kind.Def && has(t"abstract") then
         // The square cut five by five, its second and fourth rows and columns taken away.
         val places: List[Double] = List(4.5, 6.5, 8.5)
@@ -512,11 +525,12 @@ object Icons:
       else
         java
 
-    // A key, in the top left corner: its bow, its shaft and two teeth.
+    // A key, in the top left corner: its bow, and its shaft hanging down the left-hand side, clear
+    // of the glyph, its two teeth pointing away from it.
     val marked: Drawing =
       if !has(t"key") then counted else
-        val bow: Text = t"M 1.4 2.2 A 1 1 0 1 0 -0.6 2.2 A 1 1 0 1 0 1.4 2.2"
-        val shaft: Text = t"M 1.4 2.2 H 4.4 V 3.3 M 3.3 2.2 V 3.1"
+        val bow: Text = t"M 0.4 3.2 A 1 1 0 1 1 0.4 1.2 A 1 1 0 1 1 0.4 3.2"
+        val shaft: Text = t"M 0.4 3.2 V 6.2 H -0.7 M 0.4 5.1 H -0.5"
         counted.add(stroked(t"$bow $shaft", 0.6)).reach(-1, grid)
 
     // An ellipsis, at the lower left: beside the foot of the shape, its last dot nearest it.

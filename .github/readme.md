@@ -356,8 +356,8 @@ A glyph of the member's keyword — the icons of Amok, drawn on their grid — p
 every table and in its page's title, transformed by its modifiers: a full stop follows a `final`
 one, an `inline` one is sheared, a `transparent` one drawn in outline, an abstract one dotted.
 A class is three quarters of two rings, a trait half of them, and a type four arcs of a ring;
-a class or a trait with a companion object is one glyph, a whole circle, the object's ring
-filling the sector the type leaves open.
+a class, a trait or a type with a companion object is one glyph, a whole circle, the object's
+ring filling the sectors the type leaves open.
 A parameter is an entity too, a member of the type form of what it parameterises: in package
 `quux`, `def foo[T](bar: Baz)` is the page `quux.foo`, and its parameters are `quux.foo#bar` and
 `quux.foo#T`, listed in a table of their own on its page; a class's constructor parameters and

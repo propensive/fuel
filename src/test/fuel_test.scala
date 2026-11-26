@@ -3162,10 +3162,12 @@ class Counter extends caps.Mutable:
             paths(alone),
             paths(paired),
             paths(Icons.markup(Api.Kind.Type, Nil)),
+            paths(Icons.markup(Api.Kind.Type, Nil, true)),
+            Icons.markup(Api.Kind.Type, List(t"opaque"), true).contains(t"evenodd"),
             cased.contains(t"""<circle cx="7" cy="7" r="1"/>"""),
             Icons.markup(Api.Kind.Class, List(t"final"), true).contains(t"<circle") )
 
-        . assert(_ == (true, 2, 3, 4, true, true))
+        . assert(_ == (true, 2, 3, 4, 8, true, true, true))
 
         test(m"a glyph of the keyword stands in a column before a member's name"):
           val declaration: Api.Declaration = Api.Declaration(Api.Kind.CaseClass)
