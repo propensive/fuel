@@ -255,7 +255,10 @@ Consecutive slides which each hold one block of code
 without frames of its own, in the same language, are one animated block, its frames those
 slides, each with the slide's marks and its `label`, `hold` and `at`: stepping from one to the
 next moves what stays and fades what arrives and departs, as a fence's `frame`s do. A slide
-whose code has `frame`s of its own is an animation alone. Code is compiled as `fuel show`
+whose code has `frame`s of its own is an animation alone. A frame which says `errors show` is meant not
+to compile, and shows what the compiler says of it, as a fence's frame does; an example of a
+mistake is written so, and not as a slide of its own, since a slide joined to its neighbours as
+a frame does not keep what its `syntax` says of errors. Code is compiled as `fuel show`
 compiles a document, against the configured classpath where there is one, and what it reports is
 printed before the slides are served.
 

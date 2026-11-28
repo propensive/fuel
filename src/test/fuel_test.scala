@@ -1424,6 +1424,15 @@ item []:
 
       . assert(_ == List(2, Unset))
 
+      test(m"a frame of a slide's code may be meant not to compile, which is no fault"):
+        val text: Text =
+          t"slide\n  syntax scala\n    frame wrong\n      errors show\n      code\n          val a: Int = t\"\"\n" +
+            t"    frame right\n      code\n          val a = 1\n"
+
+        read(text).lay(-1)(_(1).size)
+
+      . assert(_ == 0)
+
       test(m"each slide of a run is a frame, with the slide's label"):
         def step(label: Text, code: Text): Text =
           t"slide\n  syntax scala\n    label  $label\n    code\n        $code\n"

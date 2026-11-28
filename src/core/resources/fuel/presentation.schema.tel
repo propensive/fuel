@@ -60,13 +60,15 @@ record Frame
   description
       A frame of an animated block: its code, and what is said of it. Its `id`, which may be
       on its line, names the state the block is in when the frame is shown: the transcript
-      it is shown with links to it, as `[words](@id)`, to say when it arrives.
+      it is shown with links to it, as `[words](@id)`, to say when it arrives. A frame which
+      says `errors show` is meant not to compile, and shows what the compiler says of it.
   field id String optional
   field code String optional
   field label String optional
   field hold String optional
   field at String optional
   field language String optional
+  field errors String optional
   field highlight Mark optional repeatable
   field error Mark optional repeatable
   field caution Mark optional repeatable

@@ -68,6 +68,7 @@ entry .Frame
   entry #hold         the seconds the frame rests when the animation is played
   entry #at           the frame's time on the page's clock, in seconds
   entry #language     the frame's own language, where it is not the block's
+  entry #errors       what an error in the frame means: `show`, for a frame meant not to compile
   entry #highlight    a range of the code to mark, and its caption
   entry #error        a range marked as an error
   entry #caution      a range marked as a caution
