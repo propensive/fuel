@@ -104,9 +104,13 @@ object Presenter:
             if readText(sibling(path, style.file)).present then Nil
             else List(Presentation.unstyled(path, style))
 
+          val unscripted: List[Block] = presentation.script.lay(Nil): (script: Presentation.Script) =>
+            if readText(sibling(path, script.file)).present then Nil
+            else List(Presentation.unscripted(path, script))
+
           (transcript(path, presentation, said): @unchecked) match
-            case _ if !unstyled.nil =>
-              print(problems + unstyled)
+            case _ if !unstyled.nil || !unscripted.nil =>
+              print(problems + unstyled + unscripted)
               Problem.Unreadable
 
             case unread: Block =>
@@ -304,11 +308,25 @@ object Presenter:
         case _ =>
           Unset
 
+  // The script the presentation at `path` names, as its text, likewise.
+  def scripts(path: Text): Optional[Text] =
+    readText(path).let: (text: Text) =>
+      Presentation.read(path, text) match
+        case (presentation: Presentation, _) =>
+          presentation.script.let { (script: Presentation.Script) => readText(sibling(path, script.file)) }
+
+        case _ =>
+          Unset
+
   // A frontend serving the interface on the port, which `run` serves until `stop`, its pages
-  // linking the presentation's own stylesheet after Pyrocosm's, where it has one. Vouched
-  // pure, as the dashboard's is: it outlives the invocation which starts it.
-  def frontend(port: Int, styles: Optional[Text] = Unset)(using Monitor, Probate)
+  // linking the presentation's own stylesheet after Pyrocosm's, and running its own script
+  // after Pyrocosm's, where it has them. Vouched pure, as the dashboard's is: it outlives the
+  // invocation which starts it.
+  def frontend(port: Int, styles: Optional[Text] = Unset, scripts: Optional[Text] = Unset)
+    ( using Monitor, Probate )
   :   pyrocosm.WebFrontend =
 
     import webserverErrorPages.minimalErrorPage
-    scala.caps.unsafe.unsafeAssumePure(pyrocosm.WebFrontend(port, styles = styles))
+
+    scala.caps.unsafe.unsafeAssumePure:
+      pyrocosm.WebFrontend(port, styles = styles, scripts = scripts)

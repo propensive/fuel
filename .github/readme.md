@@ -330,6 +330,38 @@ what is on a slide (`.pyro-stage`, `.pyro-leaf`, `.pyro-codeblock`), and begin w
 `@import` of its fonts. A stylesheet which cannot be read fails the presentation, at the line
 which names it.
 
+A presentation may name a script of its own in the same way, with `script`: a JavaScript
+file, run by the page after Pyrocosm's own script, for what a stylesheet cannot do, such as a
+backdrop which moves.
+
+### Typed changes
+
+A step of an animation moves the tokens which stay to their new places, and fades the others in
+and out. That suits a change which rearranges the code. A change which is better seen made is
+*typed*: a frame which says `typed` is arrived at by typing the change from the frame before,
+a keypress at a time, quickly but not evenly, behind a cursor a character wide.
+
+```
+slide
+  syntax scala
+    frame
+      code
+          val id = uuid"not-a-uuid"
+    frame
+      typed
+      code
+          val id = uuid"7a0c2f5e-1b6d-4c3a-9e8f-2d4b6a8c0e1f"
+```
+
+What the two frames share is kept: the lines which are in both, and, on a line which changes,
+what it begins and ends with. What is between is erased and typed again, and a line which goes
+or comes is erased or typed whole. While it is typed, a character keeps the colour it had, and
+one typed into a token which keeps characters of another colour takes theirs: the frame's own
+colours arrive when the typing is done, with its marks. `typed` on the `syntax` itself makes
+every frame of the animation typed, and on a slide which is a frame of a run, that slide. A
+fence's frames in a document may be typed too. Under `--autoplay`, a typed step is started as
+long before its time as its typing takes, as any step is.
+
 ### The transcript
 
 What is said while a presentation is shown is a transcript: a Markdown file of its own, which

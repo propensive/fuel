@@ -108,7 +108,9 @@ object Preamble:
   // A frame of an animation: its code, absent when the `code` child is missing (which is a
   // problem, reported where the frame is), and what else is said of it. Its `id`, on its line
   // or beneath it, names the state the animation is in when the frame is shown, by which a
-  // presentation's transcript says when it arrives.
+  // presentation's transcript says when it arrives. A frame which is `typed` is arrived at by
+  // typing: the change from the frame before is made a keypress at a time, behind a cursor,
+  // as an editor's user would make it, where it would otherwise be made by moving its tokens.
   case class Frame
     ( code:          Optional[Text],
       label:         List[Inline]       = Nil,
@@ -118,7 +120,8 @@ object Preamble:
       marks:         List[Mark]         = Nil,
       substitutions: List[Substitution] = Nil,
       errors:        Errors             = Errors.Fail,
-      id:            Optional[Text]     = Unset )
+      id:            Optional[Text]     = Unset,
+      typed:         Boolean            = false )
 
   enum Errors:
     case Fail, Show, Ignore
@@ -229,7 +232,8 @@ object Preamble:
               marks(node),
               substitutions(node),
               if child(node, t"errors") == t"show" then Errors.Show else Errors.Fail,
-              named(child(node, t"id").or(node.primaryAtom)) )
+              named(child(node, t"id").or(node.primaryAtom)),
+              !node.fields(t"typed").to[List].nil )
 
       val frames: List[Frame] = framesOf(tel)
 
@@ -273,7 +277,8 @@ object Preamble:
           flag(t"run"),
           atoms(t"path").head,
           substitutions(tel),
-          alternatives )
+          alternatives,
+          flag(t"typed") )
 
 case class Preamble
   ( context:  Optional[Text],
@@ -291,7 +296,8 @@ case class Preamble
     run:      Boolean              = false,
     path:     Optional[Text]       = Unset,
     substitutions: List[Preamble.Substitution] = Nil,
-    alternatives:  List[Preamble.Alternative]  = Nil ):
+    alternatives:  List[Preamble.Alternative]  = Nil,
+    typed:         Boolean                     = false ):
 
   def scalaContext: Optional[harlequin.Scala.Context] = context match
     case t"term" => harlequin.Scala.Context.Term

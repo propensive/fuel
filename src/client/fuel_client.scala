@@ -289,7 +289,8 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
 
               case (title: Text, deck: Block) =>
                 val styles: Optional[Text] = Presenter.styles(absolute(directory, operand))
-                val frontend: pyrocosm.WebFrontend = Presenter.frontend(port, styles)
+                val scripts: Optional[Text] = Presenter.scripts(absolute(directory, operand))
+                val frontend: pyrocosm.WebFrontend = Presenter.frontend(port, styles, scripts)
                 async(frontend.run(Presenter.interface(title, deck))((_: pyrocosm.Event) => ()))
                 val url: Text = t"http://localhost:${port.show}/"
                 Out.println(t"fuel: presenting $title at $url (Ctrl+C to stop)")
