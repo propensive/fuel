@@ -288,7 +288,8 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
               case Presenter.Problem.Unaligned  => Unaligned
 
               case (title: Text, deck: Block) =>
-                val frontend: pyrocosm.WebFrontend = Presenter.frontend(port)
+                val styles: Optional[Text] = Presenter.styles(absolute(directory, operand))
+                val frontend: pyrocosm.WebFrontend = Presenter.frontend(port, styles)
                 async(frontend.run(Presenter.interface(title, deck))((_: pyrocosm.Event) => ()))
                 val url: Text = t"http://localhost:${port.show}/"
                 Out.println(t"fuel: presenting $title at $url (Ctrl+C to stop)")

@@ -107,4 +107,5 @@ select Part
 
 document
   field title String optional
+  field style String optional
   field slide Slide optional repeatable

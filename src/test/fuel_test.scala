@@ -1424,6 +1424,13 @@ item []:
 
       . assert(_ == List(2, Unset))
 
+      test(m"a presentation names a stylesheet of its own, which is no fault"):
+        read(t"title  Talk\nstyle  talk.css\nslide\n  markdown\n      a\n").let:
+          (presentation: Presentation, problems: List[Block]) =>
+            (presentation.style.let { style => (style.file, style.line) }, problems.size)
+
+      . assert(_ == ((t"talk.css", 2), 0))
+
       test(m"a frame of a slide's code may be meant not to compile, which is no fault"):
         val text: Text =
           t"slide\n  syntax scala\n    frame wrong\n      errors show\n      code\n          val a: Int = t\"\"\n" +

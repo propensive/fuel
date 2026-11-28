@@ -43,6 +43,7 @@ import pyrocosm.{Block, Inline, Tone}
 // a browser one slide at a time, to the schema `presentation` (`fuel/presentation.schema.tel`).
 //
 //   title  Effects, gently        # what the page is called; the file's name otherwise
+//   style  talk.css               # a stylesheet of its own, a file beside this one
 //   slide
 //     markdown
 //         # Effects, gently
@@ -106,6 +107,11 @@ object Presentation:
 
   case class Slide(parts: List[Part], line: Int, id: Optional[Text] = Unset)
 
+  // The stylesheet a presentation names: its file, as it is written — relative to the
+  // presentation's — and the line which names it. Its rules come after Pyrocosm's own, so a
+  // presentation may be set in a site's colours and faces.
+  case class Style(file: Text, line: Int)
+
   // A state of the presentation: slide `slide` (from one) as it is first shown, or its
   // animation's frame `frame` (from one), with the id it has and the line of its slide.
   case class State(id: Optional[Text], line: Int, slide: Int, frame: Optional[Int] = Unset):
@@ -128,8 +134,8 @@ object Presentation:
   // carries the TEL error's own code (1); a slide's code with nothing in it (2); an empty
   // slide (3); an id which two states have, or a state which has two (4); a cue which names no
   // state (5); a state with an id which the transcript does not cue (6); a state cued twice,
-  // or out of its order (7); a cue which is not in what is said (8); and a transcript which
-  // cannot be read (9).
+  // or out of its order (7); a cue which is not in what is said (8); a transcript which
+  // cannot be read (9); and a stylesheet which cannot be read (10).
   private def bolt(variant: Int): fulminate.Bolt =
     FuelBolts(FuelBolts.core, FuelBolts.presentation, variant)
 
@@ -145,7 +151,7 @@ object Presentation:
         case 1 =>
           if last == t"transcript"
           then t"A presentation does not name its transcript, which is given beside it: `fuel present <file> --transcript <transcript>`."
-          else t"A presentation has a `title` and `slide`s, but not `$last`."
+          else t"A presentation has a `title`, a `style` and `slide`s, but not `$last`."
 
         case 2 =>
           if last == t"code"
@@ -294,7 +300,11 @@ object Presentation:
 
       val named: Optional[Text] = title.let: (title: Text) => if title == t"" then Unset else title
 
-      (Presentation(named, slides), problems.reverse)
+      val style: Optional[Style] =
+        tel.field(t"style").let(_.atomTexts.to[List].join(t" ").trim).let: (file: Text) =>
+          if file == t"" then Unset else Style(file, Compounds.line(tel, List(t"style")))
+
+      (Presentation(named, slides, style), problems.reverse)
 
   // A slide's parts as blocks, numbered nowhere, since a slide is not a file.
   private def unnumbered(blocks: List[Block]): List[Block] = blocks.map:
@@ -438,6 +448,10 @@ object Presentation:
     val location: Block.Location = Block.Location(path, line)
     Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(message)), code = bolt(variant))
 
+  // That the stylesheet a presentation, at `path`, names could not be read.
+  def unstyled(path: Text, style: Style): Block =
+    failure(path, style.line, t"The stylesheet `${style.file}` could not be read.", 10)
+
   // That the transcript a presentation is given could not be read.
   def unread(file: Text): Block =
     val message: List[Block] = List(Block.paragraph(t"The transcript could not be read."))
@@ -524,4 +538,7 @@ object Presentation:
     val faults: List[Block] = doubled + repeated + stray + unknown + recued + uncued
     if faults.nil then disordered(transcript.cues, ids) else faults
 
-case class Presentation(title: Optional[Text], slides: List[Presentation.Slide])
+case class Presentation
+  ( title:  Optional[Text],
+    slides: List[Presentation.Slide],
+    style:  Optional[Presentation.Style] = Unset )
