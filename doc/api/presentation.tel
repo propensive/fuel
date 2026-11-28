@@ -12,6 +12,7 @@ detail
     of a slide or a frame, as `[words](@id)`, where the words which bring it are said.
 
 entry #title   the presentation's title
+entry #style   a stylesheet of the presentation's own, by its path from the presentation's
 entry #slide   one slide, in the order they are shown
 
 entry .Slide

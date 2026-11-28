@@ -100,7 +100,15 @@ object Presenter:
           Problem.Unreadable
 
         case (presentation: Presentation, problems: List[Block] @unchecked) =>
+          val unstyled: List[Block] = presentation.style.lay(Nil): (style: Presentation.Style) =>
+            if readText(sibling(path, style.file)).present then Nil
+            else List(Presentation.unstyled(path, style))
+
           (transcript(path, presentation, said): @unchecked) match
+            case _ if !unstyled.nil =>
+              print(problems + unstyled)
+              Problem.Unreadable
+
             case unread: Block =>
               print(problems + List(unread))
               Problem.Unreadable
@@ -280,8 +288,27 @@ object Presenter:
     // On a stage: the deck alone, filling the window and scaled to it.
     Interface(Inline.text(title), List(panel), hints = Hints(pyrocosm.hints.web.Stage))
 
-  // A frontend serving the interface on the port, which `run` serves until `stop`. Vouched
+  // A file named in a presentation, at `path`: beside it, unless it is named from the root.
+  private def sibling(path: Text, file: Text): Text =
+    val segments: List[Text] = path.cut(t"/")
+    if file.starts(t"/") then file else t"${segments.keep(segments.size - 1).join(t"/")}/$file"
+
+  // The stylesheet the presentation at `path` names, as its text; nothing, where it names none
+  // or cannot be read, which `prepare` reports.
+  def styles(path: Text): Optional[Text] =
+    readText(path).let: (text: Text) =>
+      Presentation.read(path, text) match
+        case (presentation: Presentation, _) =>
+          presentation.style.let { (style: Presentation.Style) => readText(sibling(path, style.file)) }
+
+        case _ =>
+          Unset
+
+  // A frontend serving the interface on the port, which `run` serves until `stop`, its pages
+  // linking the presentation's own stylesheet after Pyrocosm's, where it has one. Vouched
   // pure, as the dashboard's is: it outlives the invocation which starts it.
-  def frontend(port: Int)(using Monitor, Probate): pyrocosm.WebFrontend =
+  def frontend(port: Int, styles: Optional[Text] = Unset)(using Monitor, Probate)
+  :   pyrocosm.WebFrontend =
+
     import webserverErrorPages.minimalErrorPage
-    scala.caps.unsafe.unsafeAssumePure(pyrocosm.WebFrontend(port))
+    scala.caps.unsafe.unsafeAssumePure(pyrocosm.WebFrontend(port, styles = styles))

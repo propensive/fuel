@@ -313,6 +313,23 @@ one take, as WAV or FLAC for choice (MFA's own sox and ffmpeg convert the other 
 whole talk is aligned as one utterance, which MFA manages but is its weakest case, so if it
 finds no alignment fuel tries once more with wider beams.
 
+### A stylesheet of its own
+
+A presentation is shown in Pyrocosm's colours and faces unless it names a stylesheet, with
+`style`, by a path relative to its own file:
+
+```
+title  Effects, gently
+style  talk.css
+```
+
+The stylesheet is a CSS file, linked by the presentation's page after Pyrocosm's own, so its
+rules prevail. It may set Pyrocosm's custom properties (`--pyro-code-bg`, the
+`--pyro-code-accent-…` of each kind of token, `--pyro-font-mono` and the rest), give rules to
+what is on a slide (`.pyro-stage`, `.pyro-leaf`, `.pyro-codeblock`), and begin with the
+`@import` of its fonts. A stylesheet which cannot be read fails the presentation, at the line
+which names it.
+
 ### The transcript
 
 What is said while a presentation is shown is a transcript: a Markdown file of its own, which
