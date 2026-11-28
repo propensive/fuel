@@ -43,7 +43,6 @@ import pyrocosm.{Block, Inline, Tone}
 // a browser one slide at a time, to the schema `presentation` (`fuel/presentation.schema.tel`).
 //
 //   title  Effects, gently        # what the page is called; the file's name otherwise
-//   transcript  talk.md           # what is said, a Markdown file beside this one
 //   slide
 //     markdown
 //         # Effects, gently
@@ -71,11 +70,12 @@ import pyrocosm.{Block, Inline, Tone}
 //
 // The presentation is in one state at a time: a slide as it is first shown, or a later frame of
 // the animation the deck steps through on it. A state may have an `id` — a slide's on its line
-// or beneath it, a frame's likewise — and the presentation's `transcript` names the Markdown
-// file of what is said, in which the words which bring a state are a link to its id,
-// `[words](@id)` (`Transcript`). The transcript must cue every state which has an id, once, in
+// or beneath it, a frame's likewise. What is said is a transcript, a Markdown file apart from
+// the presentation, which is given with it when it is shown, so that one presentation may be
+// read in each of several languages: in it the words which bring a state are a link to its id,
+// `[words](@id)` (`Transcript`). A transcript must cue every state which has an id, once, in
 // the order the states are shown, and nothing else: `cohere` says where it does not, and a
-// presentation whose transcript does not is not shown.
+// presentation is not shown with a transcript which does not.
 object Presentation:
   // The schema a presentation is checked against, a TEL schema document among the resources:
   // what a slide may hold, and what a slide's code may say, which is what a fence's preamble
@@ -105,10 +105,6 @@ object Presentation:
         at:       Optional[Double] = Unset )
 
   case class Slide(parts: List[Part], line: Int, id: Optional[Text] = Unset)
-
-  // The transcript a presentation names: its file, as it is written — relative to the
-  // presentation's — and the line which names it.
-  case class Reference(file: Text, line: Int)
 
   // A state of the presentation: slide `slide` (from one) as it is first shown, or its
   // animation's frame `frame` (from one), with the id it has and the line of its slide.
@@ -147,13 +143,15 @@ object Presentation:
     error.reason match
       case Reason.UnknownKeyword => path.size match
         case 1 =>
-          t"A presentation has a `title`, a `transcript` and `slide`s, but not `$last`."
+          if last == t"transcript"
+          then t"A presentation does not name its transcript, which is given beside it: `fuel present <file> --transcript <transcript>`."
+          else t"A presentation has a `title` and `slide`s, but not `$last`."
 
         case 2 =>
           if last == t"code"
           then t"A slide's code is `syntax <language>`, not `code`: `syntax` names the highlighting."
           else if last == t"transcript"
-          then t"What is said is not written on a slide: the presentation's `transcript` names a Markdown file, which links to the slide's `id` as `[words](@id)`."
+          then t"What is said is not written on a slide: it is a Markdown file given beside the presentation, `fuel present <file> --transcript <transcript>`, which links to the slide's `id` as `[words](@id)`."
           else t"A slide has an `id`, `markdown` and `syntax <language>`, but not `$last`."
 
         case _ =>
@@ -296,11 +294,7 @@ object Presentation:
 
       val named: Optional[Text] = title.let: (title: Text) => if title == t"" then Unset else title
 
-      val transcript: Optional[Reference] =
-        tel.field(t"transcript").let(_.atomTexts.to[List].join(t" ").trim).let: (file: Text) =>
-          if file == t"" then Unset else Reference(file, Compounds.line(tel, List(t"transcript")))
-
-      (Presentation(named, slides, transcript), problems.reverse)
+      (Presentation(named, slides), problems.reverse)
 
   // A slide's parts as blocks, numbered nowhere, since a slide is not a file.
   private def unnumbered(blocks: List[Block]): List[Block] = blocks.map:
@@ -444,9 +438,10 @@ object Presentation:
     val location: Block.Location = Block.Location(path, line)
     Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(message)), code = bolt(variant))
 
-  // That a presentation's transcript could not be read, where the presentation names it.
-  def unread(path: Text, reference: Reference, file: Text): Block =
-    failure(path, reference.line, t"The transcript `$file` could not be read.", 9)
+  // That the transcript a presentation is given could not be read.
+  def unread(file: Text): Block =
+    val message: List[Block] = List(Block.paragraph(t"The transcript could not be read."))
+    Block.Diagnostic(Tone.Failure, Block.Location(file), message, code = bolt(9))
 
   // Where a presentation, at `path`, and its transcript, at `file`, do not cohere: the
   // transcript must cue each state which has an id, once, in the order the states are shown,
@@ -529,7 +524,4 @@ object Presentation:
     val faults: List[Block] = doubled + repeated + stray + unknown + recued + uncued
     if faults.nil then disordered(transcript.cues, ids) else faults
 
-case class Presentation
-  ( title:      Optional[Text],
-    slides:     List[Presentation.Slide],
-    transcript: Optional[Presentation.Reference] = Unset )
+case class Presentation(title: Optional[Text], slides: List[Presentation.Slide])

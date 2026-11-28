@@ -4,11 +4,11 @@ tel 1.0
 # Markdown or a block of code, and consecutive slides of code in one language are animated from
 # one to the next. A slide's `syntax` names its code's language, and may say what a fence's
 # preamble says — marks, `context`, `errors`, frames — with the code itself beneath `code`, and
-# a `label` for its frame. What is said is the `transcript`, a Markdown file beside this one,
-# which `fuel transcript doc/slides.tel` prints: a slide's id, on its line, is what the
-# transcript links to, as `[words](@id)`, where the words which bring the slide are said.
+# a `label` for its frame. What is said is a transcript, a Markdown file given with this one,
+# as `fuel present doc/slides.tel --transcript doc/slides.md`: a slide's id, on its line, is
+# what the transcript links to, as `[words](@id)`, where the words which bring the slide are
+# said.
 title  Fuel, in three slides of code
-transcript  slides.md
 
 slide
   markdown

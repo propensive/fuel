@@ -510,10 +510,11 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   (`src/core/resources/fuel/presentation.schema.tel`): a slide's `syntax <language>` holds its
   code (the
   keyword `code` being its code beneath a preamble, as a frame's). What is said is apart from
-  the slides: the presentation's `transcript` names a Markdown file (`Transcript`), in which
+  the slides, and from the presentation: a transcript is a Markdown file given with it
+  (`--transcript`, so that there may be one for each language; `Transcript`), in which
   the words which bring a state are a link to the `id` of its slide or frame, `[words](@id)`.
   The transcript must cue every state with an id, once and in order (`Presentation.cohere`),
-  and a presentation whose transcript does not is not shown.
+  and a presentation is not shown with a transcript which does not.
 
 ### Decisions
 

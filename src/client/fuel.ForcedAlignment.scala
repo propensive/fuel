@@ -194,7 +194,7 @@ object ForcedAlignment:
   // The code of why a presentation cannot be timed by an alignment, `↯/f.27.1.<variant>`: a
   // file to align by which cannot be read (1); an aligner which could not be installed (2), or
   // which failed (3); no cache directory to install one in (4); an alignment which cannot be
-  // read (5); a presentation without a transcript, or a state after the first without an id
+  // read (5); a presentation given no transcript, or a state after the first without an id
   // (6); a transcript and an alignment which differ too much (7); and a state none of whose
   // cue's words the alignment has (8).
   private[fuel] def bolt(variant: Int): fulminate.Bolt =

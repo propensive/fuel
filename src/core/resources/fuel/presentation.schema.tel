@@ -59,8 +59,8 @@ record Substitution
 record Frame
   description
       A frame of an animated block: its code, and what is said of it. Its `id`, which may be
-      on its line, names the state the block is in when the frame is shown: the presentation's
-      transcript links to it, as `[words](@id)`, to say when it arrives.
+      on its line, names the state the block is in when the frame is shown: the transcript
+      it is shown with links to it, as `[words](@id)`, to say when it arrives.
   field id String optional
   field code String optional
   field label String optional
@@ -92,7 +92,7 @@ record Alternative
 record Slide
   description
       A slide: its parts. Its `id`, which may be on its line, names the state the presentation
-      is in when the slide is first shown: the presentation's transcript links to it, as
+      is in when the slide is first shown: the transcript it is shown with links to it, as
       `[words](@id)`, to say when it arrives.
   field id String optional
   select Part optional repeatable
@@ -105,5 +105,4 @@ select Part
 
 document
   field title String optional
-  field transcript String optional
   field slide Slide optional repeatable

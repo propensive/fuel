@@ -8,12 +8,11 @@ detail
     A presentation is a TEL document: a `#title`, and a `#slide` for each of its slides, which
     holds Markdown or a block of code (`.Part`). A slide's code (`.Code`) says what a fence's
     preamble says: its marks, how far it is compiled, and the frames of its animation. What is
-    said while it is shown is its `#transcript`, a Markdown file of its own, which links to the
-    id of a slide or a frame, as `[words](@id)`, where the words which bring it are said.
+    said while it is shown is a transcript, a Markdown file given with it, which links to the id
+    of a slide or a frame, as `[words](@id)`, where the words which bring it are said.
 
-entry #title        the presentation's title
-entry #transcript   the Markdown file of what is said, by its path from the presentation's
-entry #slide        one slide, in the order they are shown
+entry #title   the presentation's title
+entry #slide   one slide, in the order they are shown
 
 entry .Slide
   entry #id   the name the transcript cues the slide by, which may be on its line

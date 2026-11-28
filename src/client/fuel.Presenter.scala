@@ -51,34 +51,28 @@ object Presenter:
   val interval: Double = 4.0
 
   // Why a presentation cannot be shown: its file, or its transcript's, cannot be read or is
-  // not TEL; its transcript does not cue its states, each once and in order; the alignment it
+  // not TEL; the transcript it is given does not cue its states, each once and in order; the alignment it
   // is to be timed by cannot be read or does not correspond to its transcript; or the aligner
   // could not be installed or run on the recording.
   enum Problem:
     case Unreadable, Incoherent, Misaligned, Unaligned
 
-  // The transcript a presentation at `path` names, read from its file, which is beside the
-  // presentation's unless it is named from the root: with the file as it is named, and where
-  // the two do not cohere. `Unset` where the presentation names none, and the diagnostic where
-  // its file cannot be read.
-  def transcript(path: Text, presentation: Presentation)
+  // The transcript a presentation at `path` is given, read from `file`: with where the two do
+  // not cohere. `Unset` where it is given none, and the diagnostic where the file cannot be
+  // read.
+  def transcript(path: Text, presentation: Presentation, file: Optional[Text])
   :   Optional[(Transcript, List[Block])] | Block =
 
-    presentation.transcript.let: (reference: Presentation.Reference) =>
-      val segments: List[Text] = path.cut(t"/")
-      val directory: Text = segments.keep(segments.size - 1).join(t"/")
-
-      val file: Text =
-        if reference.file.starts(t"/") then reference.file else t"$directory/${reference.file}"
-
-      readText(file).lay[Optional[(Transcript, List[Block])] | Block]
-        ( Presentation.unread(path, reference, file) ): (markdown: Text) =>
-            val transcript: Transcript = Transcript.read(markdown)
-            (transcript, Presentation.cohere(path, presentation, file, transcript))
+    file.let: (file: Text) =>
+      readText(file).lay[Optional[(Transcript, List[Block])] | Block](Presentation.unread(file)):
+        (markdown: Text) =>
+          val transcript: Transcript = Transcript.read(markdown)
+          (transcript, Presentation.cohere(path, presentation, file, transcript))
 
   // The presentation at `path`, read and compiled, as its title and its deck, with what the
   // compile reported printed at the terminal's width; or the problem, which is printed too.
-  // A presentation whose transcript does not cohere with it is a problem, and is not shown.
+  // A presentation given a transcript, the Markdown file `said`, which does not cohere with it
+  // is a problem, and is not shown.
   // An `autoplay` deck is given a schedule — the times the cues of its states are spoken, from
   // `align`, a recording of the transcript read aloud (aligned by Montreal Forced Aligner,
   // which fuel installs on first use) or a forced alignment already made; or else a step every
@@ -88,7 +82,8 @@ object Presenter:
       path:     Text,
       width:    Int,
       autoplay: Boolean        = false,
-      align:    Optional[Text] = Unset )
+      align:    Optional[Text] = Unset,
+      said:     Optional[Text] = Unset )
     (using Stdio, Environment)
   :   (Text, Block) | Problem =
 
@@ -104,7 +99,7 @@ object Presenter:
           Problem.Unreadable
 
         case (presentation: Presentation, problems: List[Block] @unchecked) =>
-          (transcript(path, presentation): @unchecked) match
+          (transcript(path, presentation, said): @unchecked) match
             case unread: Block =>
               print(problems + List(unread))
               Problem.Unreadable
@@ -113,8 +108,8 @@ object Presenter:
               print(problems + faults)
               Problem.Incoherent
 
-            case said =>
-              val transcript: Optional[Transcript] = said match
+            case read =>
+              val transcript: Optional[Transcript] = read match
                 case (transcript: Transcript, _) => transcript
                 case _                           => Unset
 
@@ -189,7 +184,7 @@ object Presenter:
         // that a `Text` case covers `Text`.
         def unsaid: Problem =
           val label: Text = ForcedAlignment.bolt(6).label
-          val message: Text = t"the presentation names no transcript, which timing it by an alignment needs"
+          val message: Text = t"no transcript is given with `--transcript`, which timing the presentation by an alignment needs"
           Out.println(t"fuel: $label $message")
           Problem.Misaligned
 

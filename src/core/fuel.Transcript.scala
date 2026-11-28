@@ -38,7 +38,8 @@ import dysasymptotics.{linearAccess, linearSize}
 import pyrocosm.{Block, Inline, Markdowns}
 
 // A presentation's transcript: what is said while it is shown, a Markdown document of its own,
-// which the presentation names. Where the words which bring a state of the presentation are
+// given with the presentation when it is shown, so that there may be one for each language it
+// is read in. Where the words which bring a state of the presentation are
 // said, they are a link to the state's `id`, behind the sigil a cue is known by:
 //
 //   …and the compiler will work out that the return type is [this](@reveal-inferred-type).

@@ -22,8 +22,8 @@ fuel serve stop    # stop serving them
 fuel show doc/x.md # one document, set in the terminal: justified, hyphenated, highlighted
 fuel present doc/slides.tel  # a presentation's slides in a browser until Ctrl+C
 fuel present doc/slides.tel --autoplay  # the same, played by itself to a schedule
-fuel present doc/slides.tel --align talk.wav  # the same, timed to a recording of the transcript
-fuel transcript doc/slides.tel  # the presentation's transcript, checked against its slides
+fuel present doc/slides.tel --transcript doc/slides.md --align talk.wav  # the same, timed to a recording of the transcript
+fuel transcript doc/slides.tel doc/slides.md  # a transcript of the presentation, checked against its slides
 fuel sync github propensive/fuel  # attach a repository's issues to the API pages, and fetch them
 fuel sync          # fetch every attached tracker's issues again
 fuel install       # install tab-completions and the manpage
@@ -226,7 +226,6 @@ a block of code ([`doc/slides.tel`](../doc/slides.tel) is an example):
 
 ```
 title  Effects, gently
-transcript  talk.md
 
 slide
   markdown
@@ -269,14 +268,14 @@ how many steps the deck has; the timings will be read from a file alongside the 
 later. Pressing a key takes the deck back from the schedule.
 
 The schedule can instead come from a recording of the transcript being read:
-`fuel present <file> --align talk.wav` aligns the recording against the transcript
-(`fuel transcript <file>` prints it, to read from) with
+`fuel present <file> --transcript talk.md --align talk.wav` aligns the recording against the
+transcript (`fuel transcript <file> talk.md` prints it, to read from) with
 [Montreal Forced Aligner](https://montreal-forced-aligner.readthedocs.io/), and each state after
 the first arrives at the moment the first word of its cue is spoken — or, where the aligner
 missed that word, the first it caught from there to the next cue. `--align` also takes an
 alignment already made, in any of MFA's formats — a TextGrid (its default), JSON or CSV —
-telling a recording from an alignment by its extension or its first bytes. The presentation
-must name a transcript, every state after the first must have an id, and the transcript and the
+telling a recording from an alignment by its extension or its first bytes. A transcript
+must be given, every state after the first must have an id, and the transcript and the
 alignment must correspond: a word the aligner did not know (`<unk>`) stands for any one word,
 but if more than one word in ten is in the one and not the other, the presentation is not
 shown, and the differences are printed as a word diff (`-word` for a word of the transcript not
@@ -301,9 +300,11 @@ finds no alignment fuel tries once more with wider beams.
 
 ### The transcript
 
-What is said while a presentation is shown is its transcript: a Markdown file of its own, which
-the presentation names with `transcript`, by a path relative to its own file. The two are tied
-by the presentation's *states*. A presentation is in one state at a time: a slide as it is
+What is said while a presentation is shown is a transcript: a Markdown file of its own, which
+the presentation does not name, and is given with it, as `fuel present <file> --transcript
+talk.md` — so one presentation may have a transcript in each language it is given in, and
+`--transcript talk.fr.md` shows the same slides to the French. The two are tied by the
+presentation's *states*. A presentation is in one state at a time: a slide as it is
 first shown, or a later frame of the animation stepped through on it (the frames of a `syntax`
 with `frame`s, or of the last fence with frames in its Markdown). A state may have an `id`, on
 the line of its `slide` or `frame` or beneath it:
@@ -335,7 +336,7 @@ its lists and quotations — and not its headings, which are there to find a way
 link to anything else is said as its words are. A transcript among a section's documents is
 read as any document, its cues' words as any others.
 
-The transcript must cohere with the presentation, and one which does not is a failure: the
+A transcript given must cohere with the presentation, and one which does not is a failure: the
 presentation is not shown, each fault is reported at its line in the file it is in, and the
 command exits with status 10. Every state with an id must be cued, once, and the cues must
 come in the order the states are shown; a cue must name a state, and be in what is said; and
@@ -343,9 +344,12 @@ no two states may have one id. A state without an id needs no cue — it is step
 or by the regular schedule — but a presentation timed by `--align` needs an id on every state
 after the first, which is shown from the start.
 
-`fuel transcript <file>` prints the presentation's transcript, set to the terminal's width
+`fuel transcript <file> <transcript>` prints the transcript, set to the terminal's width
 without breaking a word across lines, a cue's words as any others, with what the reading of the
-presentation reports after it; it makes the same check, and fails the same way.
+presentation reports after it; it makes the same check, and fails the same way. A recording
+is aligned with Montreal Forced Aligner's English models, whatever language the transcript is
+in; a transcript in another language is timed by an alignment made apart, which `--align` takes
+as it is.
 
 ## Output
 

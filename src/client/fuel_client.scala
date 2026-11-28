@@ -92,7 +92,7 @@ object ui:
   val Sync   = Subcommand("sync", "attach a tracker's issues to the API documentation, and fetch them")
 
   val Transcript =
-    Subcommand("transcript", "print a presentation's transcript, and check that it cues the presentation's states")
+    Subcommand("transcript", "print a transcript of a presentation, and check that it cues the presentation's states")
   val Github = Subcommand("github", "a GitHub repository, as owner/repo")
 
   // Each is read from the cascade every Pyrocosm tool shares: the flag, the `fuel.*` property,
@@ -173,6 +173,13 @@ object ui:
         List(t"alignment"),
         "time the autoplay by a recording of the transcript being read, or by a forced alignment of one (MFA's TextGrid, JSON or CSV)" )
 
+  val Said =
+    Flag[Text]
+      ( "transcript",
+        false,
+        Nil,
+        "the Markdown file of what is said, which cues the presentation's states as `[words](@id)`, and is checked against them" )
+
   val PresentPort =
     Setting[Text](t"presentPort", t"the port `fuel present` serves on (8061 by default)")
 
@@ -226,12 +233,13 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
       // Registered here, so that it is offered and documented; its value is read in the
       // execution, where a flag's value is a value.
       ui.Align()
+      ui.Said()
 
       // The operand is the first word which is not a flag, nor a flag's value.
       val words: List[Text] = rest.map(_())
 
       val operand: Optional[Text] = words.indexed.filter: (word: Text, index: Ordinal) =>
-        val flags: List[Text] = List(t"--align", t"--alignment")
+        val flags: List[Text] = List(t"--align", t"--alignment", t"--transcript")
         val valued: Boolean = before(words, index).lay(false)(flags.has(_))
         !word.starts(t"-") && !valued
 
@@ -249,6 +257,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
         val stdio: Stdio = summon[Stdio]
 
         val align: Optional[Text] = ui.Align.value.let(absolute(directory, _))
+        val said: Optional[Text] = ui.Said.value.let(absolute(directory, _))
 
         // `--align` plays the presentation to the recording's times, so it implies `--autoplay`.
         val autoplay: Boolean = autoplay0 || align.present
@@ -256,7 +265,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
         operand match
           case operand: Text =>
             val prepared =
-              Presenter.prepare(config, absolute(directory, operand), width, autoplay, align)
+              Presenter.prepare(config, absolute(directory, operand), width, autoplay, align, said)
 
             type Outcome =
               Exit | Tool.UsageError.type | NoDocument.type | Misaligned.type | Unaligned.type |
@@ -281,15 +290,15 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
 
           case _ =>
             val label: Text = usage(1).label
-            val form: Text = t"fuel present <file> [--autoplay] [--align <recording or alignment>]"
+            val form: Text = t"fuel present <file> [--transcript <file>] [--autoplay] [--align <recording or alignment>]"
             Out.println(t"fuel: $label usage: $form")
             Tool.UsageError
 
-    // `fuel transcript <file>`: a presentation's transcript, set to the terminal's width, and
-    // checked against the presentation's states.
+    // `fuel transcript <file> <transcript>`: a transcript of a presentation, set to the
+    // terminal's width, and checked against the presentation's states.
     case ui.Transcript() :: rest =>
-      val operand: Optional[Text] = rest.map(_()).filter(!_.starts(t"-")).head
-      ambient(transcript(directory, operand))
+      val operands: List[Text] = rest.map(_()).filter(!_.starts(t"-"))
+      ambient(transcript(directory, operands.head, operands.skip(1).head))
 
     // `fuel compile`: read the settings here, where completion mode registers them, and
     // compile within the execution.
@@ -1183,15 +1192,17 @@ private def rendered
 // and hyphenated, code highlighted, an animated block as its steps in sequence; its problems
 // after it. Compiled as `compile` compiles, with the session and the classpath the
 // configuration gives, so what the page shows is what the dashboard would.
-// A presentation's transcript, printed as it is set, wrapped to the terminal's width, words
+// A transcript of a presentation, printed as it is set, wrapped to the terminal's width, words
 // whole, a cue's words as any others; what the presentation's reading reports follows it, and
 // where the transcript does not cohere with the presentation, which is a failure.
-private def transcript(directory: Text, operand: Optional[Text])(using Stdio, Environment)
+private def transcript(directory: Text, operand: Optional[Text], said: Optional[Text])
+  ( using Stdio, Environment )
 :   Exit | Tool.UsageError.type | NoDocument.type | Incoherent.type =
 
-  operand match
-    case operand: Text =>
+  operand.let { (operand: Text) => said.let { (said: Text) => (operand, said) } } match
+    case (operand: Text, said: Text) =>
       val path: Text = absolute(directory, operand)
+      val file: Text = absolute(directory, said)
       val renderer = TerminalRenderer()
 
       def print(blocks: List[Block]): Unit =
@@ -1209,7 +1220,7 @@ private def transcript(directory: Text, operand: Optional[Text])(using Stdio, En
                 Out.println(blank)
                 print(problems)
 
-            (Presenter.transcript(path, presentation): @unchecked) match
+            (Presenter.transcript(path, presentation, file): @unchecked) match
               case unread: Block =>
                 print(problems + List(unread))
                 NoDocument
@@ -1220,7 +1231,6 @@ private def transcript(directory: Text, operand: Optional[Text])(using Stdio, En
                 if faults.nil then Exit.Ok else Incoherent
 
               case _ =>
-                Out.println(t"fuel: $path names no transcript")
                 reported(problems)
                 Exit.Ok
 
@@ -1229,7 +1239,7 @@ private def transcript(directory: Text, operand: Optional[Text])(using Stdio, En
           NoDocument
 
     case _ =>
-      Out.println(t"fuel: ${usage(6).label} usage: fuel transcript <file>")
+      Out.println(t"fuel: ${usage(6).label} usage: fuel transcript <file> <transcript>")
       Tool.UsageError
 
 private def show(config: Workspace.Config, directory: Text, operand: Optional[Text])

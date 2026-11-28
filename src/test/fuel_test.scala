@@ -1289,20 +1289,19 @@ item []:
 
       . assert(_ == (List(t"y"), List(t"x"), t"Hello you."))
 
-      test(m"a presentation names its transcript, and a slide and a frame have ids on their lines or beneath"):
+      test(m"a slide and a frame have ids on their lines or beneath"):
         val text: Text =
-          t"transcript  talk.md\nslide intro\n  markdown\n      a\nslide\n  id second\n  markdown\n      b\n" +
+          t"slide intro\n  markdown\n      a\nslide\n  id second\n  markdown\n      b\n" +
             t"slide\n  syntax scala\n    frame one\n      code\n          val a = 1\n" +
             t"    frame\n      id two\n      code\n          val a = 2\n"
 
         read(text).let: (presentation: Presentation, problems: List[Block]) =>
           val states: List[Presentation.State] = Presentation.states(presentation)
 
-          ( presentation.transcript.let { reference => (reference.file, reference.line) },
-            states.map(_.id), states.map(_.frame), states.map(_.line), problems.size )
+          (states.map(_.id), states.map(_.frame), states.map(_.line), problems.size)
 
-      . assert(_ == ( (t"talk.md", 1), List(t"intro", t"second", t"one", t"two"),
-                      List(Unset, Unset, Unset, 2), List(2, 5, 9, 9), 0 ))
+      . assert(_ == ( List(t"intro", t"second", t"one", t"two"), List(Unset, Unset, Unset, 2),
+                      List(1, 4, 8, 8), 0 ))
 
       test(m"there is one more state than the deck has steps, a fence's frames in Markdown among them"):
         val fenced: Text =
@@ -1317,19 +1316,21 @@ item []:
 
       . assert(_ == List((Nil, 0), (List(t"one", t"two"), 0), (List(t"one", t"two"), 0)))
 
-      test(m"a transcript on a slide is reported as now being the presentation's, a file of its own"):
-        read(t"slide\n  markdown\n      a\n  transcript\n      Hello.\n").lay(Nil)(_(1)).map:
+      test(m"a transcript in a presentation, on a slide or named, is reported as being a file given beside it"):
+        val text: Text = t"transcript  talk.md\nslide\n  markdown\n      a\n  transcript\n      Hello.\n"
+
+        read(text).lay(Nil)(_(1)).map:
           case Block.Diagnostic(_, location, content, _, _, _) =>
             val said: Text = content.head match
               case Block.Paragraph(inlines) => Blocks.plain(inlines)
               case _                        => t""
 
-            (location.let(_.line), said.contains(t"names a Markdown file"))
+            (location.let(_.line), said.contains(t"--transcript <transcript>"))
 
           case _ =>
             (Unset, false)
 
-      . assert(_ == List((4, true)))
+      . assert(_ == List((1, true), (5, true)))
 
       // Where a presentation of a slide for each id and a transcript do not cohere: each
       // fault's code, its file and its line.
