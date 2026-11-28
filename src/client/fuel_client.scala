@@ -58,6 +58,7 @@ object CompileFailed extends Status(4, t"a code fragment did not do as its pream
 object DaemonFailed extends Status(6, t"the daemon failed while carrying out the command")
 object Misaligned extends Status(8, t"the transcript and its alignment do not correspond")
 object Unaligned extends Status(9, t"the aligner could not be installed or run on the recording")
+object Incoherent extends Status(10, t"the transcript does not cue the presentation's states, each once and in order")
 object SyncFailed extends Status(7, t"the issues of an attached tracker could not be fetched")
 
 // What ends an invocation which a failure escaped: an `Error`, such as the daemon running out of
@@ -91,7 +92,7 @@ object ui:
   val Sync   = Subcommand("sync", "attach a tracker's issues to the API documentation, and fetch them")
 
   val Transcript =
-    Subcommand("transcript", "print a presentation's transcript, its slides' in order")
+    Subcommand("transcript", "print a presentation's transcript, and check that it cues the presentation's states")
   val Github = Subcommand("github", "a GitHub repository, as owner/repo")
 
   // Each is read from the cascade every Pyrocosm tool shares: the flag, the `fuel.*` property,
@@ -258,10 +259,12 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
               Presenter.prepare(config, absolute(directory, operand), width, autoplay, align)
 
             type Outcome =
-              Exit | Tool.UsageError.type | NoDocument.type | Misaligned.type | Unaligned.type
+              Exit | Tool.UsageError.type | NoDocument.type | Misaligned.type | Unaligned.type |
+                Incoherent.type
 
             prepared match
               case Presenter.Problem.Unreadable => NoDocument
+              case Presenter.Problem.Incoherent => Incoherent
               case Presenter.Problem.Misaligned => Misaligned
               case Presenter.Problem.Unaligned  => Unaligned
 
@@ -282,8 +285,8 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
             Out.println(t"fuel: $label usage: $form")
             Tool.UsageError
 
-    // `fuel transcript <file>`: a presentation's transcript, its slides' in order, set to the
-    // terminal's width.
+    // `fuel transcript <file>`: a presentation's transcript, set to the terminal's width, and
+    // checked against the presentation's states.
     case ui.Transcript() :: rest =>
       val operand: Optional[Text] = rest.map(_()).filter(!_.starts(t"-")).head
       ambient(transcript(directory, operand))
@@ -1180,10 +1183,11 @@ private def rendered
 // and hyphenated, code highlighted, an animated block as its steps in sequence; its problems
 // after it. Compiled as `compile` compiles, with the session and the classpath the
 // configuration gives, so what the page shows is what the dashboard would.
-// A presentation's transcript, printed as paragraphs wrapped to the terminal's width, words
-// whole; what the presentation's reading reports follows it.
+// A presentation's transcript, printed as it is set, wrapped to the terminal's width, words
+// whole, a cue's words as any others; what the presentation's reading reports follows it, and
+// where the transcript does not cohere with the presentation, which is a failure.
 private def transcript(directory: Text, operand: Optional[Text])(using Stdio, Environment)
-:   Exit | Tool.UsageError.type | NoDocument.type =
+:   Exit | Tool.UsageError.type | NoDocument.type | Incoherent.type =
 
   operand match
     case operand: Text =>
@@ -1200,13 +1204,25 @@ private def transcript(directory: Text, operand: Optional[Text])(using Stdio, En
             NoDocument
 
           case (presentation: Presentation, problems: List[Block] @unchecked) =>
-            print(Presentation.transcript(presentation))
+            def reported(problems: List[Block]): Unit =
+              if !problems.nil then
+                Out.println(blank)
+                print(problems)
 
-            if !problems.nil then
-              Out.println(blank)
-              print(problems)
+            (Presenter.transcript(path, presentation): @unchecked) match
+              case unread: Block =>
+                print(problems + List(unread))
+                NoDocument
 
-            Exit.Ok
+              case (transcript: Transcript, faults: List[Block] @unchecked) =>
+                print(transcript.blocks)
+                reported(problems + faults)
+                if faults.nil then Exit.Ok else Incoherent
+
+              case _ =>
+                Out.println(t"fuel: $path names no transcript")
+                reported(problems)
+                Exit.Ok
 
         case _ =>
           Out.println(t"fuel: ${unreadable.label} $path could not be read")

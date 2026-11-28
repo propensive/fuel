@@ -40,9 +40,9 @@ import dysasymptotics.{linearAccess, linearSize}
 // A forced alignment of a reading of a presentation's transcript, as Montreal Forced Aligner
 // writes it: each word spoken, with the time it starts and ends. The output is read in any of
 // MFA's formats — a Praat TextGrid (its default), JSON, or CSV — and the words of its `words`
-// tier are matched, in order, to the words of the slides' transcripts, so that the time the
-// first word of a slide's transcript is spoken is the time that slide should be shown: the
-// deck's schedule.
+// tier are matched, in order, to the words of the transcript, so that the time the first word
+// of a state's cue is spoken is the time the presentation should come to that state: the deck's
+// schedule.
 object ForcedAlignment:
   case class Word(label: Text, start: Double, end: Double)
 
@@ -194,27 +194,29 @@ object ForcedAlignment:
   // The code of why a presentation cannot be timed by an alignment, `↯/f.27.1.<variant>`: a
   // file to align by which cannot be read (1); an aligner which could not be installed (2), or
   // which failed (3); no cache directory to install one in (4); an alignment which cannot be
-  // read (5); a slide without a transcript (6); a transcript and an alignment which differ too
-  // much (7); and a slide none of whose words the alignment has (8).
+  // read (5); a presentation without a transcript, or a state after the first without an id
+  // (6); a transcript and an alignment which differ too much (7); and a state none of whose
+  // cue's words the alignment has (8).
   private[fuel] def bolt(variant: Int): fulminate.Bolt =
     FuelBolts(FuelBolts.client, FuelBolts.alignment, variant)
 
-  // The deck's schedule from the alignment: a time for each slide after the first, at which
-  // its step lands, being the time the first word of its transcript is spoken — or the first
-  // word of it the alignment has, if the aligner missed that one. Every slide must have a
-  // transcript, and the transcripts and the alignment must correspond closely, else the
-  // outcome says what is wrong, and shows where they differ.
-  def schedule(presentation: Presentation, aligned: List[Word]): Outcome =
-    val transcripts: List[List[Text]] = presentation.slides.map(_.transcript.let(words).or(Nil))
+  // The deck's schedule from the alignment: a time for each state after the first, at which
+  // its step lands, being the time the first word of its cue is spoken — or, if the aligner
+  // missed that one, the first word the alignment has from there to the next cue. Every state
+  // after the first must have an id, which a transcript cohering with the presentation cues,
+  // and the transcript and the alignment must correspond closely, else the outcome says what
+  // is wrong, and shows where they differ.
+  def schedule(states: List[Presentation.State], transcript: Transcript, aligned: List[Word])
+  :   Outcome =
 
-    val missing: List[Text] = presentation.slides.indexed.bind: (slide: Presentation.Slide, index: Ordinal) =>
-      if !transcripts.at(index).or(Nil).nil then Nil else
-        List
-          ( t"slide ${index.n1.show} (line ${slide.line.show}) has no transcript, which timing it "
-            + t"by an alignment needs" )
+    val later: List[Presentation.State] = states.skip(1)
 
-    if !missing.nil then Outcome.Failed(bolt(6), missing) else
-      val expected: List[Text] = transcripts.bind(identity(_))
+    val unnamed: List[Text] = later.bind: (state: Presentation.State) =>
+      if state.id.present then Nil
+      else List(t"${state.described} has no id, which timing it by an alignment needs")
+
+    if !unnamed.nil then Outcome.Failed(bolt(6), unnamed) else
+      val expected: List[Text] = words(transcript.text)
       val comparison: Comparison = compare(expected, aligned)
 
       if !comparison.close then
@@ -225,24 +227,27 @@ object ForcedAlignment:
       else
         val places: Map[Int, Int] = comparison.places
 
-        // Each slide's time: that of the first of its words the alignment has.
-        val times: List[Optional[Double]] = transcripts.indexed.map: (words: List[Text], index: Ordinal) =>
-          val offset: Int = transcripts.keep(index.n0).fold(0)(_ + _.size)
+        // Each cue's place among the transcript's words: how many words are before it.
+        val cued: List[(Text, Int)] = transcript.cues.map: (cue: Transcript.Cue) =>
+          (cue.id, words(transcript.text.keep(cue.offset)).size)
 
-          val found: List[Int] =
-            List.range(offset, offset + words.size).bind(places.at(_).lay(Nil)(List(_)))
+        // A state's time: that of the first word the alignment has from its cue's first to
+        // the next cue's.
+        def time(id: Text): Optional[Double] =
+          cued.filter(_(0) == id).head.let(_(1)).let: (from: Int) =>
+            val to: Int = cued.map(_(1)).filter(_ > from).head.or(expected.size)
+            val found: List[Int] = List.range(from, to).bind(places.at(_).lay(Nil)(List(_)))
+            found.head.let { (place: Int) => aligned.at(Ordinal.zerary(place)) }.let(_.start)
 
-          found.head.let { (place: Int) => aligned.at(Ordinal.zerary(place)) }.let(_.start)
+        val times: List[Optional[Double]] = later.map(_.id.let(time))
 
-        val unplaced: List[Text] = times.indexed.bind: (time: Optional[Double], index: Ordinal) =>
+        val unplaced: List[Text] = later.zip(times).bind: (state: Presentation.State, time: Optional[Double]) =>
           if time.present then Nil else
-            val line: Int = presentation.slides.at(index).let(_.line).or(1)
-            List
-              ( t"slide ${index.n1.show} (line ${line.show}) has a transcript none of whose "
-                + t"words the alignment has" )
+            val id: Text = state.id.or(t"")
+            List(t"the state `$id`, ${state.described}, is cued by words none of which the alignment has")
 
         // Times to the millisecond: an aligner's floats carry noise beyond it.
         def rounded(time: Double): Double = (time*1000.0).round/1000.0
 
         if !unplaced.nil then Outcome.Failed(bolt(8), unplaced)
-        else Outcome.Timed(times.skip(1).map(_.or(0.0)).map(rounded), comparison)
+        else Outcome.Timed(times.map(_.or(0.0)).map(rounded), comparison)

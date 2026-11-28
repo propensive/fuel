@@ -250,7 +250,10 @@ object Blocks:
     def external: Inline = Inline.Link(Inline.Destination.External(destination), content)
     val glossed: Boolean = destination.starts(Glossary.scheme)
 
-    if glossed then glossary(destination.skip(Glossary.scheme.length), content, context, line)
+    // A cue of a presentation's transcript, `@id`, leads nowhere: a transcript among the
+    // documents is read as one, its cues' words as any others.
+    if destination.starts(Transcript.sigil) then Inline.Phrase(content)
+    else if glossed then glossary(destination.skip(Glossary.scheme.length), content, context, line)
     else if scheme then
       context.refer(line, Linkage.Target.Url(destination))
       external

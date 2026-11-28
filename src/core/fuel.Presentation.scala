@@ -43,16 +43,15 @@ import pyrocosm.{Block, Inline, Tone}
 // a browser one slide at a time, to the schema `presentation` (`fuel/presentation.schema.tel`).
 //
 //   title  Effects, gently        # what the page is called; the file's name otherwise
+//   transcript  talk.md           # what is said, a Markdown file beside this one
 //   slide
 //     markdown
 //         # Effects, gently
 //         A *short* talk.
-//     transcript
-//         Welcome. This is a short talk about effects.
-//   slide
+//   slide one-value               # the slide's id, which the transcript cues it by
 //     syntax scala
 //         val x = 1
-//   slide
+//   slide a-second-name
 //     syntax scala                # a fragment's preamble beneath, its code in `code`
 //       highlight y  a new name
 //       label  the second step
@@ -63,13 +62,20 @@ import pyrocosm.{Block, Inline, Tone}
 // A slide's `syntax` names the language its code is highlighted as, and holds the code itself,
 // or says what a fence's preamble says — marks, `context`, `errors`, how far it is compiled,
 // `frame`s and the rest — beneath it, with the code in a `code` child, as a frame's is. A slide
-// holds its parts in order, and may have a `transcript`: what is said while it is shown, from
-// which `fuel transcript` makes the presentation's. Consecutive slides which each hold one block
+// holds its parts in order. Consecutive slides which each hold one block
 // of code without frames of its own, in the same language, are one animated block of code, its
 // frames those slides — each with the slide's marks, and its `label`, `hold` and `at` — so that
 // stepping from one to the next moves what stays and fades what arrives and departs, as a
 // fence's frames do; the deck steps through the frames before moving on. What else the block
 // says is the first slide's.
+//
+// The presentation is in one state at a time: a slide as it is first shown, or a later frame of
+// the animation the deck steps through on it. A state may have an `id` — a slide's on its line
+// or beneath it, a frame's likewise — and the presentation's `transcript` names the Markdown
+// file of what is said, in which the words which bring a state are a link to its id,
+// `[words](@id)` (`Transcript`). The transcript must cue every state which has an id, once, in
+// the order the states are shown, and nothing else: `cohere` says where it does not, and a
+// presentation whose transcript does not is not shown.
 object Presentation:
   // The schema a presentation is checked against, a TEL schema document among the resources:
   // what a slide may hold, and what a slide's code may say, which is what a fence's preamble
@@ -98,7 +104,18 @@ object Presentation:
         hold:     Optional[Double] = Unset,
         at:       Optional[Double] = Unset )
 
-  case class Slide(parts: List[Part], line: Int, transcript: Optional[Text] = Unset)
+  case class Slide(parts: List[Part], line: Int, id: Optional[Text] = Unset)
+
+  // The transcript a presentation names: its file, as it is written — relative to the
+  // presentation's — and the line which names it.
+  case class Reference(file: Text, line: Int)
+
+  // A state of the presentation: slide `slide` (from one) as it is first shown, or its
+  // animation's frame `frame` (from one), with the id it has and the line of its slide.
+  case class State(id: Optional[Text], line: Int, slide: Int, frame: Optional[Int] = Unset):
+    def described: Text =
+      val within: Text = frame.lay(t"") { (frame: Int) => t", frame ${frame.show}" }
+      t"slide ${slide.show} (line ${line.show})$within"
 
   // The faults the schema finds, as they are accrued: each TEL error, with the path of what it
   // concerns and where that is.
@@ -112,8 +129,11 @@ object Presentation:
     pointer.cut(t"/").filter { segment => segment != t"" && safely(segment.as[Int]).absent }
 
   // The code of a presentation's problem, `↯/f.25.6.<variant>`: a fault the schema finds, which
-  // carries the TEL error's own code (1); a slide's code with nothing in it (2); and an empty
-  // slide (3).
+  // carries the TEL error's own code (1); a slide's code with nothing in it (2); an empty
+  // slide (3); an id which two states have, or a state which has two (4); a cue which names no
+  // state (5); a state with an id which the transcript does not cue (6); a state cued twice,
+  // or out of its order (7); a cue which is not in what is said (8); and a transcript which
+  // cannot be read (9).
   private def bolt(variant: Int): fulminate.Bolt =
     FuelBolts(FuelBolts.core, FuelBolts.presentation, variant)
 
@@ -127,12 +147,14 @@ object Presentation:
     error.reason match
       case Reason.UnknownKeyword => path.size match
         case 1 =>
-          t"A presentation has a `title` and `slide`s, but not `$last`."
+          t"A presentation has a `title`, a `transcript` and `slide`s, but not `$last`."
 
         case 2 =>
           if last == t"code"
           then t"A slide's code is `syntax <language>`, not `code`: `syntax` names the highlighting."
-          else t"A slide has `markdown`, `syntax <language>` and a `transcript`, but not `$last`."
+          else if last == t"transcript"
+          then t"What is said is not written on a slide: the presentation's `transcript` names a Markdown file, which links to the slide's `id` as `[words](@id)`."
+          else t"A slide has an `id`, `markdown` and `syntax <language>`, but not `$last`."
 
         case _ =>
           t"`$last` is not something a slide's `$parent` says."
@@ -243,7 +265,8 @@ object Presentation:
         case _           => Nil
 
     // A slide, its compound giving the order of its parts and `node` the TEL of each `syntax`,
-    // the nth `syntax` compound being the nth `syntax` field; and its transcript.
+    // the nth `syntax` compound being the nth `syntax` field; and its id, on its line or
+    // beneath it.
     private def slide(compound: Tel.Compound, node: Optional[Tel], index: Ordinal): Slide =
       val line: Int = Compounds.line(tel, List(t"slide", index.n0.show))
       val children: List[Tel.Compound] = Compounds.children(compound)
@@ -254,13 +277,12 @@ object Presentation:
         val ordinal: Int = children.keep(position.n0).filter(_.keyword == t"syntax").size
         part(child, codes.at(Ordinal.zerary(ordinal)), line)
 
-      if children.nil then report(line, t"This slide is empty.", 3)
+      if children.filter(_.keyword != t"id").nil then report(line, t"This slide is empty.", 3)
 
-      val transcript: Optional[Text] =
-        children.filter(_.keyword == t"transcript").head.let: (child: Tel.Compound) =>
-          source(child).or(words(child).join(t" ")).trim
+      val id: Optional[Text] =
+        children.filter(_.keyword == t"id").head.let(words(_).head).or(words(compound).head)
 
-      Slide(parts, line, transcript.let { text => if text == t"" then Unset else text })
+      Slide(parts, line, id.let(_.trim).let { id => if id == t"" then Unset else id })
 
     def presentation: (Presentation, List[Block]) =
       val compounds: List[Tel.Compound] = tel.childCompounds.to[List]
@@ -274,7 +296,11 @@ object Presentation:
 
       val named: Optional[Text] = title.let: (title: Text) => if title == t"" then Unset else title
 
-      (Presentation(named, slides), problems.reverse)
+      val transcript: Optional[Reference] =
+        tel.field(t"transcript").let(_.atomTexts.to[List].join(t" ").trim).let: (file: Text) =>
+          if file == t"" then Unset else Reference(file, Compounds.line(tel, List(t"transcript")))
+
+      (Presentation(named, slides, transcript), problems.reverse)
 
   // A slide's parts as blocks, numbered nowhere, since a slide is not a file.
   private def unnumbered(blocks: List[Block]): List[Block] = blocks.map:
@@ -375,12 +401,135 @@ object Presentation:
   def scheduled(deck: Block.Deck, schedule: List[Double]): Block.Deck =
     deck.copy(schedule = schedule)
 
-  // The presentation's transcript: each slide's, in order, as paragraphs — a transcript's
-  // blank lines divide it into paragraphs — which a renderer sets to a width.
-  def transcript(presentation: Presentation): List[Block] =
-    presentation.slides.bind: (slide: Slide) =>
-      slide.transcript.lay(Nil): (text: Text) =>
-        text.cut(t"\n\n").map(_.trim).filter(_ != t"").map: (paragraph: Text) =>
-          Block.paragraph(paragraph.cut(t"\n").map(_.trim).join(t" "))
+  // The frames an animated block steps through, where it has any: its preamble's which have
+  // code, then its own code as the last, if it has any.
+  private def framed(preamble: Preamble, code: Text): List[List[Preamble.Frame]] =
+    if preamble.frames.nil then Nil else
+      val described: List[Preamble.Frame] = preamble.frames.filter(_.code.present)
+      val frames: List[Preamble.Frame] =
+        if code.trim == t"" then described else described + List(Preamble.Frame(code))
 
-case class Presentation(title: Optional[Text], slides: List[Presentation.Slide])
+      if frames.nil then Nil else List(frames)
+
+  // The animated blocks of a slide's part, each as its frames: a block of code with frames, or
+  // the fences with frames of its Markdown.
+  private def animations(part: Part): List[List[Preamble.Frame]] = part match
+    case code: Part.Code =>
+      framed(code.preamble, code.code)
+
+    case Part.Prose(markdown) =>
+      Blocks.fences(Parser.parse(markdown)).bind: (fence: Blocks.Fence) =>
+        if !fence.info.has(t"fuel") then Nil else
+          val (header, code) = Preamble.split(fence.content)
+
+          header.let(Preamble.parse(_)).lay(Nil):
+            case preamble: Preamble => framed(preamble, code)
+            case _                  => Nil
+
+  // The states of a presentation, in the order it is stepped through them: each slide as it is
+  // first shown, and then the later frames of the last of its animated blocks, which is the one
+  // the deck steps. The state a slide with such a block is first shown in is that block's
+  // first frame, so its id is the slide's or that frame's. There is one more state than the
+  // deck has steps.
+  def states(presentation: Presentation): List[State] =
+    presentation.slides.indexed.bind: (slide: Slide, index: Ordinal) =>
+      val first: State = State(slide.id, slide.line, index.n1)
+
+      slide.parts.bind(animations).reverse.head.lay(List(first)): (frames: List[Preamble.Frame]) =>
+        frames.indexed.map: (frame: Preamble.Frame, position: Ordinal) =>
+          if position.n0 == 0 then first.copy(id = slide.id.or(frame.id))
+          else State(frame.id, slide.line, index.n1, position.n1)
+
+  private def failure(path: Text, line: Int, message: Text, variant: Int): Block =
+    val location: Block.Location = Block.Location(path, line)
+    Block.Diagnostic(Tone.Failure, location, List(Block.paragraph(message)), code = bolt(variant))
+
+  // That a presentation's transcript could not be read, where the presentation names it.
+  def unread(path: Text, reference: Reference, file: Text): Block =
+    failure(path, reference.line, t"The transcript `$file` could not be read.", 9)
+
+  // Where a presentation, at `path`, and its transcript, at `file`, do not cohere: the
+  // transcript must cue each state which has an id, once, in the order the states are shown,
+  // and cue nothing else. Nothing, where they do.
+  def cohere(path: Text, presentation: Presentation, file: Text, transcript: Transcript)
+  :   List[Block] =
+
+    val all: List[State] = states(presentation)
+
+    val named: List[(Text, State)] = all.bind: (state: State) =>
+      state.id.lay(Nil) { (id: Text) => List((id, state)) }
+
+    val ids: List[Text] = named.map(_(0))
+    val cued: List[Text] = transcript.cues.map(_.id)
+
+    // A slide whose first state is given one id by the slide and another by its first frame.
+    val doubled: List[Block] = presentation.slides.bind: (slide: Slide) =>
+      val first: Optional[Text] =
+        slide.parts.bind(animations).reverse.head.let(_.head).let(_.id)
+
+      slide.id.lay(Nil): (id: Text) =>
+        first.lay(Nil): (other: Text) =>
+          if id == other then Nil else
+            val message: Text =
+              t"The slide is first shown in its animation's first frame, which is one state: it has the id `$id`, and the frame's `$other` is another."
+
+            List(failure(path, slide.line, message, 4))
+
+    val repeated: List[Block] = named.indexed.bind: (pair: (Text, State), index: Ordinal) =>
+      val (id, state) = pair
+
+      if !ids.keep(index.n0).has(id) then Nil else
+        val message: Text =
+          t"The id `$id` of ${state.described} is an earlier state's too: each state's id is its own."
+
+        List(failure(path, state.line, message, 4))
+
+    val stray: List[Block] = transcript.stray.map: (cue: Transcript.Cue) =>
+      val message: Text =
+        t"The cue `${Transcript.sigil}${cue.id}` is not in what is said: a cue is a link in the transcript's prose, and not in a heading."
+
+      failure(file, cue.line, message, 8)
+
+    val unknown: List[Block] = transcript.cues.bind: (cue: Transcript.Cue) =>
+      if ids.has(cue.id) then Nil else
+        val message: Text =
+          t"No state of the presentation has the id `${cue.id}`, which this cues."
+
+        List(failure(file, cue.line, message, 5))
+
+    val recued: List[Block] = transcript.cues.indexed.bind: (cue: Transcript.Cue, index: Ordinal) =>
+      if !ids.has(cue.id) || !cued.keep(index.n0).has(cue.id) then Nil else
+        val message: Text =
+          t"The state `${cue.id}` is cued here a second time: a state arrives once."
+
+        List(failure(file, cue.line, message, 7))
+
+    val uncued: List[Block] = named.indexed.bind: (pair: (Text, State), index: Ordinal) =>
+      val (id, state) = pair
+
+      if cued.has(id) || ids.keep(index.n0).has(id) then Nil else
+        val message: Text =
+          t"The state `$id`, ${state.described}, is not cued in the transcript `$file`: a link to it there, `[words](${Transcript.sigil}$id)`, says when it arrives."
+
+        List(failure(path, state.line, message, 6))
+
+    // The first cue which is not the one the order of the states has next, once every state
+    // is cued once and every cue is a state's.
+    def disordered(cues: List[Transcript.Cue], ids: List[Text]): List[Block] = (cues, ids) match
+      case (cue :: rest, id :: later) =>
+        if cue.id == id then disordered(rest, later) else
+          val message: Text =
+            t"The state `${cue.id}` is cued here, where `$id` is the next to be shown: the transcript cues the states in their order."
+
+          List(failure(file, cue.line, message, 7))
+
+      case _ =>
+        Nil
+
+    val faults: List[Block] = doubled + repeated + stray + unknown + recued + uncued
+    if faults.nil then disordered(transcript.cues, ids) else faults
+
+case class Presentation
+  ( title:      Optional[Text],
+    slides:     List[Presentation.Slide],
+    transcript: Optional[Presentation.Reference] = Unset )
