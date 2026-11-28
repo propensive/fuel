@@ -173,6 +173,13 @@ object ui:
         List(t"alignment"),
         "time the autoplay by a recording of the transcript being read, or by a forced alignment of one (MFA's TextGrid, JSON or CSV)" )
 
+  val Spoken =
+    Flag[Text]
+      ( "language",
+        false,
+        Nil,
+        "the language the recording given to --align is in (en, fr, de, …; English unless said), whose models Montreal Forced Aligner aligns it with" )
+
   val Said =
     Flag[Text]
       ( "transcript",
@@ -234,12 +241,13 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
       // execution, where a flag's value is a value.
       ui.Align()
       ui.Said()
+      ui.Spoken()
 
       // The operand is the first word which is not a flag, nor a flag's value.
       val words: List[Text] = rest.map(_())
 
       val operand: Optional[Text] = words.indexed.filter: (word: Text, index: Ordinal) =>
-        val flags: List[Text] = List(t"--align", t"--alignment", t"--transcript")
+        val flags: List[Text] = List(t"--align", t"--alignment", t"--transcript", t"--language")
         val valued: Boolean = before(words, index).lay(false)(flags.has(_))
         !word.starts(t"-") && !valued
 
@@ -258,6 +266,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
 
         val align: Optional[Text] = ui.Align.value.let(absolute(directory, _))
         val said: Optional[Text] = ui.Said.value.let(absolute(directory, _))
+        val language: Optional[Text] = ui.Spoken.value
 
         // `--align` plays the presentation to the recording's times, so it implies `--autoplay`.
         val autoplay: Boolean = autoplay0 || align.present
@@ -265,7 +274,8 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
         operand match
           case operand: Text =>
             val prepared =
-              Presenter.prepare(config, absolute(directory, operand), width, autoplay, align, said)
+              Presenter.prepare
+                ( config, absolute(directory, operand), width, autoplay, align, said, language )
 
             type Outcome =
               Exit | Tool.UsageError.type | NoDocument.type | Misaligned.type | Unaligned.type |
@@ -290,7 +300,7 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
 
           case _ =>
             val label: Text = usage(1).label
-            val form: Text = t"fuel present <file> [--transcript <file>] [--autoplay] [--align <recording or alignment>]"
+            val form: Text = t"fuel present <file> [--transcript <file>] [--autoplay] [--align <recording or alignment>] [--language <language>]"
             Out.println(t"fuel: $label usage: $form")
             Tool.UsageError
 

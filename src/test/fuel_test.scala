@@ -1223,6 +1223,24 @@ item []:
 
       . assert(_ == (24, true, false, false))
 
+      test(m"a language's model is found by its code, whatever its region, or is named itself"):
+        ( Aligner.model(t"fr"), Aligner.model(t"de-AT"), Aligner.model(t"EN"),
+          Aligner.model(t"english_us_arpa"), Aligner.model(t"tlh") )
+
+      . assert(_ == (t"french_mfa", t"german_mfa", t"english_mfa", t"english_us_arpa", Unset))
+
+      test(m"a recording in another language is aligned with that language's models, and kept apart"):
+        val home: Aligner.Home = Aligner.Home(t"/c/fuel/mfa")
+        val sound: Data = Array[Byte](1, 2, 3)
+
+        ( Aligner.alignCommand(home, t"/p/corpus", t"/p/out", false, t"french_mfa").reverse.keep(3).reverse,
+          Aligner.downloadCommand(home, t"dictionary", t"french_mfa").reverse.keep(2).reverse,
+          Aligner.key(sound, t"un deux") == Aligner.key(sound, t"un deux", t"french_mfa"),
+          Aligner.key(sound, t"un deux") == Aligner.key(sound, t"un deux", Aligner.english) )
+
+      . assert(_ == ( List(t"french_mfa", t"french_mfa", t"/p/out"), List(t"dictionary", t"french_mfa"),
+                      false, true ))
+
       test(m"the aligner's commands name the environment, the models and the corpus"):
         val home: Aligner.Home = Aligner.Home(t"/c/fuel/mfa")
         val create: List[Text] = Aligner.createCommand(home)

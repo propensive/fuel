@@ -195,8 +195,9 @@ object ForcedAlignment:
   // file to align by which cannot be read (1); an aligner which could not be installed (2), or
   // which failed (3); no cache directory to install one in (4); an alignment which cannot be
   // read (5); a presentation given no transcript, or a state after the first without an id
-  // (6); a transcript and an alignment which differ too much (7); and a state none of whose
-  // cue's words the alignment has (8).
+  // (6); a transcript and an alignment which differ too much (7); a state none of whose cue's
+  // words the alignment has (8); and a language there is no model to align a recording in
+  // with (9).
   private[fuel] def bolt(variant: Int): fulminate.Bolt =
     FuelBolts(FuelBolts.client, FuelBolts.alignment, variant)
 

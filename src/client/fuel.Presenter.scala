@@ -83,7 +83,8 @@ object Presenter:
       width:    Int,
       autoplay: Boolean        = false,
       align:    Optional[Text] = Unset,
-      said:     Optional[Text] = Unset )
+      said:     Optional[Text] = Unset,
+      language: Optional[Text] = Unset )
     (using Stdio, Environment)
   :   (Text, Block) | Problem =
 
@@ -119,7 +120,7 @@ object Presenter:
               val title: Text = presentation.title.or(name)
 
               if !autoplay then (title, deck)
-              else conducted(config, deck, presentation, transcript, align) match
+              else conducted(config, deck, presentation, transcript, align, language) match
                 case problem: Problem => problem
                 case deck: Block      => (title, deck)
 
@@ -129,9 +130,12 @@ object Presenter:
     Fuel.projectCache(config.root).let { (cache: Path on Linux) => cache.encode }
     . or(t"${config.root}/.fuel")
 
-  // A file given to `--align`: a recording, aligned to the transcript by MFA (from the cache
-  // when it has been before), or an alignment already made; either way, the alignment's text.
-  private def alignment(config: Workspace.Config, transcript: Transcript, file: Text)
+  // A file given to `--align`: a recording, aligned to the transcript by MFA with the models of
+  // the language it is in, English unless one is said (from the cache when it has been before),
+  // or an alignment already made, whose language is nothing to fuel; either way, the
+  // alignment's text.
+  private def alignment
+    ( config: Workspace.Config, transcript: Transcript, file: Text, language: Optional[Text] )
     (using Stdio, Environment)
   :   Text | Problem =
 
@@ -139,17 +143,33 @@ object Presenter:
       Out.println(t"fuel: ${ForcedAlignment.bolt(1).label} $file could not be read")
       Problem.Unreadable
     else if !Aligner.isAudio(file) then readText(file).or(Problem.Unreadable)
-    else Aligner.home match
+    else language.lay[Optional[Text]](Aligner.english)(Aligner.model(_)).lay[Text | Problem](unspoken(language)):
+      (model: Text) => aligned(config, transcript, file, model)
+
+  // That there is no model for the language a recording is said to be in, with those there
+  // are.
+  private def unspoken(language: Optional[Text])(using Stdio): Problem =
+    val label: Text = ForcedAlignment.bolt(9).label
+    val known: Text = Aligner.languages.map(_(0)).join(t", ")
+    Out.println(t"fuel: $label there is no model to align a recording in `${language.or(t"")}` with")
+    Out.println(t"fuel:   --language takes one of $known, or the name of a model of Montreal Forced Aligner's, as `english_us_arpa`")
+    Problem.Unaligned
+
+  private def aligned(config: Workspace.Config, transcript: Transcript, file: Text, model: Text)
+    (using Stdio, Environment)
+  :   Text | Problem =
+
+    Aligner.home match
       case home: Aligner.Home =>
-        Aligner.ensure(home) match
+        Aligner.ensure(home, model) match
           case problem: Text =>
             val label: Text = ForcedAlignment.bolt(2).label
             Out.println(t"fuel: $label Montreal Forced Aligner could not be installed: $problem")
-            Aligner.manual(home).each { (line: Text) => Out.println(t"fuel: $line") }
+            Aligner.manual(home, model).each { (line: Text) => Out.println(t"fuel: $line") }
             Problem.Unaligned
 
           case _ =>
-            Aligner.align(home, file, transcript.text, cache(config)) match
+            Aligner.align(home, file, transcript.text, cache(config), model) match
               case Aligner.Outcome.Aligned(json, cached) =>
                 if cached then Out.println(t"fuel: using the alignment of $file made before")
                 json
@@ -171,7 +191,8 @@ object Presenter:
       deck:         Block,
       presentation: Presentation,
       transcript:   Optional[Transcript],
-      align:        Optional[Text] )
+      align:        Optional[Text],
+      language:     Optional[Text] )
     (using Stdio, Environment)
   :   Block | Problem =
 
@@ -189,7 +210,7 @@ object Presenter:
           Problem.Misaligned
 
         def timed(file: Text, transcript: Transcript): Block | Problem =
-          (alignment(config, transcript, file): @unchecked) match
+          (alignment(config, transcript, file, language): @unchecked) match
             case problem: Problem => problem
             case content: Text => (ForcedAlignment.read(content): @unchecked) match
               case problem: Text =>

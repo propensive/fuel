@@ -23,6 +23,7 @@ fuel show doc/x.md # one document, set in the terminal: justified, hyphenated, h
 fuel present doc/slides.tel  # a presentation's slides in a browser until Ctrl+C
 fuel present doc/slides.tel --autoplay  # the same, played by itself to a schedule
 fuel present doc/slides.tel --transcript doc/slides.md --align talk.wav  # the same, timed to a recording of the transcript
+fuel present talk.tel --transcript talk.fr.md --align talk.fr.wav --language fr  # a recording in French
 fuel transcript doc/slides.tel doc/slides.md  # a transcript of the presentation, checked against its slides
 fuel sync github propensive/fuel  # attach a repository's issues to the API pages, and fetch them
 fuel sync          # fetch every attached tracker's issues again
@@ -282,14 +283,25 @@ shown, and the differences are printed as a word diff (`-word` for a word of the
 spoken, `+word` for one spoken that the transcript lacks), with status 8; fewer differences are
 shown the same way, and the presentation goes ahead. `--align` implies `--autoplay`.
 
+A recording is taken to be in English. `--language` says otherwise, as `fuel present <file>
+--transcript talk.fr.md --align talk.fr.wav --language fr`: the recording is aligned with the
+dictionary and the acoustic model Montreal Forced Aligner publishes for that language, which are
+downloaded the first time it is aligned. It takes a language's code, whose region is not looked
+at — `bg`, `cs`, `de`, `en`, `es`, `fr`, `ha`, `hr`, `pl`, `pt`, `ru`, `sv`, `sw`, `tr` or `uk`,
+the languages written with spaces between their words which MFA has both for — or the name of
+one of MFA's models, for one of its others (`--language english_us_arpa`); a language there is
+no model for fails with status 9. An alignment already made is in whatever language it was made
+in, and `--language` says nothing of it.
+
 MFA is published only as conda-forge packages, so fuel installs it itself the first time a
 recording is aligned, into `$XDG_CACHE_HOME/fuel/mfa` (`~/.cache/fuel/mfa`): it fetches
 micromamba (a single static executable which installs conda-forge packages into a directory,
 with no Anaconda, no shell set-up and no activation), makes an environment there with MFA 3.4
-(about 2 GB, a few minutes), and downloads the `english_mfa` dictionary and acoustic model.
+(about 2 GB, a few minutes), and downloads the dictionary and acoustic model of the recording's
+language (`english_mfa`, for English).
 Nothing else on the machine is touched; `rm -rf ~/.cache/fuel/mfa` removes it all. An alignment
-is kept in the project's cache by a digest of the recording and the transcript, so a
-presentation is aligned again only when either changes; MFA itself takes tens of seconds to
+is kept in the project's cache by a digest of the recording, the transcript and the model, so a
+presentation is aligned again only when one of them changes; MFA itself takes tens of seconds to
 start and align. If fuel cannot install MFA — there is no micromamba for the platform, or a
 download fails — it says so and prints the three commands to do it by hand (`brew install
 micromamba`, `micromamba create -p ~/.cache/fuel/mfa/env -c conda-forge
@@ -346,10 +358,7 @@ after the first, which is shown from the start.
 
 `fuel transcript <file> <transcript>` prints the transcript, set to the terminal's width
 without breaking a word across lines, a cue's words as any others, with what the reading of the
-presentation reports after it; it makes the same check, and fails the same way. A recording
-is aligned with Montreal Forced Aligner's English models, whatever language the transcript is
-in; a transcript in another language is timed by an alignment made apart, which `--align` takes
-as it is.
+presentation reports after it; it makes the same check, and fails the same way.
 
 ## Output
 
