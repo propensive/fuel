@@ -13,6 +13,7 @@ detail
 
 entry #title   the presentation's title
 entry #style   a stylesheet of the presentation's own, by its path from the presentation's
+entry #script  a script of the presentation's own, likewise
 entry #slide   one slide, in the order they are shown
 
 entry .Slide
@@ -39,6 +40,7 @@ entry .Code
   entry #loop         the animation starts again at its end
   entry #restart      a fresh session begins at this code
   entry #run          the code is compiled and run, and what it prints is shown beneath it
+  entry #typed        each frame of the animation is arrived at by typing, not by moving tokens
   entry #feature      a language import, from this code on
   entry #path         the file the code is the content of, named above it
   entry #highlight    a range of the code to mark, and its caption
@@ -70,6 +72,7 @@ entry .Frame
   entry #at           the frame's time on the page's clock, in seconds
   entry #language     the frame's own language, where it is not the block's
   entry #errors       what an error in the frame means: `show`, for a frame meant not to compile
+  entry #typed        the frame is arrived at by typing the change from the frame before
   entry #highlight    a range of the code to mark, and its caption
   entry #error        a range marked as an error
   entry #caution      a range marked as a caution

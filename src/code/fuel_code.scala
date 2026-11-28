@@ -736,7 +736,11 @@ object Embedding:
                 frame.hold,
                 frame.at,
                 if own == language then Unset else Language(own),
-                failures + notes(code, preamble.marks + frame.marks) )
+                failures + notes(code, preamble.marks + frame.marks),
+                // A frame which is typed, or any frame of a fragment which is, is arrived at
+                // by an edit.
+                if frame.typed || preamble.typed then Block.Transition.Kind.Edit
+                else Block.Transition.Kind.Morph )
 
           (frameLines, detail)
 

@@ -1424,6 +1424,39 @@ item []:
 
       . assert(_ == List(2, Unset))
 
+      test(m"a presentation names a script of its own, which is no fault"):
+        read(t"title  Talk\nscript  talk.js\nslide\n  markdown\n      a\n").let:
+          (presentation: Presentation, problems: List[Block]) =>
+            (presentation.script.let { script => (script.file, script.line) }, problems.size)
+
+      . assert(_ == ((t"talk.js", 2), 0))
+
+      test(m"a frame which is typed is arrived at by an edit, and the others by a morph"):
+        def frame(body: Text, flag: Text): Text = t"    frame\n$flag      code\n          $body\n"
+
+        val text: Text =
+          t"slide\n  syntax scala\n" + frame(t"val a = 1", t"") + frame(t"val a = 12", t"      typed\n") +
+            frame(t"val b = 12", t"")
+
+        val kinds: List[Block.Transition.Kind] = leaves(text).bind(_.content).bind:
+          case code: Block.Code => code.animation.lay(Nil)(_.transitions.map(_.kind))
+          case _                => Nil
+
+        (kinds, read(text).lay(-1)(_(1).size))
+
+      . assert(_ == (List(Block.Transition.Kind.Edit, Block.Transition.Kind.Morph), 0))
+
+      test(m"a slide of a run which is typed is a frame arrived at by an edit"):
+        val run: Text =
+          t"slide\n  syntax scala\n      val a = 1\n" +
+            t"slide\n  syntax scala\n    typed\n    code\n        val a = 12\n"
+
+        leaves(run).bind(_.content).bind:
+          case code: Block.Code => code.animation.lay(Nil)(_.transitions.map(_.kind))
+          case _                => Nil
+
+      . assert(_ == List(Block.Transition.Kind.Edit))
+
       test(m"a presentation names a stylesheet of its own, which is no fault"):
         read(t"title  Talk\nstyle  talk.css\nslide\n  markdown\n      a\n").let:
           (presentation: Presentation, problems: List[Block]) =>
