@@ -6,15 +6,16 @@ base presentation
 info   the format of a presentation, which `fuel present` shows
 detail
     A presentation is a TEL document: a `#title`, and a `#slide` for each of its slides, which
-    holds Markdown or a block of code (`.Part`) and perhaps a transcript of what is said while
-    it is shown. A slide's code (`.Code`) says what a fence's preamble says: its marks, how far
-    it is compiled, and the frames of its animation.
+    holds Markdown or a block of code (`.Part`). A slide's code (`.Code`) says what a fence's
+    preamble says: its marks, how far it is compiled, and the frames of its animation. What is
+    said while it is shown is a transcript, a Markdown file given with it, which links to the id
+    of a slide or a frame, as `[words](@id)`, where the words which bring it are said.
 
 entry #title   the presentation's title
 entry #slide   one slide, in the order they are shown
 
 entry .Slide
-  entry #transcript   what is said while the slide is shown, from which `fuel transcript` makes the presentation's
+  entry #id   the name the transcript cues the slide by, which may be on its line
 
 entry .Part
   entry #markdown   Markdown, set as a document's is
@@ -61,7 +62,8 @@ entry .Substitution
   entry #occurrence   which occurrence on that line is meant
 
 entry .Frame
-  entry #code         the frame's code, which may be on its line
+  entry #id           the name the transcript cues the frame by, which may be on its line
+  entry #code         the frame's code
   entry #label        Markdown phrasing which names the frame
   entry #hold         the seconds the frame rests when the animation is played
   entry #at           the frame's time on the page's clock, in seconds

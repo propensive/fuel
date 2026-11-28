@@ -106,7 +106,9 @@ object Preamble:
       substitutions: List[Substitution] = Nil )
 
   // A frame of an animation: its code, absent when the `code` child is missing (which is a
-  // problem, reported where the frame is), and what else is said of it.
+  // problem, reported where the frame is), and what else is said of it. Its `id`, on its line
+  // or beneath it, names the state the animation is in when the frame is shown, by which a
+  // presentation's transcript says when it arrives.
   case class Frame
     ( code:          Optional[Text],
       label:         List[Inline]       = Nil,
@@ -115,7 +117,8 @@ object Preamble:
       language:      Optional[Text]     = Unset,
       marks:         List[Mark]         = Nil,
       substitutions: List[Substitution] = Nil,
-      errors:        Errors             = Errors.Fail )
+      errors:        Errors             = Errors.Fail,
+      id:            Optional[Text]     = Unset )
 
   enum Errors:
     case Fail, Show, Ignore
@@ -211,7 +214,10 @@ object Preamble:
             case _ =>
               Nil
 
-      // A frame's code is its `code` child's text; what else is said of it is beneath it.
+      def named(id: Text): Optional[Text] = if id.trim == t"" then Unset else id.trim
+
+      // A frame's code is its `code` child's text; what else is said of it is beneath it, but
+      // for its id, which may be on its line.
       def framesOf(parent: Tel): List[Frame] =
         parent.fields(t"frame").to[List].map: (node: Tel) =>
           Frame
@@ -222,7 +228,8 @@ object Preamble:
               child(node, t"language"),
               marks(node),
               substitutions(node),
-              if child(node, t"errors") == t"show" then Errors.Show else Errors.Fail )
+              if child(node, t"errors") == t"show" then Errors.Show else Errors.Fail,
+              named(child(node, t"id").or(node.primaryAtom)) )
 
       val frames: List[Frame] = framesOf(tel)
 

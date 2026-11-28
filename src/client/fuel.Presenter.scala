@@ -50,24 +50,41 @@ object Presenter:
   // timings a presentation will read from a file.
   val interval: Double = 4.0
 
-  // Why a presentation cannot be shown: its file cannot be read or is not TEL; the alignment
-  // it is to be timed by cannot be read or does not correspond to its transcript; or the
-  // aligner could not be installed or run on the recording.
+  // Why a presentation cannot be shown: its file, or its transcript's, cannot be read or is
+  // not TEL; the transcript it is given does not cue its states, each once and in order; the alignment it
+  // is to be timed by cannot be read or does not correspond to its transcript; or the aligner
+  // could not be installed or run on the recording.
   enum Problem:
-    case Unreadable, Misaligned, Unaligned
+    case Unreadable, Incoherent, Misaligned, Unaligned
+
+  // The transcript a presentation at `path` is given, read from `file`: with where the two do
+  // not cohere. `Unset` where it is given none, and the diagnostic where the file cannot be
+  // read.
+  def transcript(path: Text, presentation: Presentation, file: Optional[Text])
+  :   Optional[(Transcript, List[Block])] | Block =
+
+    file.let: (file: Text) =>
+      readText(file).lay[Optional[(Transcript, List[Block])] | Block](Presentation.unread(file)):
+        (markdown: Text) =>
+          val transcript: Transcript = Transcript.read(markdown)
+          (transcript, Presentation.cohere(path, presentation, file, transcript))
 
   // The presentation at `path`, read and compiled, as its title and its deck, with what the
   // compile reported printed at the terminal's width; or the problem, which is printed too.
-  // An `autoplay` deck is given a schedule — the times the slides' transcripts are spoken,
-  // from `align`, a recording of them read aloud (aligned by Montreal Forced Aligner, which
-  // fuel installs on first use) or a forced alignment already made; or else a step every
+  // A presentation given a transcript, the Markdown file `said`, which does not cohere with it
+  // is a problem, and is not shown.
+  // An `autoplay` deck is given a schedule — the times the cues of its states are spoken, from
+  // `align`, a recording of the transcript read aloud (aligned by Montreal Forced Aligner,
+  // which fuel installs on first use) or a forced alignment already made; or else a step every
   // `interval` seconds — and says how many steps it has.
   def prepare
     ( config:   Workspace.Config,
       path:     Text,
       width:    Int,
       autoplay: Boolean        = false,
-      align:    Optional[Text] = Unset )
+      align:    Optional[Text] = Unset,
+      said:     Optional[Text] = Unset,
+      language: Optional[Text] = Unset )
     (using Stdio, Environment)
   :   (Text, Block) | Problem =
 
@@ -83,15 +100,29 @@ object Presenter:
           Problem.Unreadable
 
         case (presentation: Presentation, problems: List[Block] @unchecked) =>
-          val (deck, raised) = compile(config, path, presentation)
-          print(problems + raised)
-          val name: Text = path.cut(t"/").reverse.head.or(path)
-          val title: Text = presentation.title.or(name)
+          (transcript(path, presentation, said): @unchecked) match
+            case unread: Block =>
+              print(problems + List(unread))
+              Problem.Unreadable
 
-          if !autoplay then (title, deck)
-          else conducted(config, deck, presentation, align) match
-            case problem: Problem => problem
-            case deck: Block      => (title, deck)
+            case (_, faults: List[Block] @unchecked) if !faults.nil =>
+              print(problems + faults)
+              Problem.Incoherent
+
+            case read =>
+              val transcript: Optional[Transcript] = read match
+                case (transcript: Transcript, _) => transcript
+                case _                           => Unset
+
+              val (deck, raised) = compile(config, path, presentation)
+              print(problems + raised)
+              val name: Text = path.cut(t"/").reverse.head.or(path)
+              val title: Text = presentation.title.or(name)
+
+              if !autoplay then (title, deck)
+              else conducted(config, deck, presentation, transcript, align, language) match
+                case problem: Problem => problem
+                case deck: Block      => (title, deck)
 
   // The project's cache directory, where alignments are kept: beside its `.fuel` directory
   // where there is no cache directory, as the compiled sources are.
@@ -99,9 +130,12 @@ object Presenter:
     Fuel.projectCache(config.root).let { (cache: Path on Linux) => cache.encode }
     . or(t"${config.root}/.fuel")
 
-  // A file given to `--align`: a recording, aligned to the transcript by MFA (from the cache
-  // when it has been before), or an alignment already made; either way, the alignment's text.
-  private def alignment(config: Workspace.Config, presentation: Presentation, file: Text)
+  // A file given to `--align`: a recording, aligned to the transcript by MFA with the models of
+  // the language it is in, English unless one is said (from the cache when it has been before),
+  // or an alignment already made, whose language is nothing to fuel; either way, the
+  // alignment's text.
+  private def alignment
+    ( config: Workspace.Config, transcript: Transcript, file: Text, language: Optional[Text] )
     (using Stdio, Environment)
   :   Text | Problem =
 
@@ -109,22 +143,33 @@ object Presenter:
       Out.println(t"fuel: ${ForcedAlignment.bolt(1).label} $file could not be read")
       Problem.Unreadable
     else if !Aligner.isAudio(file) then readText(file).or(Problem.Unreadable)
-    else Aligner.home match
+    else language.lay[Optional[Text]](Aligner.english)(Aligner.model(_)).lay[Text | Problem](unspoken(language)):
+      (model: Text) => aligned(config, transcript, file, model)
+
+  // That there is no model for the language a recording is said to be in, with those there
+  // are.
+  private def unspoken(language: Optional[Text])(using Stdio): Problem =
+    val label: Text = ForcedAlignment.bolt(9).label
+    val known: Text = Aligner.languages.map(_(0)).join(t", ")
+    Out.println(t"fuel: $label there is no model to align a recording in `${language.or(t"")}` with")
+    Out.println(t"fuel:   --language takes one of $known, or the name of a model of Montreal Forced Aligner's, as `english_us_arpa`")
+    Problem.Unaligned
+
+  private def aligned(config: Workspace.Config, transcript: Transcript, file: Text, model: Text)
+    (using Stdio, Environment)
+  :   Text | Problem =
+
+    Aligner.home match
       case home: Aligner.Home =>
-        Aligner.ensure(home) match
+        Aligner.ensure(home, model) match
           case problem: Text =>
             val label: Text = ForcedAlignment.bolt(2).label
             Out.println(t"fuel: $label Montreal Forced Aligner could not be installed: $problem")
-            Aligner.manual(home).each { (line: Text) => Out.println(t"fuel: $line") }
+            Aligner.manual(home, model).each { (line: Text) => Out.println(t"fuel: $line") }
             Problem.Unaligned
 
           case _ =>
-            val transcript: Text = Presentation.transcript(presentation).map:
-              case Block.Paragraph(inlines) => Blocks.plain(inlines)
-              case _                        => t""
-            . join(t"\n\n")
-
-            Aligner.align(home, file, transcript, cache(config)) match
+            Aligner.align(home, file, transcript.text, cache(config), model) match
               case Aligner.Outcome.Aligned(json, cached) =>
                 if cached then Out.println(t"fuel: using the alignment of $file made before")
                 json
@@ -139,10 +184,15 @@ object Presenter:
         Out.println(t"fuel: $label $message")
         Problem.Unaligned
 
-  // The deck with its schedule, counted and said: the slides' times in the alignment, with
-  // what had to be decided about slides it does not time; or a step every `interval` seconds.
+  // The deck with its schedule, counted and said: its states' times in the alignment, by the
+  // transcript's cues; or a step every `interval` seconds.
   private def conducted
-    ( config: Workspace.Config, deck: Block, presentation: Presentation, align: Optional[Text] )
+    ( config:       Workspace.Config,
+      deck:         Block,
+      presentation: Presentation,
+      transcript:   Optional[Transcript],
+      align:        Optional[Text],
+      language:     Optional[Text] )
     (using Stdio, Environment)
   :   Block | Problem =
 
@@ -153,8 +203,14 @@ object Presenter:
 
         // Each `Text | …` below is matched `@unchecked`, since the exhaustivity check does not see
         // that a `Text` case covers `Text`.
-        align match
-          case file: Text => (alignment(config, presentation, file): @unchecked) match
+        def unsaid: Problem =
+          val label: Text = ForcedAlignment.bolt(6).label
+          val message: Text = t"no transcript is given with `--transcript`, which timing the presentation by an alignment needs"
+          Out.println(t"fuel: $label $message")
+          Problem.Misaligned
+
+        def timed(file: Text, transcript: Transcript): Block | Problem =
+          (alignment(config, transcript, file, language): @unchecked) match
             case problem: Problem => problem
             case content: Text => (ForcedAlignment.read(content): @unchecked) match
               case problem: Text =>
@@ -163,7 +219,7 @@ object Presenter:
                 Problem.Misaligned
 
               case words: List[ForcedAlignment.Word] @unchecked =>
-                ForcedAlignment.schedule(presentation, words) match
+                ForcedAlignment.schedule(Presentation.states(presentation), transcript, words) match
                   // Each failure is labelled with its code; a line of a difference shown
                   // beneath one, which is indented, is not.
                   case ForcedAlignment.Outcome.Failed(code, messages) =>
@@ -183,9 +239,13 @@ object Presenter:
 
                     val times: Text = schedule.size.show
                     if schedule.size != steps
-                    then Out.println(t"fuel: the deck has $count steps but the slides give $times times")
+                    then Out.println(t"fuel: the deck has $count steps but its states give $times times")
 
                     Presentation.scheduled(deck, schedule)
+
+        align match
+          case file: Text =>
+            transcript.lay(unsaid) { (transcript: Transcript) => timed(file, transcript) }
 
           case _ =>
             val decimalizer = Decimalizer(decimalPlaces = 1, exponentThreshold = Unset)

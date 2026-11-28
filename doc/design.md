@@ -499,9 +499,9 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   presentation, comes later, as do bullets appearing one by one (which would be steps too),
   and reloading a presentation as its file changes. `--alignment <file>` takes the schedule
   from a forced alignment (Montreal Forced Aligner's TextGrid, JSON or CSV) of a reading of the
-  slides' transcripts: each slide after the first lands when the first word of its transcript
-  is spoken (`ForcedAlignment`), every slide needing a transcript and the transcript and the
-  alignment having to agree (a Myers diff of their words, one in ten differing at most, shown
+  transcript: each state after the first — a slide, or a frame of its animation — lands when
+  the first word of its cue is spoken (`ForcedAlignment`), every such state needing an id and
+  the transcript and the alignment having to agree (a Myers diff of their words, one in ten differing at most, shown
   as a word diff when they do not). Given a recording instead, fuel runs MFA itself
   (`Aligner`): MFA exists only as conda-forge packages, so fuel fetches micromamba (a static
   executable) into `~/.cache/fuel/mfa`, makes an environment with MFA 3.4 there and downloads
@@ -509,8 +509,12 @@ and is read whole from the configuration, as Pyrocosm reads `serve` and `port`.
   format has a TEL schema, `presentation`
   (`src/core/resources/fuel/presentation.schema.tel`): a slide's `syntax <language>` holds its
   code (the
-  keyword `code` being its code beneath a preamble, as a frame's), and its `transcript` what
-  is said while it is shown, from which `fuel transcript` makes the presentation's.
+  keyword `code` being its code beneath a preamble, as a frame's). What is said is apart from
+  the slides, and from the presentation: a transcript is a Markdown file given with it
+  (`--transcript`, so that there may be one for each language; `Transcript`), in which
+  the words which bring a state are a link to the `id` of its slide or frame, `[words](@id)`.
+  The transcript must cue every state with an id, once and in order (`Presentation.cohere`),
+  and a presentation is not shown with a transcript which does not.
 
 ### Decisions
 

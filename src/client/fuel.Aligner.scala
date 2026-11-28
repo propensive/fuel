@@ -51,14 +51,38 @@ import systems.javaBaseSystem
 // executable which puts conda-forge packages in a directory with no Anaconda, no shell set-up
 // and no activation: everything lives under `$XDG_CACHE_HOME/fuel/mfa`, and is installed on
 // first use, once. An alignment is kept in the project's cache by a digest of the recording
-// and the transcript, so a presentation is aligned again only when either changes.
+// and the transcript, so a presentation is aligned again only when either changes. A recording
+// is aligned with the dictionary and the acoustic model of the language it is in, which are
+// downloaded when a language is first aligned.
 object Aligner:
   // The micromamba release fuel fetches, pinned so the download is reproducible; the MFA it
-  // installs, pinned below 4.0, whose `mfa align` has another signature; and the English
-  // dictionary and acoustic model it aligns with.
+  // installs, pinned below 4.0, whose `mfa align` has another signature.
   val micromambaVersion: Text = t"2.10.0-0"
   val mfaSpec: Text = t"montreal-forced-aligner>=3.4,<4"
-  val model: Text = t"english_mfa"
+
+  // The languages a recording may be in, each with the name MFA gives both the dictionary and
+  // the acoustic model it publishes for it: those written with spaces between their words,
+  // which is how a transcript's words are told apart. English is what a recording is in when
+  // nothing says otherwise.
+  val languages: List[(Text, Text)] =
+    List
+      ( t"bg" -> t"bulgarian_mfa", t"cs" -> t"czech_mfa", t"de" -> t"german_mfa",
+        t"en" -> t"english_mfa", t"es" -> t"spanish_mfa", t"fr" -> t"french_mfa",
+        t"ha" -> t"hausa_mfa", t"hr" -> t"croatian_mfa", t"pl" -> t"polish_mfa",
+        t"pt" -> t"portuguese_mfa", t"ru" -> t"russian_mfa", t"sv" -> t"swedish_mfa",
+        t"sw" -> t"swahili_mfa", t"tr" -> t"turkish_mfa", t"uk" -> t"ukrainian_mfa" )
+
+  val english: Text = t"english_mfa"
+
+  // The model for a language: by its code, whose region is not looked at (`fr`, `fr-CA`), or,
+  // for a model the table does not have, by the model's own name (`english_us_arpa`), which
+  // has an underscore, as no language's code has. `Unset` for a language there is no model
+  // for.
+  def model(language: Text): Optional[Text] =
+    val code: Text = language.lower.cut(t"-").keep(1).join
+
+    if language.contains(t"_") then language
+    else languages.filter(_(0) == code).head.let(_(1))
 
   // Where everything is kept: the micromamba executable, the environment it makes, MFA's
   // root (its models, and its own working files) and micromamba's package cache.
@@ -123,7 +147,7 @@ object Aligner:
     || ascii(0, t"FORM") || ascii(4, t"ftyp")
 
   // The key an alignment is cached by: the recording's bytes, the transcript, and the model.
-  def key(audio: Data, transcript: Text): Text =
+  def key(audio: Data, transcript: Text, model: Text = english): Text =
     val sound: Text = audio.digest[Sha2[256]].serialize[Hex]
     val words: Text = t"$transcript\n$model\n$mfaSpec".digest[Sha2[256]].serialize[Hex]
     t"$sound $words".digest[Sha2[256]].serialize[Hex].keep(24)
@@ -132,10 +156,12 @@ object Aligner:
   def createCommand(home: Home): List[Text] =
     List(home.micromamba, t"create", t"-y", t"-p", home.env, t"-c", t"conda-forge", mfaSpec)
 
-  def downloadCommand(home: Home, kind: Text): List[Text] =
+  def downloadCommand(home: Home, kind: Text, model: Text = english): List[Text] =
     List(home.micromamba, t"run", t"-p", home.env, t"mfa", t"model", t"download", kind, model)
 
-  def alignCommand(home: Home, corpus: Text, output: Text, wide: Boolean): List[Text] =
+  def alignCommand(home: Home, corpus: Text, output: Text, wide: Boolean, model: Text = english)
+  :   List[Text] =
+
     val beams: List[Text] = if wide then List(t"--beam", t"100", t"--retry_beam", t"400") else Nil
     List(home.micromamba, t"run", t"-p", home.env, t"mfa", t"align", t"--clean", t"--single_speaker",
          t"--no_use_postgres", t"--output_format", t"json", t"-j", t"2")
@@ -176,7 +202,7 @@ object Aligner:
     output.cut(t"\n").filter(_.trim != t"").reverse.keep(lines).reverse.map { line => t"  $line" }.join(t"\n")
 
   // The manual way, said when fuel cannot do it.
-  def manual(home: Home): List[Text] =
+  def manual(home: Home, model: Text = english): List[Text] =
     List
       ( t"To install Montreal Forced Aligner by hand:",
         t"  brew install micromamba    # or the executable from github.com/mamba-org/micromamba-releases",
@@ -184,10 +210,10 @@ object Aligner:
         t"  MFA_ROOT_DIR=${home.root} micromamba run -p ${home.env} mfa model download acoustic $model",
         t"  MFA_ROOT_DIR=${home.root} micromamba run -p ${home.env} mfa model download dictionary $model" )
 
-  // MFA, installed where it is not: micromamba fetched, the environment made, the models
-  // downloaded; each step skipped when done before, and said as it happens, since each is
-  // slow. `Unset` when MFA is ready; else what went wrong.
-  def ensure(home: Home)(using Stdio, Environment): Optional[Text] =
+  // MFA, installed where it is not: micromamba fetched, the environment made, the models of
+  // the language downloaded; each step skipped when done before, and said as it happens, since
+  // each is slow. `Unset` when MFA is ready; else what went wrong.
+  def ensure(home: Home, model: Text = english)(using Stdio, Environment): Optional[Text] =
     def step(name: Text)(block: => Optional[Text]): Optional[Text] = block.let { error => t"$name: $error" }
 
     val binary: Optional[Text] = step(t"fetching micromamba"):
@@ -223,7 +249,7 @@ object Aligner:
       List(t"acoustic", t"dictionary").bind: (kind: Text) =>
         if onDisk(modelFile(kind)) then Nil else
           Out.println(t"fuel: downloading the $model $kind model")
-          run(downloadCommand(home, kind), home) match
+          run(downloadCommand(home, kind, model), home) match
             case (0, _)      => Nil
             case (_, output) => List(t"downloading the $kind model: \n${tail(output)}")
       . head
@@ -232,25 +258,33 @@ object Aligner:
     case Aligned(json: Text, cached: Boolean)
     case Failed(message: Text)
 
-  // The recording aligned against the transcript, from the cache when it has been before: a
+  // The recording aligned against the transcript, with the models of the language it is in,
+  // from the cache when it has been before: a
   // corpus of the recording beside the transcript's text, aligned by MFA to JSON, which is
   // kept by the key and read as any alignment is. An alignment MFA cannot find at its usual
   // beam is tried once more with wider ones, since a whole talk is one long utterance.
-  def align(home: Home, audio: Text, transcript: Text, cache: Text)(using Stdio, Environment)
+  def align(home: Home, audio: Text, transcript: Text, cache: Text, model: Text = english)
+    ( using Stdio, Environment )
   :   Outcome =
 
     place(audio).let(Filing.data(_)).lay(Outcome.Failed(t"$audio could not be read")):
       (bytes: Data) =>
-        val digest: Text = key(bytes, transcript)
+        val digest: Text = key(bytes, transcript, model)
         val kept: Optional[Path on Linux] = place(t"$cache/align/$digest.json")
 
-        kept.let(Filing.text(_)).lay(fresh(home, audio, transcript, cache, digest, bytes)):
+        kept.let(Filing.text(_)).lay(fresh(home, audio, transcript, cache, digest, bytes, model)):
           (json: Text) => Outcome.Aligned(json, true)
 
   // An alignment made afresh, in a working directory beside where it is kept, which is
   // removed once the alignment is.
   private def fresh
-    ( home: Home, audio: Text, transcript: Text, cache: Text, digest: Text, bytes: Data )
+    ( home:       Home,
+      audio:      Text,
+      transcript: Text,
+      cache:      Text,
+      digest:     Text,
+      bytes:      Data,
+      model:      Text )
     ( using Stdio, Environment )
   :   Outcome =
 
@@ -262,10 +296,10 @@ object Aligner:
     place(t"$corpus/talk.txt").let(Filing.replace(_, transcript))
 
     def attempt(wide: Boolean): (Int, Text) =
-      run(alignCommand(home, corpus, output, wide), home)
+      run(alignCommand(home, corpus, output, wide, model), home)
 
     val name: Text = audio.cut(t"/").reverse.head.or(audio)
-    Out.println(t"fuel: aligning $name to the transcript with Montreal Forced Aligner")
+    Out.println(t"fuel: aligning $name to the transcript with Montreal Forced Aligner ($model)")
     val produced: Optional[Path on Linux] = place(t"$output/talk.json")
     def made: Boolean = produced.lay(false)(Filing.exists(_))
 

@@ -58,6 +58,7 @@ object CompileFailed extends Status(4, t"a code fragment did not do as its pream
 object DaemonFailed extends Status(6, t"the daemon failed while carrying out the command")
 object Misaligned extends Status(8, t"the transcript and its alignment do not correspond")
 object Unaligned extends Status(9, t"the aligner could not be installed or run on the recording")
+object Incoherent extends Status(10, t"the transcript does not cue the presentation's states, each once and in order")
 object SyncFailed extends Status(7, t"the issues of an attached tracker could not be fetched")
 
 // What ends an invocation which a failure escaped: an `Error`, such as the daemon running out of
@@ -91,7 +92,7 @@ object ui:
   val Sync   = Subcommand("sync", "attach a tracker's issues to the API documentation, and fetch them")
 
   val Transcript =
-    Subcommand("transcript", "print a presentation's transcript, its slides' in order")
+    Subcommand("transcript", "print a transcript of a presentation, and check that it cues the presentation's states")
   val Github = Subcommand("github", "a GitHub repository, as owner/repo")
 
   // Each is read from the cascade every Pyrocosm tool shares: the flag, the `fuel.*` property,
@@ -172,6 +173,20 @@ object ui:
         List(t"alignment"),
         "time the autoplay by a recording of the transcript being read, or by a forced alignment of one (MFA's TextGrid, JSON or CSV)" )
 
+  val Spoken =
+    Flag[Text]
+      ( "language",
+        false,
+        Nil,
+        "the language the recording given to --align is in (en, fr, de, …; English unless said), whose models Montreal Forced Aligner aligns it with" )
+
+  val Said =
+    Flag[Text]
+      ( "transcript",
+        false,
+        Nil,
+        "the Markdown file of what is said, which cues the presentation's states as `[words](@id)`, and is checked against them" )
+
   val PresentPort =
     Setting[Text](t"presentPort", t"the port `fuel present` serves on (8061 by default)")
 
@@ -225,12 +240,14 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
       // Registered here, so that it is offered and documented; its value is read in the
       // execution, where a flag's value is a value.
       ui.Align()
+      ui.Said()
+      ui.Spoken()
 
       // The operand is the first word which is not a flag, nor a flag's value.
       val words: List[Text] = rest.map(_())
 
       val operand: Optional[Text] = words.indexed.filter: (word: Text, index: Ordinal) =>
-        val flags: List[Text] = List(t"--align", t"--alignment")
+        val flags: List[Text] = List(t"--align", t"--alignment", t"--transcript", t"--language")
         val valued: Boolean = before(words, index).lay(false)(flags.has(_))
         !word.starts(t"-") && !valued
 
@@ -248,6 +265,8 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
         val stdio: Stdio = summon[Stdio]
 
         val align: Optional[Text] = ui.Align.value.let(absolute(directory, _))
+        val said: Optional[Text] = ui.Said.value.let(absolute(directory, _))
+        val language: Optional[Text] = ui.Spoken.value
 
         // `--align` plays the presentation to the recording's times, so it implies `--autoplay`.
         val autoplay: Boolean = autoplay0 || align.present
@@ -255,13 +274,16 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
         operand match
           case operand: Text =>
             val prepared =
-              Presenter.prepare(config, absolute(directory, operand), width, autoplay, align)
+              Presenter.prepare
+                ( config, absolute(directory, operand), width, autoplay, align, said, language )
 
             type Outcome =
-              Exit | Tool.UsageError.type | NoDocument.type | Misaligned.type | Unaligned.type
+              Exit | Tool.UsageError.type | NoDocument.type | Misaligned.type | Unaligned.type |
+                Incoherent.type
 
             prepared match
               case Presenter.Problem.Unreadable => NoDocument
+              case Presenter.Problem.Incoherent => Incoherent
               case Presenter.Problem.Misaligned => Misaligned
               case Presenter.Problem.Unaligned  => Unaligned
 
@@ -278,15 +300,15 @@ private def dispatch()(using Cli, Resident, Monitor, Environment, Interpreter, C
 
           case _ =>
             val label: Text = usage(1).label
-            val form: Text = t"fuel present <file> [--autoplay] [--align <recording or alignment>]"
+            val form: Text = t"fuel present <file> [--transcript <file>] [--autoplay] [--align <recording or alignment>] [--language <language>]"
             Out.println(t"fuel: $label usage: $form")
             Tool.UsageError
 
-    // `fuel transcript <file>`: a presentation's transcript, its slides' in order, set to the
-    // terminal's width.
+    // `fuel transcript <file> <transcript>`: a transcript of a presentation, set to the
+    // terminal's width, and checked against the presentation's states.
     case ui.Transcript() :: rest =>
-      val operand: Optional[Text] = rest.map(_()).filter(!_.starts(t"-")).head
-      ambient(transcript(directory, operand))
+      val operands: List[Text] = rest.map(_()).filter(!_.starts(t"-"))
+      ambient(transcript(directory, operands.head, operands.skip(1).head))
 
     // `fuel compile`: read the settings here, where completion mode registers them, and
     // compile within the execution.
@@ -1180,14 +1202,17 @@ private def rendered
 // and hyphenated, code highlighted, an animated block as its steps in sequence; its problems
 // after it. Compiled as `compile` compiles, with the session and the classpath the
 // configuration gives, so what the page shows is what the dashboard would.
-// A presentation's transcript, printed as paragraphs wrapped to the terminal's width, words
-// whole; what the presentation's reading reports follows it.
-private def transcript(directory: Text, operand: Optional[Text])(using Stdio, Environment)
-:   Exit | Tool.UsageError.type | NoDocument.type =
+// A transcript of a presentation, printed as it is set, wrapped to the terminal's width, words
+// whole, a cue's words as any others; what the presentation's reading reports follows it, and
+// where the transcript does not cohere with the presentation, which is a failure.
+private def transcript(directory: Text, operand: Optional[Text], said: Optional[Text])
+  ( using Stdio, Environment )
+:   Exit | Tool.UsageError.type | NoDocument.type | Incoherent.type =
 
-  operand match
-    case operand: Text =>
+  operand.let { (operand: Text) => said.let { (said: Text) => (operand, said) } } match
+    case (operand: Text, said: Text) =>
       val path: Text = absolute(directory, operand)
+      val file: Text = absolute(directory, said)
       val renderer = TerminalRenderer()
 
       def print(blocks: List[Block]): Unit =
@@ -1200,20 +1225,31 @@ private def transcript(directory: Text, operand: Optional[Text])(using Stdio, En
             NoDocument
 
           case (presentation: Presentation, problems: List[Block] @unchecked) =>
-            print(Presentation.transcript(presentation))
+            def reported(problems: List[Block]): Unit =
+              if !problems.nil then
+                Out.println(blank)
+                print(problems)
 
-            if !problems.nil then
-              Out.println(blank)
-              print(problems)
+            (Presenter.transcript(path, presentation, file): @unchecked) match
+              case unread: Block =>
+                print(problems + List(unread))
+                NoDocument
 
-            Exit.Ok
+              case (transcript: Transcript, faults: List[Block] @unchecked) =>
+                print(transcript.blocks)
+                reported(problems + faults)
+                if faults.nil then Exit.Ok else Incoherent
+
+              case _ =>
+                reported(problems)
+                Exit.Ok
 
         case _ =>
           Out.println(t"fuel: ${unreadable.label} $path could not be read")
           NoDocument
 
     case _ =>
-      Out.println(t"fuel: ${usage(6).label} usage: fuel transcript <file>")
+      Out.println(t"fuel: ${usage(6).label} usage: fuel transcript <file> <transcript>")
       Tool.UsageError
 
 private def show(config: Workspace.Config, directory: Text, operand: Optional[Text])

@@ -936,10 +936,6 @@ slide
 slide
   markdown
       The end.
-  transcript
-      That is all there is to say.
-
-      Thank you.
 """
 
       def read(text: Text): Optional[(Presentation, List[Block])] =
@@ -1045,8 +1041,8 @@ slide
 
       . assert(_ == List(3, 2))
 
-      // An alignment of a reading of three slides' transcripts — "one two three", "four five"
-      // and "six" — in MFA's three formats, with a pause, a word MFA did not know, and the
+      // An alignment of a reading of a transcript — "one two three", "four five" and "six" — in
+      // MFA's three formats, with a pause, a word MFA did not know, and the
       // phones tier a reader must pass over.
       val grid: Text = t"""File type = "ooTextFile"
 Object class = "TextGrid"
@@ -1140,20 +1136,25 @@ item []:
         case words: List[ForcedAlignment.Word] @unchecked => words
         case _                                            => Nil
 
-      def slides(transcripts: List[Optional[Text]]): Text =
-        transcripts.map: (transcript: Optional[Text]) =>
-          t"slide\n  markdown\n      a\n" + transcript.lay(t"") { text => t"  transcript\n      $text\n" }
+      // A presentation of a slide for each id, where it has one, each slide three lines.
+      def slides(ids: List[Optional[Text]]): Text =
+        ids.map: (id: Optional[Text]) =>
+          t"slide${id.lay(t"") { (id: Text) => t" $id" }}\n  markdown\n      a\n"
         . join
 
-      def timed(transcripts: List[Optional[Text]]): List[Double] | List[Text] =
-        read(slides(transcripts)).lay(List[Text]()): (presentation: Presentation, _) =>
-          ForcedAlignment.schedule(presentation, aligned) match
+      def timed(ids: List[Optional[Text]], markdown: Text): List[Double] | List[Text] =
+        read(slides(ids)).lay(List[Text]()): (presentation: Presentation, _) =>
+          val states: List[Presentation.State] = Presentation.states(presentation)
+
+          ForcedAlignment.schedule(states, Transcript.read(markdown), aligned) match
             case ForcedAlignment.Outcome.Timed(schedule, _)  => schedule
             case ForcedAlignment.Outcome.Failed(_, messages) => messages
 
-      test(m"a slide without a transcript fails the timing, labelled with its code"):
-        read(slides(List(t"hello world", Unset))).lay(t""): (presentation: Presentation, _) =>
-          ForcedAlignment.schedule(presentation, aligned) match
+      test(m"a state after the first without an id fails the timing, labelled with its code"):
+        read(slides(List(t"a", Unset))).lay(t""): (presentation: Presentation, _) =>
+          val states: List[Presentation.State] = Presentation.states(presentation)
+
+          ForcedAlignment.schedule(states, Transcript.read(t"[hello](@a) world"), aligned) match
             case ForcedAlignment.Outcome.Failed(code, _) => code.label
             case _                                       => t""
 
@@ -1165,24 +1166,34 @@ item []:
 
       . assert(_ == (0, true, 3, 5))
 
-      test(m"the schedule is each later slide's first word's time"):
-        timed(List(t"One, two three.", t"Four five.", t"Six!"))
+      test(m"the schedule is the time the first word of each later state's cue is spoken"):
+        timed(List(Unset, t"four", t"six"), t"One, two three. [Four](@four) five. [Six](@six)!")
 
       . assert(_ == List(3.0, 4.0))
 
-      test(m"a slide whose first word the aligner missed is timed by its next word"):
-        timed(List(t"One, two.", t"Tree three four.", t"Five six!"))
+      test(m"a cue is timed wherever it is in a sentence, and the first state's is not a step"):
+        timed(List(t"a", t"b", t"c"), t"[One](@a) two *[three](@b) four*\n[five\nsix](@c).")
 
       . assert(_ == List(1.5, 3.5))
 
-      test(m"a slide without a transcript cannot be timed by an alignment"):
-        timed(List(t"One, two three.", Unset, t"Four five six.")) match
+      test(m"a cue whose first word the aligner missed is timed by its next word"):
+        timed(List(Unset, t"b", t"c"), t"One, two. [Tree three](@b) four. [Five](@c) six!")
+
+      . assert(_ == List(1.5, 3.5))
+
+      test(m"a cue without words is timed by the word after it"):
+        timed(List(Unset, t"b", t"c"), t"One two [](@b)[three](@c) four five six.")
+
+      . assert(_ == List(1.5, 1.5))
+
+      test(m"a state without an id cannot be timed by an alignment"):
+        timed(List(Unset, Unset, t"c"), t"One, two three. Four [five](@c) six.") match
           case messages: List[Text] @unchecked => messages.map(_.keep(16))
 
-      . assert(_ == List(t"slide 2 (line 6)"))
+      . assert(_ == List(t"slide 2 (line 4)"))
 
       test(m"a transcript which differs from the alignment in more than a word in ten is refused, with the differences shown"):
-        timed(List(t"One, two, three.", t"Nine ten eleven twelve thirteen."))
+        timed(List(Unset, t"b"), t"One, two, three. [Nine](@b) ten eleven twelve thirteen.")
 
       . assert(_ == List
           ( t"the transcript and the alignment differ in 6 of 8 words, which is too many to time the presentation by:",
@@ -1212,6 +1223,24 @@ item []:
 
       . assert(_ == (24, true, false, false))
 
+      test(m"a language's model is found by its code, whatever its region, or is named itself"):
+        ( Aligner.model(t"fr"), Aligner.model(t"de-AT"), Aligner.model(t"EN"),
+          Aligner.model(t"english_us_arpa"), Aligner.model(t"tlh") )
+
+      . assert(_ == (t"french_mfa", t"german_mfa", t"english_mfa", t"english_us_arpa", Unset))
+
+      test(m"a recording in another language is aligned with that language's models, and kept apart"):
+        val home: Aligner.Home = Aligner.Home(t"/c/fuel/mfa")
+        val sound: Data = Array[Byte](1, 2, 3)
+
+        ( Aligner.alignCommand(home, t"/p/corpus", t"/p/out", false, t"french_mfa").reverse.keep(3).reverse,
+          Aligner.downloadCommand(home, t"dictionary", t"french_mfa").reverse.keep(2).reverse,
+          Aligner.key(sound, t"un deux") == Aligner.key(sound, t"un deux", t"french_mfa"),
+          Aligner.key(sound, t"un deux") == Aligner.key(sound, t"un deux", Aligner.english) )
+
+      . assert(_ == ( List(t"french_mfa", t"french_mfa", t"/p/out"), List(t"dictionary", t"french_mfa"),
+                      false, true ))
+
       test(m"the aligner's commands name the environment, the models and the corpus"):
         val home: Aligner.Home = Aligner.Home(t"/c/fuel/mfa")
         val create: List[Text] = Aligner.createCommand(home)
@@ -1228,13 +1257,146 @@ item []:
                       List(t"mfa", t"align"), List(t"/p/corpus", t"english_mfa", t"english_mfa", t"/p/out"), false, true,
                       t"/c/fuel/mfa/root" ))
 
-      test(m"a presentation's transcript is its slides' transcripts, in order, as paragraphs"):
-        read(talk).lay(Nil): (presentation: Presentation, _) =>
-          Presentation.transcript(presentation).map:
-            case Block.Paragraph(content) => Blocks.plain(content)
-            case _                        => t"?"
+      val script: Text =
+        t"# Opening\n\nWelcome, [now](@intro) we *begin*.\n\n- And [this\n  is](@next) it.\n"
 
-      . assert(_ == List(t"That is all there is to say.", t"Thank you."))
+      test(m"a transcript's text is what is said, without its headings, and its cues are where their words begin"):
+        val transcript: Transcript = Transcript.read(script)
+
+        ( ForcedAlignment.words(transcript.text),
+          transcript.cues.map { (cue: Transcript.Cue) => (cue.id, cue.line) },
+          transcript.cues.map { (cue: Transcript.Cue) => transcript.text.keep(cue.offset).trim },
+          transcript.stray )
+
+      . assert(_ == ( List(t"welcome", t"now", t"we", t"begin", t"and", t"this", t"is", t"it"),
+                      List((t"intro", 3), (t"next", 5)),
+                      List(t"Welcome,", t"Welcome, now we begin.\n\nAnd"), Nil ))
+
+      test(m"a transcript is shown with a cue's words as any others, and no link"):
+        def links(inlines: List[Inline]): Int = inlines.map:
+          case Inline.Link(_, _)        => 1
+          case Inline.Phrase(content)   => links(content)
+          case Inline.Emphasis(content) => links(content)
+          case _                        => 0
+        . fold(0)(_ + _)
+
+        Transcript.read(script + t"\nSee [the site](https://example.com/).\n").blocks.bind:
+          case Block.Paragraph(content) => List((Blocks.plain(content), links(content)))
+          case _                        => Nil
+
+      . assert(_ == List((t"Welcome, now we begin.", 0), (t"See the site.", 1)))
+
+      test(m"a cue in a document is its words, and no link to check"):
+        val doc: Doc = Doc.parse(t"talk.md", t"And [here](@reveal) it is.\n")
+
+        val links: Int = doc.blocks.bind:
+          case Block.Paragraph(content) => content.filter:
+            case Inline.Link(_, _) => true
+            case _                 => false
+
+          case _ => Nil
+        . size
+
+        (doc.blocks.bind { case Block.Paragraph(content) => List(Blocks.plain(content)); case _ => Nil }, links, doc.problems.size)
+
+      . assert(_ == (List(t"And here it is."), 0, 0))
+
+      test(m"a cue in a heading is not in what is said"):
+        val transcript: Transcript = Transcript.read(t"# [Title](@x)\n\nHello [you](@y).\n")
+        (transcript.cues.map(_.id), transcript.stray.map(_.id), transcript.text)
+
+      . assert(_ == (List(t"y"), List(t"x"), t"Hello you."))
+
+      test(m"a slide and a frame have ids on their lines or beneath"):
+        val text: Text =
+          t"slide intro\n  markdown\n      a\nslide\n  id second\n  markdown\n      b\n" +
+            t"slide\n  syntax scala\n    frame one\n      code\n          val a = 1\n" +
+            t"    frame\n      id two\n      code\n          val a = 2\n"
+
+        read(text).let: (presentation: Presentation, problems: List[Block]) =>
+          val states: List[Presentation.State] = Presentation.states(presentation)
+
+          (states.map(_.id), states.map(_.frame), states.map(_.line), problems.size)
+
+      . assert(_ == ( List(t"intro", t"second", t"one", t"two"), List(Unset, Unset, Unset, 2),
+                      List(1, 4, 8, 8), 0 ))
+
+      test(m"there is one more state than the deck has steps, a fence's frames in Markdown among them"):
+        val fenced: Text =
+          t"slide\n  markdown\n      ```scala fuel\n      frame one\n        code\n            val a = 1\n" +
+            t"      frame two\n        code\n            val a = 2\n      ##\n      ```\n"
+
+        List(talk, fenced, talk + fenced).map: (text: Text) =>
+          read(text).lay((List[Text](), -1)): (presentation: Presentation, _) =>
+            val states: List[Presentation.State] = Presentation.states(presentation)
+            val ids: List[Text] = states.bind(_.id.lay(List[Text]())(List(_)))
+            (ids, states.size - 1 - Presentation.steps(Block.Deck(leaves(text))))
+
+      . assert(_ == List((Nil, 0), (List(t"one", t"two"), 0), (List(t"one", t"two"), 0)))
+
+      test(m"a transcript in a presentation, on a slide or named, is reported as being a file given beside it"):
+        val text: Text = t"transcript  talk.md\nslide\n  markdown\n      a\n  transcript\n      Hello.\n"
+
+        read(text).lay(Nil)(_(1)).map:
+          case Block.Diagnostic(_, location, content, _, _, _) =>
+            val said: Text = content.head match
+              case Block.Paragraph(inlines) => Blocks.plain(inlines)
+              case _                        => t""
+
+            (location.let(_.line), said.contains(t"--transcript <transcript>"))
+
+          case _ =>
+            (Unset, false)
+
+      . assert(_ == List((1, true), (5, true)))
+
+      // Where a presentation of a slide for each id and a transcript do not cohere: each
+      // fault's code, its file and its line.
+      def incoherent(ids: List[Optional[Text]], markdown: Text): List[(Text, Text, Int)] =
+        read(slides(ids)).lay(Nil): (presentation: Presentation, _) =>
+          Presentation.cohere(t"talk.tel", presentation, t"talk.md", Transcript.read(markdown)).map:
+            case Block.Diagnostic(_, location: Block.Location, _, _, _, code: fulminate.Bolt) =>
+              (code.text, location.path, location.line.or(0))
+
+            case _ =>
+              (t"", t"", 0)
+
+      test(m"a transcript which cues each state with an id, once and in order, coheres"):
+        ( incoherent(List(t"a", Unset, t"b"), t"[One](@a) two.\n\n[Three](@b)."),
+          incoherent(List(Unset, Unset), t"One two."), incoherent(Nil, t"") )
+
+      . assert(_ == (Nil, Nil, Nil))
+
+      test(m"a cue which names no state, and a state which is not cued, are faults where they are"):
+        ( incoherent(List(t"a", Unset, t"b"), t"[One](@a)\n\ntwo [three](@c) [four](@b)."),
+          incoherent(List(t"a", Unset, t"b"), t"[One](@a) two.") )
+
+      . assert(_ == ( List((t"↯/f.25.6.5", t"talk.md", 3)), List((t"↯/f.25.6.6", t"talk.tel", 7)) ))
+
+      test(m"a state cued twice, or before one shown earlier, is a fault at the cue"):
+        ( incoherent(List(t"a", t"b"), t"[One](@a) [two](@b)\n\n[three](@a)."),
+          incoherent(List(t"a", t"b", t"c"), t"[One](@a)\n\n[two](@c)\n\n[three](@b).") )
+
+      . assert(_ == ( List((t"↯/f.25.6.7", t"talk.md", 3)), List((t"↯/f.25.6.7", t"talk.md", 3)) ))
+
+      test(m"an id two states have, and a cue in a heading, are faults"):
+        ( incoherent(List(t"a", t"a"), t"[One](@a)."),
+          incoherent(List(t"a", t"b"), t"# [One](@a)\n\n[two](@b).") )
+
+      . assert(_ == ( List((t"↯/f.25.6.4", t"talk.tel", 4)),
+                      List((t"↯/f.25.6.8", t"talk.md", 1), (t"↯/f.25.6.6", t"talk.tel", 1)) ))
+
+      test(m"a slide and its animation's first frame are one state, with one id"):
+        val text: Text =
+          t"slide first\n  syntax scala\n    frame other\n      code\n          val a = 1\n" +
+            t"    frame\n      code\n          val a = 2\n"
+
+        read(text).lay(Nil): (presentation: Presentation, _) =>
+          Presentation.cohere(t"talk.tel", presentation, t"talk.md", Transcript.read(t"[One](@first).")).map:
+            case Block.Diagnostic(tone, _, _, _, _, code: fulminate.Bolt) => (tone, code.text)
+            case _                                                        => (Tone.Info, t"")
+
+      . assert(_ == List((Tone.Failure, t"↯/f.25.6.4")))
 
       def codes(text: Text): List[Block.Code] =
         leaves(text).bind(_.content).bind:
@@ -5292,7 +5454,7 @@ entry .Channel
         val (own, faults) = TelsFormat.read(Presentation.schemaResource, Presentation.schemaSource)
         val schema: Api = own.or(Api.empty)
 
-        ( faults.size, schema(t"presentation.Slide#transcript").present,
+        ( faults.size, schema(t"presentation.Slide#id").present,
           schema(t"presentation.Slide").let(_.bases),
           schema(t"presentation.Code").let(_.doc).let(_.info).let(_.starts(t"A slide's code")),
           schema(t"presentation.Slide#syntax").absent )

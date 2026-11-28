@@ -22,8 +22,9 @@ fuel serve stop    # stop serving them
 fuel show doc/x.md # one document, set in the terminal: justified, hyphenated, highlighted
 fuel present doc/slides.tel  # a presentation's slides in a browser until Ctrl+C
 fuel present doc/slides.tel --autoplay  # the same, played by itself to a schedule
-fuel present doc/slides.tel --align talk.wav  # the same, timed to a recording of the transcript
-fuel transcript doc/slides.tel  # the presentation's transcript, set to the terminal's width
+fuel present doc/slides.tel --transcript doc/slides.md --align talk.wav  # the same, timed to a recording of the transcript
+fuel present talk.tel --transcript talk.fr.md --align talk.fr.wav --language fr  # a recording in French
+fuel transcript doc/slides.tel doc/slides.md  # a transcript of the presentation, checked against its slides
 fuel sync github propensive/fuel  # attach a repository's issues to the API pages, and fetch them
 fuel sync          # fetch every attached tracker's issues again
 fuel install       # install tab-completions and the manpage
@@ -36,8 +37,9 @@ A failure of the daemon itself while it carries out a command (running out of me
 reported on the standard error, where it was thrown, and the command exits with status 6, apart
 from a compile's own failures (status 4), from a tracker whose issues could not be fetched
 (status 7), from a presentation whose transcript and alignment do not correspond (status 8),
-from an aligner that could not be installed or run (status 9) and from a command line it did
-not understand (status 2).
+from an aligner that could not be installed or run (status 9), from a presentation whose
+transcript does not cue its states, each once and in order (status 10), and from a command line
+it did not understand (status 2).
 
 Every error, diagnostic and failure fuel reports is named by a bolt code, the scheme of all of
 Propensive's projects: `↯/f.25` to `↯/f.28` are fuel's (its core, API, client and launcher), as
@@ -231,13 +233,11 @@ slide
       # Effects, gently
       A *short* talk.
 
-slide
+slide one-value
   syntax scala
       val x = 1
-  transcript
-      One value, to start with.
 
-slide
+slide a-second-name
   syntax scala
     label      a second name
     highlight  y  new
@@ -269,27 +269,39 @@ how many steps the deck has; the timings will be read from a file alongside the 
 later. Pressing a key takes the deck back from the schedule.
 
 The schedule can instead come from a recording of the transcript being read:
-`fuel present <file> --align talk.wav` aligns the recording against the transcript
-(`fuel transcript <file>` prints it, to read from) with
-[Montreal Forced Aligner](https://montreal-forced-aligner.readthedocs.io/), and each slide after
-the first is shown at the moment the first word of its transcript is spoken — or of the first
-word of it the aligner caught. `--align` also takes an alignment already made, in any of MFA's
-formats — a TextGrid (its default), JSON or CSV — telling a recording from an alignment by its
-extension or its first bytes. Every slide must have a transcript, and the transcripts and the
+`fuel present <file> --transcript talk.md --align talk.wav` aligns the recording against the
+transcript (`fuel transcript <file> talk.md` prints it, to read from) with
+[Montreal Forced Aligner](https://montreal-forced-aligner.readthedocs.io/), and each state after
+the first arrives at the moment the first word of its cue is spoken — or, where the aligner
+missed that word, the first it caught from there to the next cue. `--align` also takes an
+alignment already made, in any of MFA's formats — a TextGrid (its default), JSON or CSV —
+telling a recording from an alignment by its extension or its first bytes. A transcript
+must be given, every state after the first must have an id, and the transcript and the
 alignment must correspond: a word the aligner did not know (`<unk>`) stands for any one word,
 but if more than one word in ten is in the one and not the other, the presentation is not
 shown, and the differences are printed as a word diff (`-word` for a word of the transcript not
 spoken, `+word` for one spoken that the transcript lacks), with status 8; fewer differences are
 shown the same way, and the presentation goes ahead. `--align` implies `--autoplay`.
 
+A recording is taken to be in English. `--language` says otherwise, as `fuel present <file>
+--transcript talk.fr.md --align talk.fr.wav --language fr`: the recording is aligned with the
+dictionary and the acoustic model Montreal Forced Aligner publishes for that language, which are
+downloaded the first time it is aligned. It takes a language's code, whose region is not looked
+at — `bg`, `cs`, `de`, `en`, `es`, `fr`, `ha`, `hr`, `pl`, `pt`, `ru`, `sv`, `sw`, `tr` or `uk`,
+the languages written with spaces between their words which MFA has both for — or the name of
+one of MFA's models, for one of its others (`--language english_us_arpa`); a language there is
+no model for fails with status 9. An alignment already made is in whatever language it was made
+in, and `--language` says nothing of it.
+
 MFA is published only as conda-forge packages, so fuel installs it itself the first time a
 recording is aligned, into `$XDG_CACHE_HOME/fuel/mfa` (`~/.cache/fuel/mfa`): it fetches
 micromamba (a single static executable which installs conda-forge packages into a directory,
 with no Anaconda, no shell set-up and no activation), makes an environment there with MFA 3.4
-(about 2 GB, a few minutes), and downloads the `english_mfa` dictionary and acoustic model.
+(about 2 GB, a few minutes), and downloads the dictionary and acoustic model of the recording's
+language (`english_mfa`, for English).
 Nothing else on the machine is touched; `rm -rf ~/.cache/fuel/mfa` removes it all. An alignment
-is kept in the project's cache by a digest of the recording and the transcript, so a
-presentation is aligned again only when either changes; MFA itself takes tens of seconds to
+is kept in the project's cache by a digest of the recording, the transcript and the model, so a
+presentation is aligned again only when one of them changes; MFA itself takes tens of seconds to
 start and align. If fuel cannot install MFA — there is no micromamba for the platform, or a
 download fails — it says so and prints the three commands to do it by hand (`brew install
 micromamba`, `micromamba create -p ~/.cache/fuel/mfa/env -c conda-forge
@@ -298,10 +310,55 @@ one take, as WAV or FLAC for choice (MFA's own sox and ffmpeg convert the other 
 whole talk is aligned as one utterance, which MFA manages but is its weakest case, so if it
 finds no alignment fuel tries once more with wider beams.
 
-A slide may have a `transcript`: what is said while it is shown. `fuel transcript <file>` prints
-the presentation's transcript — each slide's, in order, a blank line dividing paragraphs — set
-to the terminal's width without breaking a word across lines, with what the reading of the
-presentation reports after it.
+### The transcript
+
+What is said while a presentation is shown is a transcript: a Markdown file of its own, which
+the presentation does not name, and is given with it, as `fuel present <file> --transcript
+talk.md` — so one presentation may have a transcript in each language it is given in, and
+`--transcript talk.fr.md` shows the same slides to the French. The two are tied by the
+presentation's *states*. A presentation is in one state at a time: a slide as it is
+first shown, or a later frame of the animation stepped through on it (the frames of a `syntax`
+with `frame`s, or of the last fence with frames in its Markdown). A state may have an `id`, on
+the line of its `slide` or `frame` or beneath it:
+
+```
+slide declare
+  syntax scala
+    frame
+      code
+          def twice(n: Int) = n*2
+    frame reveal-inferred-type
+      highlight : Int
+      code
+          def twice(n: Int): Int = n*2
+```
+
+A slide with frames is first shown in its first frame, which is one state, so the id is the
+slide's or that frame's, and not one of each. In the transcript, the words which bring a state
+are a link to its id, behind an `@` — a *cue*:
+
+```
+We [declare](@declare) a method without saying what it returns, and the compiler will work out
+that the return type is [this](@reveal-inferred-type).
+```
+
+The state arrives as the first word of the link is spoken; a link with no words, `[](@id)`,
+cues the word after it. What is said is the transcript's prose — its paragraphs, and those of
+its lists and quotations — and not its headings, which are there to find a way about it by; a
+link to anything else is said as its words are. A transcript among a section's documents is
+read as any document, its cues' words as any others.
+
+A transcript given must cohere with the presentation, and one which does not is a failure: the
+presentation is not shown, each fault is reported at its line in the file it is in, and the
+command exits with status 10. Every state with an id must be cued, once, and the cues must
+come in the order the states are shown; a cue must name a state, and be in what is said; and
+no two states may have one id. A state without an id needs no cue — it is stepped to by hand,
+or by the regular schedule — but a presentation timed by `--align` needs an id on every state
+after the first, which is shown from the start.
+
+`fuel transcript <file> <transcript>` prints the transcript, set to the terminal's width
+without breaking a word across lines, a cue's words as any others, with what the reading of the
+presentation reports after it; it makes the same check, and fails the same way.
 
 ## Output
 
@@ -482,7 +539,7 @@ schema's are apart from a package of the same name: the record `Slide` of the sc
 top-level name; its records, selects and scalars are the members of its term form
 (`presentation.Slide`), and the fields of its `document` those of its type form
 (`presentation#title`, at `/api/tels/presentation~title`); a record's fields and a select's
-variants are members of the type form of theirs (`presentation.Slide#transcript`,
+variants are members of the type form of theirs (`presentation.Slide#id`,
 `presentation.Part#markdown`). A member's signature is the words which declare it — a field's
 type, and whether it is `optional`, `repeatable` or the `key` — and a record's page says the
 `select`s it holds, whose variants a reference finds through it (`Slide#markdown`). There is no
@@ -504,7 +561,7 @@ info the format of a presentation
 
 entry #title   the presentation's title        # a field of the document
 entry .Slide                                   # a record
-  entry #transcript   what is said while the slide is shown
+  entry #id   the name the transcript cues the slide by
 ```
 
 What a schema says of a definition, a field or a variant in its `description` documents it
